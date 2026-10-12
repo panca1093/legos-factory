@@ -1,0 +1,1 @@
+{ "share": { "default": "private", "rules": [{ "path": "/tmp", "level": "status" }] }, "ticketKeys": [] }

@@ -1,0 +1,11 @@
+{
+  "share": {
+    "default": "private",
+    "rules": [
+      { "path": "/work/acme", "level": "status" },
+      { "path": "/work/acme/payments-api", "level": "full" },
+      { "path": "/work/bad", "level": "public" }
+    ]
+  },
+  "ticketKeys": ["PROJ", "bad-key"]
+}

@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "legos-factory", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev:team"], "port": 5173 }
+  ]
+}
