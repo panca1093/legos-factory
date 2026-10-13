@@ -580,3 +580,10 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .team-items .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-items small { color: var(--muted); font-size: 11px; flex: none; }
 @media (max-width: 760px) { .kpis-4 { grid-template-columns: 1fr 1fr; } }
+
+.signin-field { width: 100%; text-align: left; }
+.pin-input { letter-spacing: 0.5em; font-size: 18px; text-align: center; }
+.add-conn { display: flex; flex-direction: column; gap: 12px; padding: 16px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
+.add-conn .segmented { align-self: flex-start; }
+.add-conn-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 640px) { .add-conn .field-row { grid-template-columns: 1fr; } .row .actions { flex-wrap: wrap; justify-content: flex-end; } }

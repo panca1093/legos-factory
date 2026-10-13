@@ -8,9 +8,10 @@ import type { DecisionAnswer, PermissionMode, SessionSummary, Settings, ShareLev
 import { getSession, listSessions } from './claude-sessions.ts';
 import { detectTicket, gitBranch, loadSettings, settingsPath, shareFor } from './policy.ts';
 import { type ActivityLog, toTeamItem } from './activity.ts';
-import type { Auth } from './auth.ts';
+import { PIN_RE, type Account } from './account.ts';
 import type { RunManager } from './claude-runs.ts';
-import type { Workbench } from './workbench.ts';
+import type { Connections } from './connections.ts';
+import { Workbench } from './workbench.ts';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan'];
@@ -27,17 +28,8 @@ const annotate = <T extends SessionSummary>(s: T, settings: Settings): T => ({
 });
 
 const SID_COOKIE = 'lf_sid';
-// Only bounce back to this app after login, never to an arbitrary site.
-const safeReturn = (u: string | undefined) => {
-  try {
-    const url = new URL(u ?? '');
-    return LOCAL_HOSTS.has(url.hostname) || LOCAL_HOSTS.has(`[${url.hostname}]`) ? url.toString() : '/';
-  } catch {
-    return '/';
-  }
-};
-const page = (title: string, body: string) =>
-  `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:14px system-ui;padding:40px;color:#151a29"><h2>${title}</h2><p>${body}</p><p><a href="/auth/login">Try again</a></p></body>`;
+const page = (title: string, body: string, close = false) =>
+  `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:14px system-ui;padding:40px;color:#151a29;text-align:center"><h2>${title}</h2><p>${body}</p><p><a href="/#/settings">Open Settings</a></p>${close ? '<script>setTimeout(()=>window.close(),800)</script>' : ''}</body>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
 // Headers worth passing between Claude Code and workbench on the MCP proxy.
@@ -45,12 +37,9 @@ const MCP_REQ_HEADERS = ['content-type', 'accept', 'mcp-session-id', 'mcp-protoc
 const MCP_RES_HEADERS = ['content-type', 'mcp-session-id', 'cache-control'];
 
 export type AppOptions = {
-  auth?: Auth | null;
-  // shown on the sign-in button: "Sign in with <name>"
-  ssoName?: string;
-  workbenchUrl?: string | null;
-  workbench?: Workbench | null;
-  workbenchMcpUrl?: string;
+  // null = no PIN gate (LEGOS_AUTH=off)
+  account?: Account | null;
+  connections?: Connections | null;
   selfUrl?: string;
   fetch?: typeof fetch;
   activity?: ActivityLog | null;
@@ -63,29 +52,39 @@ const JQL_PRESETS: Record<string, string> = {
   sprint: 'assignee = currentUser() AND sprint in openSprints() ORDER BY status ASC, updated DESC',
 };
 
-type Env = { Variables: { sid: string | null } };
+const errStatus = (err: unknown) => {
+  const s = (err as { status?: number })?.status;
+  return (s && s >= 400 && s < 500 ? s : 502) as 400 | 404 | 409 | 502;
+};
+const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export function createApp(runs: RunManager, opts: AppOptions = {}) {
-  const app = new Hono<Env>();
-  const auth = opts.auth ?? null;
-  // per-run secret -> login session, so a run's workbench calls carry its owner's token
-  const grants = new Map<string, { sid: string; runId: string }>();
-  // run -> its owner's login session, for pushing status to the hub as that user
-  const owners = new Map<string, string>();
+  const app = new Hono();
+  const account = opts.account ?? null;
+  const conns = opts.connections ?? null;
+  // per-run secret -> run, so only runs launched here reach the connections proxy
+  const grants = new Map<string, string>();
   const http = opts.fetch ?? fetch;
+  const clients = new Map<string, Workbench>();
+  // the connected workbench, if any: apps, Jira and the team hub go through it
+  const workbench = async () => {
+    const wb = await conns?.workbench();
+    if (!wb) return null;
+    if (!clients.has(wb.url)) clients.set(wb.url, new Workbench(wb.url, http));
+    return { client: clients.get(wb.url)!, token: wb.token };
+  };
   runs.on('message', (m: StreamMessage) => {
     if (m.type !== 'run') return;
-    if (m.run.endedAt) for (const [k, g] of grants) if (g.runId === m.run.id) grants.delete(k);
+    if (m.run.endedAt) for (const [k, runId] of grants) if (runId === m.run.id) grants.delete(k);
     void opts.activity
       ?.record(m.run)
       .then(async (item) => {
-        const sid = owners.get(m.run.id);
-        if (!item || item.share === 'private' || !opts.hubUrl || !auth || !sid) return;
-        const token = await auth.accessToken(sid);
-        if (!token) return;
+        if (!item || item.share === 'private' || !opts.hubUrl) return;
+        const wb = await workbench();
+        if (!wb) return;
         const res = await http(`${opts.hubUrl}/hub/events`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          headers: { authorization: `Bearer ${wb.token}`, 'content-type': 'application/json' },
           body: JSON.stringify({ items: [toTeamItem(item)] }),
         });
         if (!res.ok) console.warn(`hub rejected status update (HTTP ${res.status})`);
@@ -99,9 +98,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.use('/api/*', async (c, next) => {
     if (!localOnly(c.req.header('host'))) return c.json({ error: 'forbidden host' }, 403);
     if (c.req.method !== 'GET' && c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    const sid = getCookie(c, SID_COOKIE) ?? null;
-    if (auth && (!sid || !(await auth.accessToken(sid)))) return c.json({ error: 'sign in required' }, 401);
-    c.set('sid', sid);
+    if (account && !(await account.verify(getCookie(c, SID_COOKIE)))) return c.json({ error: 'sign in required' }, 401);
     await next();
   });
 
@@ -111,74 +108,78 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   app.get('/auth/me', async (c) => {
-    const provider = { ssoName: opts.ssoName ?? 'workbench', workbenchUrl: opts.workbenchUrl ?? null };
-    if (!auth) return c.json({ authEnabled: false, authenticated: true, user: null, ...provider });
-    const sid = getCookie(c, SID_COOKIE);
-    const ok = !!sid && !!(await auth.accessToken(sid));
-    return c.json({ authEnabled: true, authenticated: ok, user: ok ? await auth.user(sid) : null, ...provider });
+    if (!account) return c.json({ authEnabled: false, setupRequired: false, authenticated: true, user: null });
+    const name = await account.name();
+    const ok = await account.verify(getCookie(c, SID_COOKIE));
+    return c.json({ authEnabled: true, setupRequired: !name, authenticated: ok, user: ok ? { name } : null });
   });
 
-  app.get('/auth/login', async (c) => {
-    if (!auth) return c.redirect('/');
-    try {
-      const attempt = c.req.query('attempt');
-      if (attempt && !/^[\w-]{32,128}$/.test(attempt)) return c.text('bad attempt id', 400);
-      return c.redirect(await auth.loginUrl(safeReturn(c.req.query('returnTo')), attempt ?? null));
-    } catch (err) {
-      return c.html(page('Could not reach the sign-in server', esc(err instanceof Error ? err.message : String(err))), 502);
-    }
-  });
+  const signedIn = (c: any, cookie: string) => setCookie(c, SID_COOKIE, cookie, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: 30 * 24 * 3600 });
 
-  app.get('/auth/callback', async (c) => {
-    if (!auth) return c.redirect('/');
-    const { code, state, error, error_description } = c.req.query();
-    if (error || !code || !state) return c.html(page('Sign-in was not completed', esc(error_description ?? error ?? 'missing code')), 400);
-    try {
-      const { sid, returnTo, attempt } = await auth.callback(code, state);
-      setCookie(c, SID_COOKIE, sid, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 30 * 24 * 3600 });
-      // The app window is polling /auth/claim and will sign itself in, even if this is a different browser.
-      if (attempt)
-        return c.html(
-          `<!doctype html><meta charset="utf-8"><title>Signed in</title><body style="font:14px system-ui;padding:40px;color:#151a29;text-align:center"><h2>Signed in to legos-factory</h2><p>You can close this window and go back to the app.</p><p><a href="${esc(returnTo)}">Open legos-factory</a></p><script>setTimeout(()=>window.close(),800)</script></body>`,
-        );
-      return c.redirect(returnTo);
-    } catch (err) {
-      return c.html(page('Sign-in failed', esc(err instanceof Error ? err.message : String(err))), 400);
-    }
-  });
-
-  app.post('/auth/claim', async (c) => {
-    if (!auth) return c.json({ ok: true });
+  app.post('/auth/setup', async (c) => {
     if (c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    const attempt = str((await c.req.json().catch(() => null))?.attempt);
-    const sid = attempt ? auth.claim(attempt) : null;
-    if (!sid) return c.json({ done: false });
-    setCookie(c, SID_COOKIE, sid, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 30 * 24 * 3600 });
-    return c.json({ done: true });
+    if (!account) return c.json({ error: 'sign-in is off' }, 409);
+    const body = await c.req.json().catch(() => null);
+    const name = str(body?.name);
+    const pin = str(body?.pin);
+    if (!name || name.length > 64) return c.json({ error: 'name is required (max 64)' }, 400);
+    if (!PIN_RE.test(pin)) return c.json({ error: 'PIN must be 6 digits' }, 400);
+    try {
+      signedIn(c, await account.setup(name, pin));
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, 409);
+    }
+    return c.json({ ok: true });
+  });
+
+  app.post('/auth/login', async (c) => {
+    if (c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
+    if (!account) return c.json({ ok: true });
+    const r = await account.login(str((await c.req.json().catch(() => null))?.pin));
+    if (r.ok) {
+      signedIn(c, r.cookie);
+      return c.json({ ok: true });
+    }
+    if (r.retryAfterMs) return c.json({ error: `Too many wrong PINs — try again in ${Math.ceil(r.retryAfterMs / 1000)}s`, retryAfterMs: r.retryAfterMs }, 429);
+    return c.json({ error: 'Wrong PIN' }, 401);
   });
 
   app.post('/auth/logout', async (c) => {
     if (c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    await auth?.logout(getCookie(c, SID_COOKIE));
     deleteCookie(c, SID_COOKIE, { path: '/' });
     return c.json({ ok: true });
   });
 
-  // Claude Code processes call workbench through here; the user's token is attached fresh on every request.
-  app.all('/mcp/workbench', async (c) => {
-    if (!auth || !opts.workbenchMcpUrl) return c.json({ error: 'workbench proxy disabled' }, 404);
+  // OAuth redirect for a connection. May land in another browser than the app (desktop panes open
+  // links in the system browser), so it needs no app session: the one-time state is the proof.
+  app.get('/auth/callback', async (c) => {
+    if (!conns) return c.redirect('/');
+    const { code, state, error, error_description } = c.req.query();
+    if (error || !code || !state) return c.html(page('Connection was not completed', esc(error_description ?? error ?? 'missing code')), 400);
+    try {
+      const name = await conns.callback(code, state);
+      return c.html(page(`Connected ${esc(name)}`, 'You can close this window and go back to legos-factory.', true));
+    } catch (err) {
+      return c.html(page('Connection failed', esc(errMsg(err))), 400);
+    }
+  });
+
+  // Claude Code processes reach Settings connections through here; credentials are attached fresh on every request.
+  app.all('/mcp/:name', async (c) => {
+    if (!conns) return c.json({ error: 'connections disabled' }, 404);
     if (!localOnly(c.req.header('host'))) return c.text('forbidden host', 403);
-    const grant = grants.get(c.req.header('x-legos-run') ?? '');
-    if (!grant) return c.json({ error: 'unknown run' }, 403);
-    const token = await auth.accessToken(grant.sid);
-    if (!token) return c.json({ error: 'owner signed out' }, 401);
-    const headers = new Headers({ authorization: `Bearer ${token}` });
+    if (!grants.has(c.req.header('x-legos-run') ?? '')) return c.json({ error: 'unknown run' }, 403);
+    const name = c.req.param('name');
+    const [url, creds] = await Promise.all([conns.url(name), conns.headersFor(name)]);
+    if (!url) return c.json({ error: 'unknown connection' }, 404);
+    if (!creds) return c.json({ error: `${name} needs connecting in Settings` }, 401);
+    const headers = new Headers(creds);
     for (const h of MCP_REQ_HEADERS) {
       const v = c.req.header(h);
       if (v) headers.set(h, v);
     }
     const method = c.req.method;
-    const upstream = await (opts.fetch ?? fetch)(opts.workbenchMcpUrl, {
+    const upstream = await http(url, {
       method,
       headers,
       body: method === 'GET' || method === 'HEAD' ? undefined : await c.req.arrayBuffer(),
@@ -189,6 +190,46 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
       if (v) out.set(h, v);
     }
     return new Response(upstream.body, { status: upstream.status, headers: out });
+  });
+
+  app.get('/api/connections', async (c) => c.json({ connections: (await conns?.all()) ?? [] }));
+
+  app.post('/api/connections', async (c) => {
+    if (!conns) return c.json({ error: 'connections disabled' }, 404);
+    const b = await c.req.json().catch(() => null);
+    try {
+      const headers = b?.headers && typeof b.headers === 'object' ? b.headers : undefined;
+      return c.json(await conns.add({ name: str(b?.name), kind: b?.kind, url: str(b?.url), auth: b?.auth, headers }), 201);
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, errStatus(err));
+    }
+  });
+
+  app.delete('/api/connections/:name', async (c) => {
+    try {
+      await conns?.remove(c.req.param('name'));
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, errStatus(err));
+    }
+  });
+
+  app.post('/api/connections/:name/connect', async (c) => {
+    if (!conns) return c.json({ error: 'connections disabled' }, 404);
+    try {
+      return c.json({ url: await conns.startOAuth(c.req.param('name')) });
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, errStatus(err));
+    }
+  });
+
+  app.post('/api/connections/:name/disconnect', async (c) => {
+    try {
+      await conns?.disconnect(c.req.param('name'));
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, errStatus(err));
+    }
   });
 
   app.get('/api/sessions', async (c) => {
@@ -228,28 +269,23 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     const settings = await loadSettings();
     const ticket = ticketIn || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
     const share: ShareLevel = SHARES.includes(body?.share) ? body.share : shareFor(cwd, settings);
-    let mcp: { name: string; url: string; headers: Record<string, string> } | undefined;
-    const sid = c.get('sid');
-    if (auth && sid && opts.workbenchMcpUrl && opts.selfUrl) {
-      const secret = randomBytes(24).toString('base64url');
-      mcp = { name: 'workbench', url: `${opts.selfUrl}/mcp/workbench`, headers: { 'x-legos-run': secret } };
-      const run = runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp });
-      grants.set(secret, { sid, runId: run.id });
-      owners.set(run.id, sid);
-      return c.json(run, 201);
-    }
-    return c.json(runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share }), 201);
+    const connected = opts.selfUrl ? ((await conns?.all()) ?? []).filter((x) => x.connected) : [];
+    if (!connected.length) return c.json(runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share }), 201);
+    const secret = randomBytes(24).toString('base64url');
+    const mcp = Object.fromEntries(connected.map((x) => [x.name, { url: `${opts.selfUrl}/mcp/${x.name}`, headers: { 'x-legos-run': secret } }]));
+    const run = runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp });
+    grants.set(secret, run.id);
+    return c.json(run, 201);
   });
 
-  // Workbench calls run as the signed-in user; without sign-in there is no identity to act as.
-  const wbToken = async (c: any): Promise<string | null> => (auth && c.get('sid') ? auth.accessToken(c.get('sid')) : null);
-  const wbError = (c: any, err: unknown) => c.json({ error: err instanceof Error ? err.message : String(err) }, 502);
+  const wbError = (c: any, err: unknown) => c.json({ error: errMsg(err) }, 502);
+  const NO_WB = 'connect a workbench in Settings first';
 
   app.get('/api/workbench/integrations', async (c) => {
-    const token = await wbToken(c);
-    if (!token || !opts.workbench) return c.json({ error: 'sign in to see workbench integrations' }, 409);
+    const wb = await workbench();
+    if (!wb) return c.json({ error: NO_WB }, 409);
     try {
-      return c.json({ integrations: await opts.workbench.integrations(token) });
+      return c.json({ integrations: await wb.client.integrations(wb.token) });
     } catch (err) {
       return wbError(c, err);
     }
@@ -258,10 +294,10 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.post('/api/workbench/connect', async (c) => {
     const integration = str((await c.req.json().catch(() => null))?.integration);
     if (!/^[a-z0-9-]{1,64}$/.test(integration)) return c.json({ error: 'invalid integration' }, 400);
-    const token = await wbToken(c);
-    if (!token || !opts.workbench) return c.json({ error: 'sign in first' }, 409);
+    const wb = await workbench();
+    if (!wb) return c.json({ error: NO_WB }, 409);
     try {
-      return c.json(await opts.workbench.connect(token, integration));
+      return c.json(await wb.client.connect(wb.token, integration));
     } catch (err) {
       return wbError(c, err);
     }
@@ -271,10 +307,10 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     const custom = str(c.req.query('jql'));
     const jql = custom || JQL_PRESETS[c.req.query('filter') ?? 'mine'];
     if (!jql || jql.length > 1000) return c.json({ error: 'unknown filter or JQL too long' }, 400);
-    const token = await wbToken(c);
-    if (!token || !opts.workbench) return c.json({ error: 'sign in to see Jira issues' }, 409);
+    const wb = await workbench();
+    if (!wb) return c.json({ error: NO_WB }, 409);
     try {
-      return c.json(await opts.workbench.jiraSearch(token, jql, 20, c.req.query('pageToken') || undefined));
+      return c.json(await wb.client.jiraSearch(wb.token, jql, 20, c.req.query('pageToken') || undefined));
     } catch (err) {
       return wbError(c, err);
     }
@@ -283,10 +319,10 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.get('/api/jira/issues/:key', async (c) => {
     const key = c.req.param('key').toUpperCase();
     if (!TICKET_RE.test(key)) return c.json({ error: 'invalid issue key' }, 400);
-    const token = await wbToken(c);
-    if (!token || !opts.workbench) return c.json({ error: 'sign in first' }, 409);
+    const wb = await workbench();
+    if (!wb) return c.json({ error: NO_WB }, 409);
     try {
-      return c.json(await opts.workbench.jiraIssue(token, key));
+      return c.json(await wb.client.jiraIssue(wb.token, key));
     } catch (err) {
       return wbError(c, err);
     }
@@ -300,11 +336,11 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   // Team view is read from the hub as the signed-in user; the hub never sees cost or transcripts.
   app.get('/api/team', async (c) => {
     if (!opts.hubUrl) return c.json({ error: 'team hub not configured', configured: false }, 409);
-    const token = await wbToken(c);
-    if (!token) return c.json({ error: 'sign in to see your team' }, 409);
+    const wb = await workbench();
+    if (!wb) return c.json({ error: NO_WB, configured: true }, 409);
     const days = Math.min(Math.max(Number(c.req.query('days') ?? 7) || 7, 1), 90);
     try {
-      const res = await http(`${opts.hubUrl}/hub/team?days=${days}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
+      const res = await http(`${opts.hubUrl}/hub/team?days=${days}`, { headers: { authorization: `Bearer ${wb.token}` }, signal: AbortSignal.timeout(10_000) });
       if (!res.ok) return c.json({ error: `team hub answered HTTP ${res.status}`, configured: true }, 502);
       return c.json({ configured: true, ...(await res.json()) });
     } catch (err) {

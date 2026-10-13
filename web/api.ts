@@ -1,28 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ActivityItem, DecisionAnswer, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
 
-export type Me = { authEnabled: boolean; authenticated: boolean; ssoName: string; workbenchUrl: string | null; user: { sub: string | null; name: string | null; email: string | null } | null };
+export type Me = { authEnabled: boolean; setupRequired: boolean; authenticated: boolean; user: { name: string } | null };
 
 // Any 401 means the session ended (logout elsewhere, refresh failed): show the sign-in screen.
 const signedOutListeners = new Set<() => void>();
 export const onSignedOut = (f: () => void) => (signedOutListeners.add(f), () => void signedOutListeners.delete(f));
-
-// Sign-in may open in another browser (desktop panes hand links to the system browser), so this
-// window polls with a one-time id and receives its own session cookie once login finishes anywhere.
-export function signIn(onDone: () => void): () => void {
-  const attempt = Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
-  window.open(`/auth/login?attempt=${attempt}&returnTo=${encodeURIComponent(location.href)}`, '_blank');
-  const started = Date.now();
-  const timer = setInterval(async () => {
-    if (Date.now() - started > 10 * 60_000) return clearInterval(timer);
-    const r = await fetch('/auth/claim', { method: 'POST', headers: { 'content-type': 'application/json', 'x-legos': '1' }, body: JSON.stringify({ attempt }) }).catch(() => null);
-    if (r?.ok && (await r.json()).done) {
-      clearInterval(timer);
-      onDone();
-    }
-  }, 1500);
-  return () => clearInterval(timer);
-}
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
@@ -31,6 +14,17 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
   return body as T;
 }
+
+export type Connection = {
+  name: string;
+  kind: 'workbench' | 'mcp';
+  url: string;
+  auth: 'oauth' | 'header';
+  connected: boolean;
+  user: { id: string | null; name: string | null; email: string | null } | null;
+  headerNames: string[];
+};
+export type NewConnection = Pick<Connection, 'name' | 'kind' | 'url' | 'auth'> & { headers?: Record<string, string> };
 
 export type Integration = { name: string; version: string | null; connected: boolean };
 export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null };
@@ -45,6 +39,13 @@ export const api = {
     call<{ issues: JiraRow[]; nextPageToken: string | null }>(`/api/jira/issues?filter=${filter}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
   jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   me: () => call<Me>('/auth/me'),
+  setup: (name: string, pin: string) => call<{ ok: true }>('/auth/setup', { method: 'POST', body: JSON.stringify({ name, pin }) }),
+  login: (pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ pin }) }),
+  connections: () => call<{ connections: Connection[] }>('/api/connections'),
+  addConnection: (c: NewConnection) => call<Connection>('/api/connections', { method: 'POST', body: JSON.stringify(c) }),
+  removeConnection: (name: string) => call<{ ok: true }>(`/api/connections/${name}`, { method: 'DELETE' }),
+  connectConnection: (name: string) => call<{ url: string }>(`/api/connections/${name}/connect`, { method: 'POST' }),
+  disconnectConnection: (name: string) => call<{ ok: true }>(`/api/connections/${name}/disconnect`, { method: 'POST' }),
   logout: () => call<{ ok: true }>('/auth/logout', { method: 'POST' }),
   sessions: () => call<SessionSummary[]>('/api/sessions'),
   session: (id: string) => call<SessionDetail>(`/api/sessions/${id}`),

@@ -2,12 +2,12 @@
   "name": "legos-factory",
   "version": "1.0.0",
   "scripts": {
-    "dev": "concurrently -k -n server,web \"tsx --env-file-if-exists=.env.local watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k -n server,web \"tsx watch --env-file-if-exists=.env.local server/index.ts\" \"vite\"",
     "build": "vite build",
     "start": "NODE_ENV=production tsx --env-file-if-exists=.env.local server/index.ts",
     "test": "vitest run",
     "typecheck": "tsc",
-    "dev:team": "concurrently -k -n hub,server,web \"LEGOS_MODE=hub tsx --env-file-if-exists=.env.local watch server/index.ts\" \"LEGOS_HUB_URL=http://localhost:4400 tsx --env-file-if-exists=.env.local watch server/index.ts\" \"vite\"",
+    "dev:team": "concurrently -k -n hub,server,web \"LEGOS_MODE=hub tsx watch --env-file-if-exists=.env.local server/index.ts\" \"LEGOS_HUB_URL=http://localhost:4400 tsx watch --env-file-if-exists=.env.local server/index.ts\" \"vite\"",
     "hub": "LEGOS_MODE=hub tsx --env-file-if-exists=.env.local server/index.ts"
   },
   "type": "module",

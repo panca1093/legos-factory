@@ -2,40 +2,33 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { ActivityLog } from './activity.ts';
 import { createApp } from './app.ts';
-import { Auth } from './auth.ts';
+import { Account } from './account.ts';
 import { RunManager } from './claude-runs.ts';
+import { Connections } from './connections.ts';
 import { createHub } from './hub.ts';
 import { Workbench } from './workbench.ts';
 
 const port = Number(process.env.LEGOS_API_PORT ?? 4317);
 const selfUrl = `http://localhost:${port}`;
-// e.g. https://workbench.example.com — set in .env.local; without it sign-in and workbench features are off
-const workbench = process.env.LEGOS_WORKBENCH_URL?.replace(/\/$/, '') || null;
-const workbenchMcpUrl = workbench ? `${workbench}/mcp` : '';
-const ssoName = process.env.LEGOS_SSO_NAME || 'workbench';
 
 function startHub() {
   // Team hub only: no runs, no UI. Local for now; deploying it means binding beyond loopback behind TLS.
   const hubPort = Number(process.env.LEGOS_HUB_PORT ?? 4400);
+  // the hub verifies who posts with the same workbench the laptops connect to in Settings
+  const workbench = process.env.LEGOS_WORKBENCH_URL?.replace(/\/$/, '');
   if (!workbench) throw new Error('LEGOS_WORKBENCH_URL is required for the team hub (it verifies who posts)');
-  serve({ fetch: createHub({ workbench: new Workbench(workbenchMcpUrl) }).fetch, hostname: '127.0.0.1', port: hubPort }, () =>
+  serve({ fetch: createHub({ workbench: new Workbench(`${workbench}/mcp`) }).fetch, hostname: '127.0.0.1', port: hubPort }, () =>
     console.log(`legos-factory team hub on http://localhost:${hubPort}`),
   );
 }
 
 function startApp() {
   const runs = new RunManager();
-  const auth =
-    process.env.LEGOS_AUTH === 'off' || !workbench
-      ? null
-      : new Auth({ issuer: workbench, resource: workbenchMcpUrl, callbackUrl: `${selfUrl}/auth/callback` });
+  const account = process.env.LEGOS_AUTH === 'off' ? null : new Account();
   const hubUrl = process.env.LEGOS_HUB_URL?.replace(/\/$/, '') || null;
   const app = createApp(runs, {
-    auth,
-    workbench: auth ? new Workbench(workbenchMcpUrl) : null,
-    workbenchMcpUrl,
-    workbenchUrl: workbench,
-    ssoName,
+    account,
+    connections: new Connections({ callbackUrl: `${selfUrl}/auth/callback` }),
     selfUrl,
     activity: new ActivityLog(),
     hubUrl,
@@ -49,7 +42,7 @@ function startApp() {
   }
 
   serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
-    console.log(`legos-factory api on ${selfUrl} · sign-in ${auth ? `via ${workbench}` : workbench ? 'disabled (LEGOS_AUTH=off)' : 'off (set LEGOS_WORKBENCH_URL)'} · team hub ${hubUrl ?? 'off'}`);
+    console.log(`legos-factory api on ${selfUrl} · PIN sign-in ${account ? 'on' : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'}`);
   });
 }
 

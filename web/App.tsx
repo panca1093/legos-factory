@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Run, RunKind, SessionSummary, TeamItem } from '../shared/types.ts';
-import { api, ago, fmtTokens, onSignedOut, projectName, signIn, storage, useFetch, useLive, useNow, type Conn, type Integration, type JiraRow, type Me } from './api.ts';
+import { api, ago, fmtTokens, onSignedOut, projectName, storage, useFetch, useLive, useNow, type Conn, type Connection, type Integration, type JiraRow, type Me } from './api.ts';
 import {
   ApprovalCard,
   ConnChip,
@@ -92,50 +92,95 @@ function Frame({ crumb, inspector, children }: { crumb: ReactNode; inspector?: R
   );
 }
 
-// Signs the user in before anything else loads; the API and live stream need a session.
+// Unlocks with the local PIN before anything else loads; the API and live stream need a session.
 export function Root() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const check = () => api.me().then((m) => (setMe(m), setError(null)), (e) => setError(e.message));
   useEffect(() => {
-    const check = () => api.me().then(setMe, (e) => setError(e.message));
     check();
     return onSignedOut(() => setMe((m) => (m ? { ...m, authenticated: false, user: null } : m)));
   }, []);
-  const recheck = () => api.me().then(setMe, (e) => setError(e.message));
-  if (error) return <SignIn ssoName="workbench" error={`Can't reach legos-factory: ${error}`} onSignedIn={recheck} />;
+  if (error) return <PinGate setup={false} error={`Can't reach legos-factory: ${error}`} onDone={check} />;
   if (!me) return null;
-  if (me.authEnabled && !me.authenticated) return <SignIn ssoName={me.ssoName} onSignedIn={recheck} />;
+  if (me.authEnabled && !me.authenticated) return <PinGate setup={me.setupRequired} onDone={check} />;
   return <App me={me} />;
 }
 
-function SignIn({ ssoName, error, onSignedIn }: { ssoName: string; error?: string; onSignedIn: () => void }) {
-  const [waiting, setWaiting] = useState(false);
-  const stop = useRef<(() => void) | null>(null);
-  useEffect(() => () => stop.current?.(), []);
+function PinGate({ setup, error, onDone }: { setup: boolean; error?: string; onDone: () => void }) {
+  const [name, setName] = useState('');
+  const [pin, setPin] = useState('');
+  const [pin2, setPin2] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const digits = (v: string) => v.replace(/\D/g, '').slice(0, 6);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (setup && pin !== pin2) return setErr("PINs don't match");
+    setBusy(true);
+    setErr(null);
+    try {
+      await (setup ? api.setup(name.trim(), pin) : api.login(pin));
+      onDone();
+    } catch (e: any) {
+      setErr(e.message);
+      setPin('');
+      setPin2('');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ready = pin.length === 6 && (!setup || (name.trim() && pin2.length === 6));
   return (
     <div className="signin">
-      <div className="signin-card">
+      <form className="signin-card" onSubmit={submit}>
         <span className="mark">L</span>
         <h1>
           legos<span> / factory</span>
         </h1>
-        <p className="lead">Mission control for your coding agents.</p>
-        <button
-          className="btn primary signin-btn"
-          onClick={() => {
-            stop.current?.();
-            setWaiting(true);
-            stop.current = signIn(onSignedIn);
-          }}
-        >
-          {waiting ? 'Waiting for sign-in…' : `Sign in with ${ssoName}`}
-        </button>
-        {waiting && <p className="signin-note">Finish signing in in the window that opened — this page continues automatically. <button className="text-action" onClick={() => { stop.current?.(); setWaiting(false); }}>Cancel</button></p>}
-        <p className="signin-note">
-          Uses your organisation's SSO through workbench. Chats and tasks reach your systems with your own access — never someone else's.
-        </p>
-        {error && <p className="error">{error}</p>}
-      </div>
+        <p className="lead">{setup ? 'Create your local account to get started.' : 'Mission control for your coding agents.'}</p>
+        {error ? (
+          <button type="button" className="btn primary signin-btn" onClick={onDone}>
+            Try again
+          </button>
+        ) : (
+          <>
+            {setup && (
+              <label className="field signin-field">
+                Your name
+                <input className="input" autoFocus value={name} maxLength={64} autoComplete="name" onChange={(e) => setName(e.target.value)} />
+              </label>
+            )}
+            <label className="field signin-field">
+              {setup ? 'Choose a 6-digit PIN' : 'PIN'}
+              <input
+                className="input pin-input"
+                type="password"
+                inputMode="numeric"
+                autoComplete={setup ? 'new-password' : 'current-password'}
+                autoFocus={!setup}
+                value={pin}
+                onChange={(e) => setPin(digits(e.target.value))}
+              />
+            </label>
+            {setup && (
+              <label className="field signin-field">
+                Repeat PIN
+                <input className="input pin-input" type="password" inputMode="numeric" autoComplete="new-password" value={pin2} onChange={(e) => setPin2(digits(e.target.value))} />
+              </label>
+            )}
+            <button className="btn primary signin-btn" disabled={!ready || busy}>
+              {busy ? 'Checking…' : setup ? 'Create account' : 'Unlock'}
+            </button>
+            <p className="signin-note">
+              {setup
+                ? 'Stays on this machine. Connect workbench or other MCP servers later in Settings.'
+                : 'Forgot it? Delete ~/.legos-factory/account.json and set up again — connections are kept.'}
+            </p>
+          </>
+        )}
+        {(err || error) && <p className="error">{err ?? error}</p>}
+      </form>
     </div>
   );
 }
@@ -180,8 +225,8 @@ function App({ me }: { me: Me }) {
       <div className={`app ${withInspector && inspector ? 'with-inspector show-inspector' : ''}`}>
         <Rail live={live} view={view} id={id} open={railOpen} onNew={newRun} me={me} />
         {!view && <Overview live={live} sessions={sessions.data} error={sessions.error} onNew={newRun} onContinue={continueSession} />}
-        {view === 'tasks' && <Tasks live={live} onNew={newRun} me={me} />}
-        {view === 'settings' && <SettingsPage me={me} />}
+        {view === 'tasks' && <Tasks live={live} onNew={newRun} />}
+        {view === 'settings' && <SettingsPage />}
         {view === 'activity' && <MyActivity live={live} />}
         {view === 'team' && <TeamActivity />}
         {view === 'sessions' && !id && <Sessions sessions={sessions.data} error={sessions.error} live={live} />}
@@ -259,7 +304,7 @@ function Rail({ live, view, id, open, onNew, me }: { live: Live; view?: string; 
 function UserMenu({ me }: { me: Me }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const label = me.user?.email ?? me.user?.name ?? `${me.ssoName} account`;
+  const label = me.user?.name ?? 'Local account';
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent | KeyboardEvent) => {
@@ -285,7 +330,7 @@ function UserMenu({ me }: { me: Me }) {
             <span className="avatar-btn static">{initials(label)}</span>
             <div style={{ minWidth: 0 }}>
               <b className="ellipsis">{label}</b>
-              <small>Signed in via workbench</small>
+              <small>Local account</small>
             </div>
           </div>
           <div className="menu-label">You</div>
@@ -1330,9 +1375,12 @@ function TaskBar({
   );
 }
 
-function Tasks({ live, onNew, me }: { live: Live; onNew: (k: RunKind, defaults?: LaunchReq['defaults']) => void; me: Me }) {
+function Tasks({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?: LaunchReq['defaults']) => void }) {
   const now = useNow(10000);
-  const [source, setSource] = useState<'tasks' | 'jira'>(() => (storage('lf:tasks-tab') === 'jira' && me.authEnabled ? 'jira' : 'tasks'));
+  const conns = useFetch(api.connections, []);
+  const hasWorkbench = !!conns.data?.connections.some((c) => c.kind === 'workbench' && c.connected);
+  const [picked, setSource] = useState<'tasks' | 'jira'>(() => (storage('lf:tasks-tab') === 'jira' ? 'jira' : 'tasks'));
+  const source = hasWorkbench ? picked : 'tasks';
   const pickSource = (v: 'tasks' | 'jira') => (setSource(v), storage('lf:tasks-tab', v));
   const review = useReview();
   const [filter, setFilter] = useState<'all' | 'active' | 'needs' | 'done' | 'failed'>('all');
@@ -1360,7 +1408,7 @@ function Tasks({ live, onNew, me }: { live: Live; onNew: (k: RunKind, defaults?:
             <div>
               <h1>Tasks</h1>
               <p className="lead">Jobs you handed off. Each runs to completion on its own and reports back.</p>
-              {me.authEnabled && (
+              {hasWorkbench && (
                 <div className="segmented source-tabs" role="tablist" aria-label="Task source">
                   <button role="tab" aria-selected={source === 'tasks'} className={source === 'tasks' ? 'active' : ''} onClick={() => pickSource('tasks')}>
                     Your tasks <span className="tab-count">{tasks.length}</span>
@@ -1451,8 +1499,15 @@ function Tasks({ live, onNew, me }: { live: Live; onNew: (k: RunKind, defaults?:
   );
 }
 
-function SettingsPage({ me }: { me: Me }) {
+function SettingsPage() {
   const { data: s, error } = useFetch(api.settings, []);
+  const [conns, setConns] = useState<Connection[] | null>(null);
+  const [connError, setConnError] = useState<string | null>(null);
+  const loadConns = () => api.connections().then((r) => (setConns(r.connections), setConnError(null), r.connections), (e) => (setConnError(e.message), null));
+  useEffect(() => {
+    loadConns();
+  }, []);
+  const wb = conns?.find((c) => c.kind === 'workbench' && c.connected);
   return (
     <Frame
       crumb={
@@ -1466,10 +1521,11 @@ function SettingsPage({ me }: { me: Me }) {
           <div className="page-heading">
             <div>
               <h1>Settings</h1>
-              <p className="lead">Apps your chats and tasks can use through workbench, and how tickets are detected.</p>
+              <p className="lead">Servers your chats and tasks can reach, and how tickets are detected.</p>
             </div>
           </div>
-          {me.authEnabled && <Integrations workbenchUrl={me.workbenchUrl} />}
+          <Connections list={conns} error={connError} reload={loadConns} />
+          {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           {error && <p className="error">{error}</p>}
           {s && (
             <>
@@ -1492,6 +1548,202 @@ function SettingsPage({ me }: { me: Me }) {
         </div>
       </div>
     </Frame>
+  );
+}
+
+function Connections({ list, error, reload }: { list: Connection[] | null; error: string | null; reload: () => Promise<Connection[] | null> }) {
+  const [adding, setAdding] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  // after opening an OAuth link, watch for the connection to flip to connected
+  useEffect(() => {
+    if (!pending) return;
+    const started = Date.now();
+    const t = setInterval(async () => {
+      const l = await reload();
+      if (l?.find((c) => c.name === pending)?.connected || Date.now() - started > 5 * 60_000) {
+        clearInterval(t);
+        setPending(null);
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [pending]);
+
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    await reload();
+  };
+  const connect = (name: string) =>
+    act(async () => {
+      const { url } = await api.connectConnection(name);
+      window.open(url, '_blank', 'noopener');
+      setPending(name);
+    });
+
+  return (
+    <>
+      <div className="sectionbar" style={{ marginTop: 0 }}>
+        <h2>Connections</h2>
+        {!adding && (
+          <button className="text-action" onClick={() => setAdding(true)}>
+            + Add connection
+          </button>
+        )}
+      </div>
+      {adding && (
+        <AddConnection
+          onCancel={() => setAdding(false)}
+          onAdded={async (c) => {
+            setAdding(false);
+            await reload();
+            if (c.auth === 'oauth') await connect(c.name);
+          }}
+        />
+      )}
+      {(err || error) && <p className="error">{err ?? error}</p>}
+      {list && !list.length && !adding && <div className="empty">No connections yet. Add workbench or any MCP server — every chat and task can then use it.</div>}
+      {!!list?.length && (
+        <div className="section-list">
+          {list.map((c) => (
+            <div key={c.name} className="row">
+              <span className="marker soft">{c.name.charAt(0).toUpperCase()}</span>
+              <div className="copy">
+                <b>
+                  {c.name} <span className="badge">{c.kind === 'workbench' ? 'Workbench' : 'MCP'}</span>
+                </b>
+                <span>
+                  {c.url} · {c.auth === 'oauth' ? 'OAuth' : `Header ${c.headerNames.join(', ')}`}
+                  {c.user?.email && ` · ${c.user.email}`}
+                </span>
+              </div>
+              <div className="actions">
+                {c.connected ? (
+                  <span className="status-pill tone-good">Connected</span>
+                ) : pending === c.name ? (
+                  <span className="status-pill tone-watch">Finish in browser…</span>
+                ) : (
+                  <span className="status-pill tone-off">Not connected</span>
+                )}
+                {c.auth === 'oauth' &&
+                  (c.connected ? (
+                    <button className="btn sm" onClick={() => act(() => api.disconnectConnection(c.name))}>
+                      Disconnect
+                    </button>
+                  ) : (
+                    <button className="btn sm" onClick={() => connect(c.name)}>
+                      Connect
+                    </button>
+                  ))}
+                {removing === c.name ? (
+                  <button className="btn sm danger" onClick={() => (setRemoving(null), act(() => api.removeConnection(c.name)))}>
+                    Confirm remove
+                  </button>
+                ) : (
+                  <button className="btn sm ghost" onClick={() => setRemoving(c.name)}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="footnote">
+        Connected servers join every new chat and task as MCP tools (<code>mcp__&lt;name&gt;__…</code>). Credentials stay on this machine and are attached by
+        legos-factory, never handed to the agent.
+      </p>
+    </>
+  );
+}
+
+function AddConnection({ onCancel, onAdded }: { onCancel: () => void; onAdded: (c: Connection) => void }) {
+  const [kind, setKind] = useState<'workbench' | 'mcp'>('workbench');
+  const [name, setName] = useState('workbench');
+  const [url, setUrl] = useState('');
+  const [auth, setAuth] = useState<'oauth' | 'header'>('oauth');
+  const [header, setHeader] = useState('Authorization');
+  const [value, setValue] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pickKind = (k: 'workbench' | 'mcp') => {
+    setKind(k);
+    if (k === 'workbench') setAuth('oauth');
+    if (!name || name === 'workbench') setName(k === 'workbench' ? 'workbench' : '');
+  };
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      onAdded(await api.addConnection({ name: name.trim(), kind, url: url.trim(), auth, ...(auth === 'header' && { headers: { [header.trim()]: value } }) }));
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="add-conn" onSubmit={submit}>
+      <div className="segmented" role="tablist" aria-label="Connection type">
+        {(
+          [
+            ['workbench', 'Workbench'],
+            ['mcp', 'MCP server'],
+          ] as const
+        ).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? 'active' : ''} onClick={() => pickKind(k)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="field-row">
+        <label className="field">
+          Name
+          <input className="input" value={name} placeholder="e.g. tools" onChange={(e) => setName(e.target.value.toLowerCase())} />
+        </label>
+        <label className="field">
+          {kind === 'workbench' ? 'Workbench URL' : 'MCP endpoint URL'}
+          <input className="input" value={url} placeholder={kind === 'workbench' ? 'https://workbench.example.com' : 'https://example.com/mcp'} onChange={(e) => setUrl(e.target.value)} />
+        </label>
+      </div>
+      {kind === 'mcp' && (
+        <label className="field">
+          Authentication
+          <select className="input" value={auth} onChange={(e) => setAuth(e.target.value as 'oauth' | 'header')}>
+            <option value="oauth">OAuth — sign in through the browser</option>
+            <option value="header">Static header — API key or token</option>
+          </select>
+        </label>
+      )}
+      {auth === 'header' && (
+        <div className="field-row">
+          <label className="field">
+            Header
+            <input className="input" value={header} onChange={(e) => setHeader(e.target.value)} />
+          </label>
+          <label className="field">
+            Value
+            <input className="input" type="password" autoComplete="off" value={value} placeholder="Bearer …" onChange={(e) => setValue(e.target.value)} />
+          </label>
+        </div>
+      )}
+      {err && <p className="error">{err}</p>}
+      <div className="add-conn-actions">
+        <button type="button" className="btn ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn primary" disabled={busy || !name.trim() || !url.trim() || (auth === 'header' && (!header.trim() || !value))}>
+          {busy ? 'Adding…' : auth === 'oauth' ? 'Add and connect' : 'Add'}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -1563,7 +1815,7 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
 
   return (
     <>
-      <div className="sectionbar" style={{ marginTop: 0 }}>
+      <div className="sectionbar">
         <h2>Workbench apps</h2>
         {workbenchUrl && (
           <a className="text-action" href={workbenchUrl} target="_blank" rel="noreferrer">

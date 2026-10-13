@@ -15,8 +15,8 @@ export type StartRequest = {
   model?: string;
   ticket?: string | null;
   share?: ShareLevel;
-  // extra MCP server for this run only (the per-user workbench proxy)
-  mcp?: { name: string; url: string; headers: Record<string, string> };
+  // extra MCP servers for this run only (the Settings connections, via the local proxy)
+  mcp?: Record<string, { url: string; headers: Record<string, string> }>;
 };
 
 // 'default' = whatever the user's Claude Code settings pick
@@ -140,7 +140,7 @@ export class RunManager extends EventEmitter {
         permissionMode: run.permissionMode,
         resume: req.resume,
         model: sdkModel(req.model),
-        ...(req.mcp && { mcpServers: { [req.mcp.name]: { type: 'http' as const, url: req.mcp.url, headers: req.mcp.headers } } }),
+        ...(req.mcp && { mcpServers: Object.fromEntries(Object.entries(req.mcp).map(([name, m]) => [name, { type: 'http' as const, ...m }])) }),
         abortController: abort,
         canUseTool: this.canUseTool(run),
       },

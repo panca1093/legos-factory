@@ -9,11 +9,13 @@ Local mission control for coding agents. v1 runtime: Claude Code. Codex and Herm
 - **Task** — hand off a job: one prompt, runs to completion on its own (Done / Failed / Cancelled), then "Discuss in chat" to follow up. Permissions picked per task.
 - **Needs you** — permission requests and `AskUserQuestion` clarifications from all UI-launched runs in one inbox.
 
+- **Connections** — add workbench or any remote MCP server in Settings (OAuth or a static header); every new chat and task gets them as MCP tools.
+
 Runs load your user/project settings, so MCP servers (Jira, Bitbucket, …) and skills work as in the CLI. Nothing org-specific lives here.
 
 ```bash
 npm install
-cp .env.example .env.local   # then fill in your workbench URL
+cp .env.example .env.local   # optional
 npm run dev     # api :4317 + ui :5173
 npm test
 ```
@@ -22,7 +24,8 @@ npm test
 
 ## Notes
 
-- Sign-in: "Sign in with <your SSO>" via a workbench server (OAuth 2.1 + PKCE, dynamic client registration). Tokens stay server-side in `~/.legos-factory/auth.json` (0600). Each run gets the `workbench` MCP through a local proxy that attaches its owner's fresh token. Configure it in `.env.local` (see `.env.example`); without `LEGOS_WORKBENCH_URL`, sign-in and workbench features are off. `LEGOS_AUTH=off` skips sign-in for local dev.
+- Sign-in: a local account with a 6-digit PIN (scrypt, `~/.legos-factory/account.json`, 0600), held in an HMAC-signed cookie for 30 days. Five wrong PINs lock it for 30 s, doubling per further miss. Forgot the PIN: delete that file and set up again. `LEGOS_AUTH=off` skips it for local dev.
+- Connections (Settings): a workbench or any MCP server, via OAuth 2.1 (discovery, dynamic client registration, PKCE) or a static header. Credentials stay server-side in `~/.legos-factory/connections.json` (0600); runs reach each server through a local proxy (`/mcp/<name>`) that attaches them fresh. A connected workbench also enables the apps list, Jira tasks and the team hub.
 
 - Binds to 127.0.0.1 only. `/api` rejects non-local `Host` and requires `x-legos: 1` on writes, since launching a run executes code.
 - Each live session is a `claude` process. Runs are in memory; restarting the server forgets them (their transcripts stay under Sessions).
