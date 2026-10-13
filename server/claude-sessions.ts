@@ -167,50 +167,21 @@ export async function summarize(path: string, withEvents = false): Promise<Sessi
 type CacheEntry = { mtimeMs: number; size: number; summary: SessionSummary };
 const cache = new Map<string, CacheEntry>();
 
-async function sessionFiles(): Promise<{ path: string; mtimeMs: number; size: number }[]> {
-  const root = projectsDir();
-  const out: { path: string; mtimeMs: number; size: number }[] = [];
-  let dirs: string[] = [];
-  try {
-    dirs = await readdir(root);
-  } catch {
-    return out;
-  }
-  await Promise.all(
-    dirs.map(async (d) => {
-      let files: string[] = [];
-      try {
-        files = (await readdir(join(root, d))).filter((f) => f.endsWith('.jsonl'));
-      } catch {
-        return;
-      }
-      for (const f of files) {
-        const path = join(root, d, f);
-        const st = await stat(path);
-        out.push({ path, mtimeMs: st.mtimeMs, size: st.size });
-      }
+// Summaries for the given sessions (those legos-factory started), in the given order; missing transcripts are skipped.
+export async function listSessions(ids: string[]): Promise<SessionSummary[]> {
+  const out = await Promise.all(
+    ids.map(async (id) => {
+      const path = await findSessionPath(id);
+      const st = path && (await stat(path).catch(() => null));
+      if (!path || !st) return null;
+      const hit = cache.get(path);
+      if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.summary;
+      const { events: _, ...summary } = await summarize(path);
+      cache.set(path, { mtimeMs: st.mtimeMs, size: st.size, summary });
+      return summary;
     }),
   );
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-}
-
-export async function listSessions(limit = 200): Promise<SessionSummary[]> {
-  const files = (await sessionFiles()).slice(0, limit);
-  const out: SessionSummary[] = [];
-  for (let i = 0; i < files.length; i += 16) {
-    const batch = await Promise.all(
-      files.slice(i, i + 16).map(async (f) => {
-        const hit = cache.get(f.path);
-        if (hit && hit.mtimeMs === f.mtimeMs && hit.size === f.size) return hit.summary;
-        const { events: _, ...summary } = await summarize(f.path);
-        cache.set(f.path, { mtimeMs: f.mtimeMs, size: f.size, summary });
-        return summary;
-      }),
-    );
-    out.push(...batch);
-  }
-  // mtime moves on metadata-only appends (titles, snapshots); sort by the transcript's own last timestamp
-  return out.sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? ''));
+  return out.filter((s): s is SessionSummary => s !== null);
 }
 
 export async function findSessionPath(id: string): Promise<string | null> {

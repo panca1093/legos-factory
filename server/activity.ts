@@ -1,11 +1,6 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import type { ActivityItem, Run, TeamItem } from '../shared/types.ts';
-
-export function activityPath(): string {
-  return process.env.LEGOS_ACTIVITY ?? join(homedir(), '.legos-factory', 'activity.jsonl');
-}
 
 export function toItem(run: Omit<Run, 'events'>): ActivityItem {
   return {
@@ -32,43 +27,50 @@ export function toTeamItem(i: ActivityItem): TeamItem {
   return rest;
 }
 
-// Append-only run history so activity survives restarts; one line per meaningful state change.
-// TODO: uncertain — file grows unbounded; compact (keep last line per runId) once it gets large.
+// Every run launched here, per owner, latest state only. This is also the Sessions list: only
+// sessions started from legos-factory show up, never the machine's other Claude sessions.
 export class ActivityLog {
   private lastSig = new Map<string, string>();
 
-  constructor(private path = activityPath()) {}
+  constructor(private db: DatabaseSync) {
+    // runs live in memory: whatever was still going when the server stopped is gone
+    db.prepare(
+      `update runs set item = json_set(item, '$.status', 'failed') where json_extract(item, '$.status') in ('starting', 'running', 'awaiting_decision', 'idle')`,
+    ).run();
+  }
 
   // Returns the item when it was written (a real change), else null.
-  async record(run: Omit<Run, 'events'>): Promise<ActivityItem | null> {
+  async record(run: Omit<Run, 'events'>, owner: string): Promise<ActivityItem | null> {
     const item = toItem(run);
     const sig = [item.status, item.turns, item.endedAt, item.ticket, item.model, item.kind, item.sessionId].join('|');
     if (this.lastSig.get(item.runId) === sig) return null;
     this.lastSig.set(item.runId, sig);
-    await mkdir(dirname(this.path), { recursive: true });
-    await appendFile(this.path, JSON.stringify(item) + '\n', { mode: 0o600 });
+    this.db
+      .prepare(
+        `insert into runs (run_id, owner, session_id, item, started_at, last_event_at) values (?, ?, ?, ?, ?, ?)
+         on conflict (run_id) do update set session_id = excluded.session_id, item = excluded.item, last_event_at = excluded.last_event_at`,
+      )
+      .run(item.runId, owner, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt);
     return item;
   }
 
-  async list(sinceMs: number): Promise<ActivityItem[]> {
-    let raw = '';
-    try {
-      raw = await readFile(this.path, 'utf8');
-    } catch {
-      return [];
-    }
-    const latest = new Map<string, ActivityItem>();
-    for (const line of raw.split('\n')) {
-      if (!line) continue;
-      try {
-        const i = JSON.parse(line) as ActivityItem;
-        latest.set(i.runId, i);
-      } catch {
-        // torn last line from a crash; skip it
-      }
-    }
-    return [...latest.values()]
-      .filter((i) => Date.parse(i.lastEventAt) >= sinceMs || Date.parse(i.startedAt) >= sinceMs)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  async list(owner: string, sinceMs: number): Promise<ActivityItem[]> {
+    const since = new Date(sinceMs).toISOString();
+    const rows = this.db
+      .prepare(`select item from runs where owner = ? and (last_event_at >= ? or started_at >= ?) order by started_at desc`)
+      .all(owner, since, since) as { item: string }[];
+    return rows.map((r) => JSON.parse(r.item));
+  }
+
+  // Claude session ids this owner started here, most recently active first.
+  sessionIds(owner: string, limit: number): string[] {
+    const rows = this.db
+      .prepare(`select session_id from runs where owner = ? and session_id is not null group by session_id order by max(last_event_at) desc limit ?`)
+      .all(owner, limit) as { session_id: string }[];
+    return rows.map((r) => r.session_id);
+  }
+
+  ownsSession(owner: string, sessionId: string): boolean {
+    return !!this.db.prepare(`select 1 from runs where owner = ? and session_id = ? limit 1`).get(owner, sessionId);
   }
 }

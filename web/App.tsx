@@ -92,7 +92,7 @@ function Frame({ crumb, inspector, children }: { crumb: ReactNode; inspector?: R
   );
 }
 
-// Unlocks with the local PIN before anything else loads; the API and live stream need a session.
+// Sign in before anything else loads; the API and live stream need a session.
 export function Root() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,26 +101,40 @@ export function Root() {
     check();
     return onSignedOut(() => setMe((m) => (m ? { ...m, authenticated: false, user: null } : m)));
   }, []);
-  if (error) return <PinGate setup={false} error={`Can't reach legos-factory: ${error}`} onDone={check} />;
+  if (error) return <SignIn me={null} error={`Can't reach legos-factory: ${error}`} onDone={check} />;
   if (!me) return null;
-  if (me.authEnabled && !me.authenticated) return <PinGate setup={me.setupRequired} onDone={check} />;
+  if (me.authEnabled && !me.authenticated) return <SignIn me={me} onDone={check} />;
   return <App me={me} />;
 }
 
-function PinGate({ setup, error, onDone }: { setup: boolean; error?: string; onDone: () => void }) {
-  const [name, setName] = useState('');
+const CLAIM_EVERY_MS = 1500;
+const CLAIM_FOR_MS = 10 * 60_000;
+
+// Two separate kinds of user: local ones (name + PIN) and workbench ones.
+function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: () => void }) {
+  const names = me?.users ?? [];
+  const [creating, setCreating] = useState(names.length === 0);
+  const [name, setName] = useState(names[0] ?? '');
   const [pin, setPin] = useState('');
   const [pin2, setPin2] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const digits = (v: string) => v.replace(/\D/g, '').slice(0, 6);
+  const mode = (create: boolean) => {
+    setCreating(create);
+    setName(create ? '' : (names[0] ?? ''));
+    setPin('');
+    setPin2('');
+    setErr(null);
+  };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (setup && pin !== pin2) return setErr("PINs don't match");
+    if (creating && pin !== pin2) return setErr("PINs don't match");
     setBusy(true);
     setErr(null);
     try {
-      await (setup ? api.setup(name.trim(), pin) : api.login(pin));
+      await (creating ? api.createUser(name.trim(), pin) : api.login(name, pin));
       onDone();
     } catch (e: any) {
       setErr(e.message);
@@ -130,7 +144,35 @@ function PinGate({ setup, error, onDone }: { setup: boolean; error?: string; onD
       setBusy(false);
     }
   };
-  const ready = pin.length === 6 && (!setup || (name.trim() && pin2.length === 6));
+  // The link may open in the system browser (desktop pane), which keeps its own cookie: poll for ours.
+  const workbench = async () => {
+    setErr(null);
+    const attempt = crypto.randomUUID();
+    const tab = window.open('', '_blank');
+    try {
+      const { url } = await api.workbenchSignIn(attempt);
+      if (tab) tab.location.href = url;
+      else window.open(url, '_blank');
+    } catch (e: any) {
+      tab?.close();
+      return setErr(e.message);
+    }
+    setWaiting(true);
+    const until = Date.now() + CLAIM_FOR_MS;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, CLAIM_EVERY_MS));
+      const ok = await api.claim(attempt).then(
+        (r) => r.ok,
+        () => false,
+      );
+      // finished in this same browser: the callback already set our cookie
+      const here = ok || (await api.me().then((m) => m.authenticated, () => false));
+      if (here) return onDone();
+    }
+    setWaiting(false);
+    setErr('Workbench sign-in timed out — try again.');
+  };
+  const ready = pin.length === 6 && name.trim() && (!creating || pin2.length === 6);
   return (
     <div className="signin">
       <form className="signin-card" onSubmit={submit}>
@@ -138,44 +180,65 @@ function PinGate({ setup, error, onDone }: { setup: boolean; error?: string; onD
         <h1>
           legos<span> / factory</span>
         </h1>
-        <p className="lead">{setup ? 'Create your local account to get started.' : 'Mission control for your coding agents.'}</p>
+        <p className="lead">{creating ? 'Create a local user on this machine.' : 'Mission control for your coding agents.'}</p>
         {error ? (
           <button type="button" className="btn primary signin-btn" onClick={onDone}>
             Try again
           </button>
+        ) : waiting ? (
+          <p className="signin-note">Finish signing in to workbench in the window that opened. This page continues on its own.</p>
         ) : (
           <>
-            {setup && (
-              <label className="field signin-field">
-                Your name
-                <input className="input" autoFocus value={name} maxLength={64} autoComplete="name" onChange={(e) => setName(e.target.value)} />
-              </label>
-            )}
             <label className="field signin-field">
-              {setup ? 'Choose a 6-digit PIN' : 'PIN'}
+              {creating ? 'Your name' : 'User'}
+              {creating ? (
+                <input className="input" autoFocus value={name} maxLength={64} autoComplete="name" onChange={(e) => setName(e.target.value)} />
+              ) : (
+                <select className="input" value={name} onChange={(e) => setName(e.target.value)}>
+                  {names.map((n) => (
+                    <option key={n}>{n}</option>
+                  ))}
+                </select>
+              )}
+            </label>
+            <label className="field signin-field">
+              {creating ? 'Choose a 6-digit PIN' : 'PIN'}
               <input
                 className="input pin-input"
                 type="password"
                 inputMode="numeric"
-                autoComplete={setup ? 'new-password' : 'current-password'}
-                autoFocus={!setup}
+                autoComplete={creating ? 'new-password' : 'current-password'}
+                autoFocus={!creating}
                 value={pin}
                 onChange={(e) => setPin(digits(e.target.value))}
               />
             </label>
-            {setup && (
+            {creating && (
               <label className="field signin-field">
                 Repeat PIN
                 <input className="input pin-input" type="password" inputMode="numeric" autoComplete="new-password" value={pin2} onChange={(e) => setPin2(digits(e.target.value))} />
               </label>
             )}
             <button className="btn primary signin-btn" disabled={!ready || busy}>
-              {busy ? 'Checking…' : setup ? 'Create account' : 'Unlock'}
+              {busy ? 'Checking…' : creating ? 'Create user' : 'Unlock'}
             </button>
+            {(names.length > 0 || !creating) && (
+              <button type="button" className="btn ghost signin-switch" onClick={() => mode(!creating)}>
+                {creating ? 'I already have a user' : 'Create a new user'}
+              </button>
+            )}
+            {me?.workbenchLogin && (
+              <>
+                <div className="signin-or">or</div>
+                <button type="button" className="btn signin-btn" onClick={workbench}>
+                  Sign in with workbench
+                </button>
+              </>
+            )}
             <p className="signin-note">
-              {setup
-                ? 'Stays on this machine. Connect workbench or other MCP servers later in Settings.'
-                : 'Forgot it? Delete ~/.legos-factory/account.json and set up again — connections are kept.'}
+              {creating
+                ? 'Local users stay on this machine and can still connect workbench or other MCP servers in Settings.'
+                : 'Each user sees only their own sessions and connections.'}
             </p>
           </>
         )}
@@ -305,6 +368,7 @@ function UserMenu({ me }: { me: Me }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const label = me.user?.name ?? 'Local account';
+  const kind = me.user?.kind === 'workbench' ? (me.user.email ?? 'Workbench') : 'Local user';
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent | KeyboardEvent) => {
@@ -330,7 +394,7 @@ function UserMenu({ me }: { me: Me }) {
             <span className="avatar-btn static">{initials(label)}</span>
             <div style={{ minWidth: 0 }}>
               <b className="ellipsis">{label}</b>
-              <small>Local account</small>
+              <small className="ellipsis">{kind}</small>
             </div>
           </div>
           <div className="menu-label">You</div>
@@ -684,7 +748,7 @@ function Overview({
                 <div className="row">
                   <div className="copy">
                     <b>Search sessions</b>
-                    <span>Find any Claude Code conversation on this Mac</span>
+                    <span>Find any of your chats and tasks</span>
                   </div>
                   <button className="text-action" onClick={openSearch}>
                     Search →
@@ -809,7 +873,7 @@ function Sessions({ sessions, error, live }: { sessions: SessionSummary[] | null
           <div className="page-heading">
             <div>
               <h1>Sessions</h1>
-              <p className="lead">Every Claude Code conversation on this Mac, including terminal ones. Read-only until you continue one.</p>
+              <p className="lead">Your chats and tasks started from legos-factory. Read-only until you continue one.</p>
             </div>
           </div>
           <div className="tool-bar">
@@ -864,7 +928,7 @@ function Sessions({ sessions, error, live }: { sessions: SessionSummary[] | null
               })}
             </div>
           )}
-          <p className="footnote">Sessions are read from ~/.claude/projects. Titles come from /rename or the first prompt.</p>
+          <p className="footnote">Only sessions you started here are listed; terminal sessions stay private. Titles come from /rename or the first prompt.</p>
         </div>
       </div>
     </Frame>

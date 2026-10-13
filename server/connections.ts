@@ -1,18 +1,16 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { Workbench } from './workbench.ts';
 
 // Remote MCP servers every run can use, set up in Settings. Each one authenticates with either
 // OAuth 2.1 (dynamic client registration + PKCE) or static headers. A `workbench` connection is an
-// MCP gateway that also powers the apps, Jira and team-hub features.
+// MCP gateway that also powers the apps, Jira and team-hub features. Each user has their own set.
 
 export type ConnKind = 'workbench' | 'mcp';
 export type ConnAuth = 'oauth' | 'header';
 export type ConnUser = { id: string | null; name: string | null; email: string | null };
 
-type OAuthState = {
+export type OAuthState = {
   clientId: string | null;
   redirectUri: string | null;
   accessToken: string | null;
@@ -37,7 +35,8 @@ export type ConnectionView = {
 export type NewConnection = { name: string; kind: ConnKind; url: string; auth: ConnAuth; headers?: Record<string, string> };
 
 type Metadata = { authorization_endpoint: string; token_endpoint: string; registration_endpoint?: string };
-type Pending = { name: string; verifier: string; createdAt: number };
+// shared by every user's Connections so the one OAuth callback can find whose connect it was
+export type Pending = { owner: string; name: string; verifier: string; createdAt: number };
 
 const PENDING_TTL_MS = 10 * 60_000;
 const REFRESH_SKEW_MS = 60_000;
@@ -47,10 +46,6 @@ const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const b64url = (b: Buffer) => b.toString('base64url');
-
-export function connectionsPath(): string {
-  return process.env.LEGOS_CONNECTIONS ?? join(homedir(), '.legos-factory', 'connections.json');
-}
 
 class HttpError extends Error {
   constructor(
@@ -65,33 +60,34 @@ export class Connections {
   private list: Stored[] = [];
   private loaded = false;
   private meta = new Map<string, Metadata>();
-  private pending = new Map<string, Pending>();
+  private pending: Map<string, Pending>;
   private refreshing = new Map<string, Promise<string | null>>();
-  private readonly path: string;
   private readonly http: typeof fetch;
 
-  constructor(private cfg: { callbackUrl: string; path?: string; fetch?: typeof fetch }) {
-    this.path = cfg.path ?? connectionsPath();
+  constructor(private cfg: { callbackUrl: string; db: DatabaseSync; owner: string; fetch?: typeof fetch; pending?: Map<string, Pending> }) {
     this.http = cfg.fetch ?? fetch;
+    this.pending = cfg.pending ?? new Map();
   }
 
   private async load() {
     if (this.loaded) return;
-    try {
-      this.list = JSON.parse(await readFile(this.path, 'utf8')).connections ?? [];
-    } catch {
-      // first run, or unreadable: start empty
-    }
+    const rows = this.cfg.db.prepare(`select data from connections where owner = ? order by rowid`).all(this.cfg.owner) as { data: string }[];
+    this.list = rows.map((r) => JSON.parse(r.data));
     this.loaded = true;
   }
 
-  // Holds tokens and header secrets: owner-only, write-then-rename.
   private async save() {
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
-    const tmp = `${this.path}.${process.pid}.tmp`;
-    await writeFile(tmp, JSON.stringify({ connections: this.list }, null, 2), { mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, this.path);
+    const { db, owner } = this.cfg;
+    db.exec('begin');
+    try {
+      db.prepare(`delete from connections where owner = ?`).run(owner);
+      const put = db.prepare(`insert into connections (owner, name, data) values (?, ?, ?)`);
+      for (const c of this.list) put.run(owner, c.name, JSON.stringify(c));
+      db.exec('commit');
+    } catch (err) {
+      db.exec('rollback');
+      throw err;
+    }
   }
 
   private async find(name: string): Promise<Stored> {
@@ -217,7 +213,7 @@ export class Connections {
     const state = b64url(randomBytes(16));
     const now = Date.now();
     for (const [k, p] of this.pending) if (now - p.createdAt > PENDING_TTL_MS) this.pending.delete(k);
-    this.pending.set(state, { name, verifier, createdAt: now });
+    this.pending.set(state, { owner: this.cfg.owner, name, verifier, createdAt: now });
     const url = new URL(meta.authorization_endpoint);
     url.search = new URLSearchParams({
       response_type: 'code',
@@ -243,20 +239,37 @@ export class Connections {
     return (await res.json()) as { access_token: string; refresh_token?: string; expires_in?: number };
   }
 
-  async callback(code: string, state: string): Promise<string> {
+  // Trades the code for tokens without storing them; callback() stores, workbench sign-in hands them to the new user.
+  async redeem(code: string, state: string): Promise<{ name: string; kind: ConnKind; url: string; oauth: OAuthState }> {
     const p = this.pending.get(state);
+    if (!p || p.owner !== this.cfg.owner) throw new Error('connect expired or was not started here — try again from Settings');
     this.pending.delete(state);
-    if (!p || Date.now() - p.createdAt > PENDING_TTL_MS) throw new Error('connect expired or was not started here — try again from Settings');
+    if (Date.now() - p.createdAt > PENDING_TTL_MS) throw new Error('connect expired or was not started here — try again from Settings');
     const c = await this.find(p.name);
     const t = await this.tokenRequest(c, { grant_type: 'authorization_code', code, redirect_uri: this.cfg.callbackUrl, code_verifier: p.verifier });
-    Object.assign(c.oauth!, {
+    const oauth: OAuthState = {
+      ...c.oauth!,
       accessToken: t.access_token,
       refreshToken: t.refresh_token ?? null,
       expiresAt: t.expires_in ? Date.now() + t.expires_in * 1000 : null,
       user: c.kind === 'workbench' ? await this.whoami(c, t.access_token) : null,
-    });
+    };
+    return { name: c.name, kind: c.kind, url: c.url, oauth };
+  }
+
+  async callback(code: string, state: string): Promise<string> {
+    const r = await this.redeem(code, state);
+    await this.putOAuth(r.name, r.kind, r.url, r.oauth);
+    return r.name;
+  }
+
+  // Adds or overwrites an OAuth connection with tokens obtained elsewhere.
+  async putOAuth(name: string, kind: ConnKind, url: string, oauth: OAuthState) {
+    await this.load();
+    const c = this.list.find((x) => x.name === name);
+    if (c) Object.assign(c, { kind, url, auth: 'oauth', headers: undefined, oauth: { ...oauth } });
+    else this.list.push({ name, kind, url, auth: 'oauth', oauth: { ...oauth }, createdAt: new Date().toISOString() });
     await this.save();
-    return c.name;
   }
 
   // Workbench tokens carry only `sub`; its whoami tool returns id + email. Best effort.

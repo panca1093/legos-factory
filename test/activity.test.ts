@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ActivityLog, toItem, toTeamItem } from '../server/activity.ts';
+import { openDb } from '../server/db.ts';
 import { createHub } from '../server/hub.ts';
 import type { Run } from '../shared/types.ts';
 import type { Workbench } from '../server/workbench.ts';
@@ -12,7 +13,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'lf-act-'));
 function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
   const now = new Date().toISOString();
   return {
-    id: 'r1', kind: 'task', fromTask: false, ticket: 'PROJ-1', share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
+    id: 'r1', owner: 'u1', kind: 'task', fromTask: false, ticket: 'PROJ-1', share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
     cwd: '/work/acme/payments-api', prompt: 'Fix the thing\nwith details', permissionMode: 'default', status: 'running',
     requestedModel: 'default', model: 'claude-opus-5-5', startedAt: now, lastEventAt: now, endedAt: null, endedBy: null, turns: 1,
     error: null, estimatedCostUsd: 0.42, result: null, ...over,
@@ -21,15 +22,34 @@ function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
 
 describe('ActivityLog', () => {
   it('records only real changes and survives a restart', async () => {
-    const path = join(tmp(), 'activity.jsonl');
-    const log = new ActivityLog(path);
-    expect(await log.record(run())).not.toBeNull();
-    expect(await log.record(run())).toBeNull(); // same state: not written again
-    await log.record(run({ status: 'completed', endedAt: new Date().toISOString() }));
+    const path = join(tmp(), 'factory.db');
+    const log = new ActivityLog(openDb(path));
+    expect(await log.record(run(), 'u1')).not.toBeNull();
+    expect(await log.record(run(), 'u1')).toBeNull(); // same state: not written again
+    await log.record(run({ status: 'completed', endedAt: new Date().toISOString() }), 'u1');
 
-    const items = await new ActivityLog(path).list(Date.now() - 3600_000);
+    const items = await new ActivityLog(openDb(path)).list('u1', Date.now() - 3600_000);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ runId: 'r1', status: 'completed', title: 'Fix the thing', project: 'payments-api', estimatedCostUsd: 0.42 });
+  });
+
+  it('marks runs that were still going as failed after a restart', async () => {
+    const path = join(tmp(), 'factory.db');
+    await new ActivityLog(openDb(path)).record(run({ status: 'idle' }), 'u1');
+    expect((await new ActivityLog(openDb(path)).list('u1', 0))[0].status).toBe('failed');
+  });
+
+  it('keeps each owner to their own runs and sessions', async () => {
+    const log = new ActivityLog(openDb(':memory:'));
+    await log.record(run({ id: 'a1', sessionId: 's-a' }), 'alice');
+    await log.record(run({ id: 'a2', sessionId: 's-a' }), 'alice'); // resumed: same session, new run
+    await log.record(run({ id: 'b1', sessionId: 's-b' }), 'bob');
+    await log.record(run({ id: 'b2', sessionId: null }), 'bob'); // not started yet: no session
+    expect((await log.list('alice', 0)).map((i) => i.runId).sort()).toEqual(['a1', 'a2']);
+    expect(log.sessionIds('alice', 10)).toEqual(['s-a']);
+    expect(log.sessionIds('bob', 10)).toEqual(['s-b']);
+    expect(log.ownsSession('alice', 's-a')).toBe(true);
+    expect(log.ownsSession('alice', 's-b')).toBe(false);
   });
 
   it('team items never carry cost or share level', () => {

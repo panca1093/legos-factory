@@ -33,8 +33,9 @@ describe('session summary', () => {
     expect(s.events[1]).toMatchObject({ tool: 'Bash', text: 'npm test' });
   });
 
-  it('lists sessions and rejects non-uuid ids', async () => {
-    expect((await listSessions()).map((s) => s.id)).toEqual([ID, '22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333']);
+  it('lists only the asked-for sessions, in order, and rejects non-uuid ids', async () => {
+    const S3 = '33333333-3333-3333-3333-333333333333';
+    expect((await listSessions([S3, '44444444-4444-4444-4444-444444444444', ID])).map((s) => s.id)).toEqual([S3, ID]);
     expect(await getSession('../../etc/passwd')).toBeNull();
   });
 

@@ -1,7 +1,10 @@
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { ActivityLog } from '../server/activity.ts';
 import { createApp } from '../server/app.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
+import { openDb } from '../server/db.ts';
+import type { Run } from '../shared/types.ts';
 
 beforeAll(() => {
   process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
@@ -14,7 +17,15 @@ const idle = (() => {
   return it;
 }) as unknown as QueryFn;
 
-const app = createApp(new RunManager(idle));
+// of the three transcripts on disk, only this one was started from legos-factory
+const MINE = '11111111-1111-1111-1111-111111111111';
+const db = openDb(':memory:');
+const now = new Date().toISOString();
+await new ActivityLog(db).record(
+  { id: 'r0', owner: 'local', sessionId: MINE, kind: 'chat', cwd: '/tmp', prompt: 'x', status: 'completed', startedAt: now, lastEventAt: now } as Run,
+  'local',
+);
+const app = createApp(new RunManager(idle), { db });
 const req = (path: string, init: RequestInit & { host?: string } = {}) =>
   app.request(`http://x${path}`, { ...init, headers: { host: init.host ?? 'localhost:4317', ...(init.headers as any) } });
 const post = (path: string, body: unknown, headers: Record<string, string> = { 'x-legos': '1' }) =>
@@ -31,10 +42,13 @@ describe('api guard', () => {
 });
 
 describe('api', () => {
-  it('lists sessions from the projects dir', async () => {
+  it('lists only sessions started here, never the machine\'s other Claude sessions', async () => {
     const res = await req('/api/sessions');
     expect(res.status).toBe(200);
-    expect((await res.json()).length).toBe(3);
+    expect((await res.json()).map((s: any) => s.id)).toEqual([MINE]);
+    expect((await req(`/api/sessions/${MINE}`)).status).toBe(200);
+    expect((await req('/api/sessions/22222222-2222-2222-2222-222222222222')).status).toBe(404);
+    expect((await post('/api/runs', { cwd: '/tmp', prompt: 'hi', resume: '22222222-2222-2222-2222-222222222222' })).status).toBe(404);
   });
 
   it('validates run launch input', async () => {
@@ -72,6 +86,7 @@ describe('api', () => {
 
   it('annotates sessions with share level from their folder', async () => {
     const list = await (await req('/api/sessions')).json();
+    expect(list.length).toBe(1);
     expect(list.every((s: any) => s.share === 'status' && 'ticket' in s)).toBe(true); // fixtures live under /tmp
   });
 

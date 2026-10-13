@@ -58,6 +58,8 @@ export type RunKind = 'chat' | 'task';
 
 export type Run = {
   id: string;
+  // user id of whoever launched it
+  owner: string;
   kind: RunKind;
   // a task converted to a chat via Discuss
   fromTask: boolean;

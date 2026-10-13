@@ -1,7 +1,15 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ActivityItem, DecisionAnswer, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
 
-export type Me = { authEnabled: boolean; setupRequired: boolean; authenticated: boolean; user: { name: string } | null };
+export type Me = {
+  authEnabled: boolean;
+  // "Sign in with workbench" is configured
+  workbenchLogin: boolean;
+  // local (PIN) users, for the sign-in screen
+  users: string[];
+  authenticated: boolean;
+  user: { id: string; kind: 'pin' | 'workbench'; name: string; email: string | null } | null;
+};
 
 // Any 401 means the session ended (logout elsewhere, refresh failed): show the sign-in screen.
 const signedOutListeners = new Set<() => void>();
@@ -39,8 +47,10 @@ export const api = {
     call<{ issues: JiraRow[]; nextPageToken: string | null }>(`/api/jira/issues?filter=${filter}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
   jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   me: () => call<Me>('/auth/me'),
-  setup: (name: string, pin: string) => call<{ ok: true }>('/auth/setup', { method: 'POST', body: JSON.stringify({ name, pin }) }),
-  login: (pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ pin }) }),
+  createUser: (name: string, pin: string) => call<{ ok: true }>('/auth/users', { method: 'POST', body: JSON.stringify({ name, pin }) }),
+  login: (name: string, pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ name, pin }) }),
+  workbenchSignIn: (attempt: string) => call<{ url: string }>('/auth/workbench', { method: 'POST', body: JSON.stringify({ attempt }) }),
+  claim: (attempt: string) => call<{ ok: boolean }>(`/auth/claim?attempt=${attempt}`),
   connections: () => call<{ connections: Connection[] }>('/api/connections'),
   addConnection: (c: NewConnection) => call<Connection>('/api/connections', { method: 'POST', body: JSON.stringify(c) }),
   removeConnection: (name: string) => call<{ ok: true }>(`/api/connections/${name}`, { method: 'DELETE' }),

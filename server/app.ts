@@ -1,16 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
-import type { DecisionAnswer, PermissionMode, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
+import type { DecisionAnswer, PermissionMode, PendingDecision, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
 import { getSession, listSessions } from './claude-sessions.ts';
 import { detectTicket, gitBranch, loadSettings, settingsPath, shareFor } from './policy.ts';
-import { type ActivityLog, toTeamItem } from './activity.ts';
-import { PIN_RE, type Account } from './account.ts';
+import { ActivityLog, toTeamItem } from './activity.ts';
+import { PIN_RE, type Users } from './users.ts';
 import type { RunManager } from './claude-runs.ts';
-import type { Connections } from './connections.ts';
+import { Connections, type Pending } from './connections.ts';
+import { openDb } from './db.ts';
 import { Workbench } from './workbench.ts';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -28,8 +30,14 @@ const annotate = <T extends SessionSummary>(s: T, settings: Settings): T => ({
 });
 
 const SID_COOKIE = 'lf_sid';
-const page = (title: string, body: string, close = false) =>
-  `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:14px system-ui;padding:40px;color:#151a29;text-align:center"><h2>${title}</h2><p>${body}</p><p><a href="/#/settings">Open Settings</a></p>${close ? '<script>setTimeout(()=>window.close(),800)</script>' : ''}</body>`;
+// whoever runs everything when sign-in is off (LEGOS_AUTH=off)
+const LOCAL_UID = 'local';
+// owner of sign-in's own workbench client registration; no user has an empty id
+const LOGIN_OWNER = '';
+const ATTEMPT_RE = /^[\w-]{16,64}$/;
+const ATTEMPT_TTL_MS = 10 * 60_000;
+const page = (title: string, body: string, close = false, link = '/#/settings', linkText = 'Open Settings') =>
+  `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:14px system-ui;padding:40px;color:#151a29;text-align:center"><h2>${title}</h2><p>${body}</p><p><a href="${link}">${linkText}</a></p>${close ? '<script>setTimeout(()=>window.close(),800)</script>' : ''}</body>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
 // Headers worth passing between Claude Code and workbench on the MCP proxy.
@@ -37,15 +45,19 @@ const MCP_REQ_HEADERS = ['content-type', 'accept', 'mcp-session-id', 'mcp-protoc
 const MCP_RES_HEADERS = ['content-type', 'mcp-session-id', 'cache-control'];
 
 export type AppOptions = {
-  // null = no PIN gate (LEGOS_AUTH=off)
-  account?: Account | null;
-  connections?: Connections | null;
+  // null = no sign-in (LEGOS_AUTH=off): everything belongs to one local user
+  users?: Users | null;
+  // defaults to a throwaway in-memory database
+  db?: DatabaseSync;
   selfUrl?: string;
   fetch?: typeof fetch;
-  activity?: ActivityLog | null;
   // team hub base URL; unset = no team activity
   hubUrl?: string | null;
+  // workbench MCP URL behind "Sign in with workbench"; unset hides that option
+  workbenchUrl?: string | null;
 };
+
+type Env = { Variables: { uid: string } };
 
 const JQL_PRESETS: Record<string, string> = {
   mine: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
@@ -59,28 +71,44 @@ const errStatus = (err: unknown) => {
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export function createApp(runs: RunManager, opts: AppOptions = {}) {
-  const app = new Hono();
-  const account = opts.account ?? null;
-  const conns = opts.connections ?? null;
+  const app = new Hono<Env>();
+  const users = opts.users ?? null;
+  const db = opts.db ?? openDb(':memory:');
+  const activity = new ActivityLog(db);
+  const http = opts.fetch ?? fetch;
+  const callbackUrl = `${opts.selfUrl ?? 'http://localhost:4317'}/auth/callback`;
+  const pending = new Map<string, Pending>();
+  const connsByOwner = new Map<string, Connections>();
+  const connsFor = (owner: string) => {
+    if (!connsByOwner.has(owner)) connsByOwner.set(owner, new Connections({ callbackUrl, db, owner, fetch: http, pending }));
+    return connsByOwner.get(owner)!;
+  };
   // per-run secret -> run, so only runs launched here reach the connections proxy
   const grants = new Map<string, string>();
-  const http = opts.fetch ?? fetch;
+  // workbench sign-in: OAuth state -> the attempt the app is polling, and finished attempts -> cookie
+  const attempts = new Map<string, { attempt: string; at: number }>();
+  const claims = new Map<string, { cookie: string; at: number }>();
   const clients = new Map<string, Workbench>();
-  // the connected workbench, if any: apps, Jira and the team hub go through it
-  const workbench = async () => {
-    const wb = await conns?.workbench();
+  // the owner's connected workbench, if any: apps, Jira and the team hub go through it
+  const workbench = async (owner: string) => {
+    const wb = await connsFor(owner).workbench();
     if (!wb) return null;
     if (!clients.has(wb.url)) clients.set(wb.url, new Workbench(wb.url, http));
     return { client: clients.get(wb.url)!, token: wb.token };
   };
+  const decisionById = (id: string): PendingDecision | undefined => {
+    const snap = runs.snapshot();
+    return snap.type === 'snapshot' ? snap.decisions.find((d) => d.id === id) : undefined;
+  };
+  const ownsRun = (uid: string, runId: string) => runs.get(runId)?.owner === uid;
   runs.on('message', (m: StreamMessage) => {
     if (m.type !== 'run') return;
     if (m.run.endedAt) for (const [k, runId] of grants) if (runId === m.run.id) grants.delete(k);
-    void opts.activity
-      ?.record(m.run)
+    void activity
+      .record(m.run, m.run.owner)
       .then(async (item) => {
         if (!item || item.share === 'private' || !opts.hubUrl) return;
-        const wb = await workbench();
+        const wb = await workbench(m.run.owner);
         if (!wb) return;
         const res = await http(`${opts.hubUrl}/hub/events`, {
           method: 'POST',
@@ -98,7 +126,21 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.use('/api/*', async (c, next) => {
     if (!localOnly(c.req.header('host'))) return c.json({ error: 'forbidden host' }, 403);
     if (c.req.method !== 'GET' && c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    if (account && !(await account.verify(getCookie(c, SID_COOKIE)))) return c.json({ error: 'sign in required' }, 401);
+    const user = users?.verify(getCookie(c, SID_COOKIE)) ?? null;
+    if (users && !user) return c.json({ error: 'sign in required' }, 401);
+    c.set('uid', user?.id ?? LOCAL_UID);
+    await next();
+  });
+
+  // Other users' runs and decisions look like they don't exist.
+  app.use('/api/runs/:id/*', async (c, next) => {
+    const r = runs.get(c.req.param('id'));
+    if (r && r.owner !== c.get('uid')) return c.json({ error: 'run not found' }, 404);
+    await next();
+  });
+  app.use('/api/decisions/:id/*', async (c, next) => {
+    const d = decisionById(c.req.param('id'));
+    if (d && !ownsRun(c.get('uid'), d.runId)) return c.json({ error: 'decision no longer open' }, 410);
     await next();
   });
 
@@ -108,24 +150,27 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   app.get('/auth/me', async (c) => {
-    if (!account) return c.json({ authEnabled: false, setupRequired: false, authenticated: true, user: null });
-    const name = await account.name();
-    const ok = await account.verify(getCookie(c, SID_COOKIE));
-    return c.json({ authEnabled: true, setupRequired: !name, authenticated: ok, user: ok ? { name } : null });
+    const workbenchLogin = !!(users && opts.workbenchUrl);
+    if (!users) return c.json({ authEnabled: false, workbenchLogin, users: [], authenticated: true, user: null });
+    const user = users.verify(getCookie(c, SID_COOKIE));
+    return c.json({ authEnabled: true, workbenchLogin, users: users.pinNames(), authenticated: !!user, user });
   });
 
-  const signedIn = (c: any, cookie: string) => setCookie(c, SID_COOKIE, cookie, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: 30 * 24 * 3600 });
+  // Lax, not Strict: the workbench callback is a cross-site redirect that must still set it.
+  const signedIn = (c: any, cookie: string) => setCookie(c, SID_COOKIE, cookie, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 30 * 24 * 3600 });
+  const authWrite = (c: any) => (c.req.header('x-legos') !== '1' ? c.json({ error: 'missing x-legos header' }, 403) : !users ? c.json({ error: 'sign-in is off' }, 409) : null);
 
-  app.post('/auth/setup', async (c) => {
-    if (c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    if (!account) return c.json({ error: 'sign-in is off' }, 409);
+  // Anyone at this machine may add a local user; each user only ever sees their own runs and connections.
+  app.post('/auth/users', async (c) => {
+    const denied = authWrite(c);
+    if (denied) return denied;
     const body = await c.req.json().catch(() => null);
     const name = str(body?.name);
     const pin = str(body?.pin);
     if (!name || name.length > 64) return c.json({ error: 'name is required (max 64)' }, 400);
     if (!PIN_RE.test(pin)) return c.json({ error: 'PIN must be 6 digits' }, 400);
     try {
-      signedIn(c, await account.setup(name, pin));
+      signedIn(c, (await users!.createPin(name, pin)).cookie);
     } catch (err) {
       return c.json({ error: errMsg(err) }, 409);
     }
@@ -133,15 +178,16 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   app.post('/auth/login', async (c) => {
-    if (c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
-    if (!account) return c.json({ ok: true });
-    const r = await account.login(str((await c.req.json().catch(() => null))?.pin));
+    const denied = authWrite(c);
+    if (denied) return denied;
+    const body = await c.req.json().catch(() => null);
+    const r = await users!.loginPin(str(body?.name), str(body?.pin));
     if (r.ok) {
       signedIn(c, r.cookie);
       return c.json({ ok: true });
     }
     if (r.retryAfterMs) return c.json({ error: `Too many wrong PINs — try again in ${Math.ceil(r.retryAfterMs / 1000)}s`, retryAfterMs: r.retryAfterMs }, 429);
-    return c.json({ error: 'Wrong PIN' }, 401);
+    return c.json({ error: 'Wrong name or PIN' }, 401);
   });
 
   app.post('/auth/logout', async (c) => {
@@ -150,14 +196,69 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     return c.json({ ok: true });
   });
 
-  // OAuth redirect for a connection. May land in another browser than the app (desktop panes open
-  // links in the system browser), so it needs no app session: the one-time state is the proof.
+  const prune = (m: Map<string, { at: number }>) => {
+    for (const [k, v] of m) if (Date.now() - v.at > ATTEMPT_TTL_MS) m.delete(k);
+  };
+
+  // Starts "Sign in with workbench". The desktop pane opens the link in the system browser, where the
+  // app can't receive the cookie: it polls /auth/claim with its attempt id instead.
+  app.post('/auth/workbench', async (c) => {
+    const denied = authWrite(c);
+    if (denied) return denied;
+    if (!opts.workbenchUrl) return c.json({ error: 'workbench sign-in is not configured' }, 404);
+    const attempt = str((await c.req.json().catch(() => null))?.attempt);
+    if (attempt && !ATTEMPT_RE.test(attempt)) return c.json({ error: 'invalid attempt' }, 400);
+    const lc = connsFor(LOGIN_OWNER);
+    try {
+      if (!(await lc.all()).some((x) => x.name === 'workbench')) await lc.add({ name: 'workbench', kind: 'workbench', url: opts.workbenchUrl, auth: 'oauth' });
+      const url = await lc.startOAuth('workbench');
+      prune(attempts);
+      if (attempt) attempts.set(new URL(url).searchParams.get('state')!, { attempt, at: Date.now() });
+      return c.json({ url });
+    } catch (err) {
+      return c.json({ error: errMsg(err) }, errStatus(err));
+    }
+  });
+
+  app.get('/auth/claim', (c) => {
+    const attempt = c.req.query('attempt') ?? '';
+    const hit = claims.get(attempt);
+    if (!hit || Date.now() - hit.at > ATTEMPT_TTL_MS) return c.json({ ok: false }, 404);
+    claims.delete(attempt);
+    signedIn(c, hit.cookie);
+    return c.json({ ok: true });
+  });
+
+  // OAuth redirect for a connection or a workbench sign-in. May land in another browser than the app
+  // (desktop panes open links in the system browser), so it needs no app session: the one-time state is the proof.
   app.get('/auth/callback', async (c) => {
-    if (!conns) return c.redirect('/');
     const { code, state, error, error_description } = c.req.query();
     if (error || !code || !state) return c.html(page('Connection was not completed', esc(error_description ?? error ?? 'missing code')), 400);
+    const owner = pending.get(state)?.owner;
+    if (owner === LOGIN_OWNER && users) {
+      try {
+        const r = await connsFor(LOGIN_OWNER).redeem(code, state);
+        const who = r.oauth.user;
+        if (!who?.id) throw new Error('workbench did not say who you are');
+        const user = users.upsertExternal('workbench', who.id, who.name || who.email || who.id, who.email);
+        // the sign-in tokens double as this user's workbench connection
+        await connsFor(user.id).putOAuth('workbench', 'workbench', r.url, r.oauth);
+        const cookie = users.issue(user.id);
+        signedIn(c, cookie);
+        const a = attempts.get(state);
+        attempts.delete(state);
+        if (a) {
+          prune(claims);
+          claims.set(a.attempt, { cookie, at: Date.now() });
+        }
+        return c.html(page(`Signed in as ${esc(user.name)}`, 'You can close this window and go back to legos-factory.', true, '/', 'Open legos-factory'));
+      } catch (err) {
+        return c.html(page('Sign-in failed', esc(errMsg(err)), false, '/', 'Back to sign-in'), 400);
+      }
+    }
+    if (owner === undefined || owner === LOGIN_OWNER) return c.html(page('Connection failed', 'connect expired or was not started here — try again from Settings'), 400);
     try {
-      const name = await conns.callback(code, state);
+      const name = await connsFor(owner).callback(code, state);
       return c.html(page(`Connected ${esc(name)}`, 'You can close this window and go back to legos-factory.', true));
     } catch (err) {
       return c.html(page('Connection failed', esc(errMsg(err))), 400);
@@ -166,9 +267,10 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   // Claude Code processes reach Settings connections through here; credentials are attached fresh on every request.
   app.all('/mcp/:name', async (c) => {
-    if (!conns) return c.json({ error: 'connections disabled' }, 404);
     if (!localOnly(c.req.header('host'))) return c.text('forbidden host', 403);
-    if (!grants.has(c.req.header('x-legos-run') ?? '')) return c.json({ error: 'unknown run' }, 403);
+    const owner = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '')?.owner;
+    if (owner === undefined) return c.json({ error: 'unknown run' }, 403);
+    const conns = connsFor(owner);
     const name = c.req.param('name');
     const [url, creds] = await Promise.all([conns.url(name), conns.headersFor(name)]);
     if (!url) return c.json({ error: 'unknown connection' }, 404);
@@ -192,14 +294,13 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     return new Response(upstream.body, { status: upstream.status, headers: out });
   });
 
-  app.get('/api/connections', async (c) => c.json({ connections: (await conns?.all()) ?? [] }));
+  app.get('/api/connections', async (c) => c.json({ connections: await connsFor(c.get('uid')).all() }));
 
   app.post('/api/connections', async (c) => {
-    if (!conns) return c.json({ error: 'connections disabled' }, 404);
     const b = await c.req.json().catch(() => null);
     try {
       const headers = b?.headers && typeof b.headers === 'object' ? b.headers : undefined;
-      return c.json(await conns.add({ name: str(b?.name), kind: b?.kind, url: str(b?.url), auth: b?.auth, headers }), 201);
+      return c.json(await connsFor(c.get('uid')).add({ name: str(b?.name), kind: b?.kind, url: str(b?.url), auth: b?.auth, headers }), 201);
     } catch (err) {
       return c.json({ error: errMsg(err) }, errStatus(err));
     }
@@ -207,7 +308,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   app.delete('/api/connections/:name', async (c) => {
     try {
-      await conns?.remove(c.req.param('name'));
+      await connsFor(c.get('uid')).remove(c.req.param('name'));
       return c.json({ ok: true });
     } catch (err) {
       return c.json({ error: errMsg(err) }, errStatus(err));
@@ -215,9 +316,8 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   app.post('/api/connections/:name/connect', async (c) => {
-    if (!conns) return c.json({ error: 'connections disabled' }, 404);
     try {
-      return c.json({ url: await conns.startOAuth(c.req.param('name')) });
+      return c.json({ url: await connsFor(c.get('uid')).startOAuth(c.req.param('name')) });
     } catch (err) {
       return c.json({ error: errMsg(err) }, errStatus(err));
     }
@@ -225,7 +325,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   app.post('/api/connections/:name/disconnect', async (c) => {
     try {
-      await conns?.disconnect(c.req.param('name'));
+      await connsFor(c.get('uid')).disconnect(c.req.param('name'));
       return c.json({ ok: true });
     } catch (err) {
       return c.json({ error: errMsg(err) }, errStatus(err));
@@ -235,19 +335,20 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.get('/api/sessions', async (c) => {
     const limit = Math.min(Number(c.req.query('limit') ?? 200) || 200, 1000);
     const active = runs.activeRunBySession();
-    const [list, settings] = await Promise.all([listSessions(limit), loadSettings()]);
+    const [list, settings] = await Promise.all([listSessions(activity.sessionIds(c.get('uid'), limit)), loadSettings()]);
     return c.json(list.map((s) => ({ ...annotate(s, settings), activeRunId: active.get(s.id) ?? null })));
   });
 
   app.get('/api/sessions/:id', async (c) => {
-    const s = await getSession(c.req.param('id'));
+    const id = c.req.param('id');
+    const s = activity.ownsSession(c.get('uid'), id) ? await getSession(id) : null;
     if (!s) return c.json({ error: 'session not found' }, 404);
     return c.json({ ...annotate(s, await loadSettings()), activeRunId: runs.activeRunBySession().get(s.id) ?? null });
   });
 
   app.get('/api/runs/:id', (c) => {
     const r = runs.get(c.req.param('id'));
-    return r ? c.json(r) : c.json({ error: 'run not found' }, 404);
+    return r && r.owner === c.get('uid') ? c.json(r) : c.json({ error: 'run not found' }, 404);
   });
 
   app.post('/api/runs', async (c) => {
@@ -265,15 +366,17 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
       return c.json({ error: 'cwd must be an existing absolute directory' }, 400);
     }
+    const uid = c.get('uid');
+    if (resume && !activity.ownsSession(uid, resume)) return c.json({ error: 'session not found' }, 404);
     if (resume && runs.activeRunBySession().has(resume)) return c.json({ error: 'session already has an active run' }, 409);
     const settings = await loadSettings();
     const ticket = ticketIn || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
     const share: ShareLevel = SHARES.includes(body?.share) ? body.share : shareFor(cwd, settings);
-    const connected = opts.selfUrl ? ((await conns?.all()) ?? []).filter((x) => x.connected) : [];
-    if (!connected.length) return c.json(runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share }), 201);
+    const connected = opts.selfUrl ? (await connsFor(uid).all()).filter((x) => x.connected) : [];
+    if (!connected.length) return c.json(runs.start({ owner: uid, kind, cwd, prompt, permissionMode, resume, model, ticket, share }), 201);
     const secret = randomBytes(24).toString('base64url');
     const mcp = Object.fromEntries(connected.map((x) => [x.name, { url: `${opts.selfUrl}/mcp/${x.name}`, headers: { 'x-legos-run': secret } }]));
-    const run = runs.start({ kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp });
+    const run = runs.start({ owner: uid, kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp });
     grants.set(secret, run.id);
     return c.json(run, 201);
   });
@@ -282,7 +385,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   const NO_WB = 'connect a workbench in Settings first';
 
   app.get('/api/workbench/integrations', async (c) => {
-    const wb = await workbench();
+    const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB }, 409);
     try {
       return c.json({ integrations: await wb.client.integrations(wb.token) });
@@ -294,7 +397,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.post('/api/workbench/connect', async (c) => {
     const integration = str((await c.req.json().catch(() => null))?.integration);
     if (!/^[a-z0-9-]{1,64}$/.test(integration)) return c.json({ error: 'invalid integration' }, 400);
-    const wb = await workbench();
+    const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB }, 409);
     try {
       return c.json(await wb.client.connect(wb.token, integration));
@@ -307,7 +410,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     const custom = str(c.req.query('jql'));
     const jql = custom || JQL_PRESETS[c.req.query('filter') ?? 'mine'];
     if (!jql || jql.length > 1000) return c.json({ error: 'unknown filter or JQL too long' }, 400);
-    const wb = await workbench();
+    const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB }, 409);
     try {
       return c.json(await wb.client.jiraSearch(wb.token, jql, 20, c.req.query('pageToken') || undefined));
@@ -319,7 +422,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.get('/api/jira/issues/:key', async (c) => {
     const key = c.req.param('key').toUpperCase();
     if (!TICKET_RE.test(key)) return c.json({ error: 'invalid issue key' }, 400);
-    const wb = await workbench();
+    const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB }, 409);
     try {
       return c.json(await wb.client.jiraIssue(wb.token, key));
@@ -330,13 +433,13 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   app.get('/api/activity/me', async (c) => {
     const days = Math.min(Math.max(Number(c.req.query('days') ?? 7) || 7, 1), 90);
-    return c.json({ items: (await opts.activity?.list(Date.now() - days * 86_400_000)) ?? [] });
+    return c.json({ items: await activity.list(c.get('uid'), Date.now() - days * 86_400_000) });
   });
 
   // Team view is read from the hub as the signed-in user; the hub never sees cost or transcripts.
   app.get('/api/team', async (c) => {
     if (!opts.hubUrl) return c.json({ error: 'team hub not configured', configured: false }, 409);
-    const wb = await workbench();
+    const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB, configured: true }, 409);
     const days = Math.min(Math.max(Number(c.req.query('days') ?? 7) || 7, 1), 90);
     try {
@@ -411,8 +514,16 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   app.get('/api/stream', (c) =>
     streamSSE(c, async (stream) => {
-      const send = (m: StreamMessage) => void stream.writeSSE({ data: JSON.stringify(m) });
-      send(runs.snapshot());
+      const uid = c.get('uid');
+      const mine = (m: StreamMessage) =>
+        m.type === 'run' ? m.run.owner === uid
+        : m.type === 'run_event' ? ownsRun(uid, m.runId)
+        : m.type === 'decision' ? ownsRun(uid, m.decision.runId)
+        : true; // decision_closed carries only an id
+      const send = (m: StreamMessage) => void (mine(m) && stream.writeSSE({ data: JSON.stringify(m) }));
+      const snap = runs.snapshot();
+      if (snap.type === 'snapshot')
+        send({ ...snap, runs: snap.runs.filter((r) => r.owner === uid), decisions: snap.decisions.filter((d) => ownsRun(uid, d.runId)) });
       runs.on('message', send);
       const ping = setInterval(() => void stream.writeSSE({ event: 'ping', data: '' }), 15000);
       await new Promise<void>((resolve) => stream.onAbort(resolve));

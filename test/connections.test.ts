@@ -1,61 +1,12 @@
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
-import { RunManager, type QueryFn } from '../server/claude-runs.ts';
-import { ActivityLog } from '../server/activity.ts';
+import { RunManager } from '../server/claude-runs.ts';
 import { Connections } from '../server/connections.ts';
-
-const WB = 'https://wb.test';
-const OTHER = 'https://tools.test';
-const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
-
-// Fake workbench (its own authorization server) plus a generic MCP server that delegates auth to it.
-function fakeServers(opts: { expiresIn?: number } = {}) {
-  const calls: { url: string; body?: string; auth: string | null; headers: Headers }[] = [];
-  let n = 0;
-  let lastChallenge = '';
-  const fetchFn = (async (input: any, init: any = {}) => {
-    const url = String(input);
-    const body = init.body instanceof ArrayBuffer ? new TextDecoder().decode(init.body) : init.body;
-    const headers = new Headers(init.headers);
-    calls.push({ url, body, auth: headers.get('authorization'), headers });
-    if (url === `${OTHER}/.well-known/oauth-protected-resource/mcp`) return Response.json({ authorization_servers: [WB] });
-    if (url === `${WB}/.well-known/oauth-authorization-server`)
-      return Response.json({ authorization_endpoint: `${WB}/authorize`, token_endpoint: `${WB}/token`, registration_endpoint: `${WB}/register` });
-    if (url === `${WB}/register`) return Response.json({ client_id: `client-${calls.filter((c) => c.url === `${WB}/register`).length}` });
-    if (url === `${WB}/token`) {
-      const p = new URLSearchParams(body);
-      if (p.get('grant_type') === 'authorization_code') {
-        const ok = createHash('sha256').update(p.get('code_verifier')!).digest('base64url') === lastChallenge;
-        if (!ok) return new Response('bad verifier', { status: 400 });
-      }
-      n++;
-      return Response.json({ access_token: jwt({ sub: 'u1', n }), refresh_token: `r${n}`, expires_in: opts.expiresIn ?? 3600 });
-    }
-    if (url === `${WB}/mcp` || url === `${OTHER}/mcp`) {
-      const msg = body ? JSON.parse(body) : {};
-      if (msg.method === 'tools/call' && msg.params?.name === 'whoami')
-        return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify({ id: 'u1', email: 'who@acme.test' }) }] } });
-      return new Response(JSON.stringify({ seen: headers.get('authorization'), key: headers.get('x-api-key') }), {
-        headers: { 'content-type': 'application/json', 'mcp-session-id': 'm1' },
-      });
-    }
-    return new Response('not found', { status: 404 });
-  }) as typeof fetch;
-  return { fetchFn, calls, setChallenge: (c: string) => (lastChallenge = c) };
-}
-
-// stays alive until its input closes, like a real session; grants are revoked when a run ends
-const alive = (({ prompt }: any) => {
-  const it = (async function* () {
-    for await (const _ of prompt as AsyncIterable<unknown>);
-  })() as any;
-  it.interrupt = async () => {};
-  return it;
-}) as unknown as QueryFn;
+import { openDb } from '../server/db.ts';
+import { alive, fakeServers, OTHER, WB } from './fakes.ts';
 
 function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   const srv = fakeServers(opts);
@@ -67,11 +18,12 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
     }
     return srv.fetchFn(input, init);
   }) as typeof fetch;
-  const path = join(mkdtempSync(join(tmpdir(), 'lf-conn-')), 'connections.json');
-  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', path, fetch: fetchFn });
+  const path = join(mkdtempSync(join(tmpdir(), 'lf-conn-')), 'factory.db');
+  const db = openDb(path);
+  // a second view on the same rows as the app's own (sign-in off: everything belongs to 'local')
+  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', db, owner: 'local', fetch: fetchFn });
   const runs = new RunManager(alive);
-  const activity = new ActivityLog(join(mkdtempSync(join(tmpdir(), 'lf-act-')), 'a.jsonl'));
-  const app = createApp(runs, { connections: conns, selfUrl: 'http://localhost:4317', fetch: fetchFn, activity, hubUrl: opts.hub ? 'https://hub.test' : null });
+  const app = createApp(runs, { db, selfUrl: 'http://localhost:4317', fetch: fetchFn, hubUrl: opts.hub ? 'https://hub.test' : null });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
   const post = (p: string, body: unknown = {}) => req(p, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } });
 
@@ -86,7 +38,8 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
     return authorize;
   }
   const addWorkbench = () => post('/api/connections', { name: 'workbench', kind: 'workbench', url: WB, auth: 'oauth' });
-  return { srv, conns, runs, req, post, connect, addWorkbench, path, pushed, activity };
+  const runCount = () => (db.prepare('select count(*) as n from runs').get() as { n: number }).n;
+  return { srv, conns, runs, req, post, connect, addWorkbench, path, pushed, runCount };
 }
 
 beforeAll(() => {
@@ -169,7 +122,7 @@ describe('OAuth connections', () => {
     await connect('workbench');
     await post('/api/connections/workbench/disconnect');
     expect((await (await req('/api/connections')).json()).connections[0].connected).toBe(false);
-    expect(readFileSync(path, 'utf8')).not.toContain('h.');
+    expect(readFileSync(path, 'latin1')).not.toContain('"accessToken":"h.');
     await req('/api/connections/workbench', { method: 'DELETE', headers: { 'x-legos': '1' } });
     expect((await (await req('/api/connections')).json()).connections).toEqual([]);
   });
@@ -230,13 +183,13 @@ describe('workbench features', () => {
   const settle = () => new Promise((r) => setTimeout(r, 30));
 
   it("pushes shared runs to the hub with the workbench token, keeps private ones home", async () => {
-    const { post, pushed, activity, addWorkbench, connect } = setup({ hub: true });
+    const { post, pushed, runCount, addWorkbench, connect } = setup({ hub: true });
     await addWorkbench();
     await connect('workbench');
     await post('/api/runs', { cwd: '/tmp', prompt: 'hi PROJ-7', share: 'private' });
     await settle();
     expect(pushed).toHaveLength(0);
-    expect((await activity.list(0)).length).toBe(1);
+    expect(runCount()).toBe(1);
 
     await post('/api/runs', { cwd: '/tmp', prompt: 'hi PROJ-7' });
     await settle();
