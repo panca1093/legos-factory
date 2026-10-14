@@ -122,7 +122,12 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [shakes, setShakes] = useState(0);
+  const [leaving, setLeaving] = useState(false);
   const digits = (v: string) => v.replace(/\D/g, '').slice(0, 6);
+  const fail = (msg: string) => (setErr(msg), setShakes((n) => n + 1));
+  // let the card fly off before the app replaces it
+  const finish = () => (setLeaving(true), setTimeout(onDone, 300));
   const mode = (create: boolean) => {
     setCreating(create);
     setName(create ? '' : (names[0] ?? ''));
@@ -132,14 +137,14 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (creating && pin !== pin2) return setErr("PINs don't match");
+    if (creating && pin !== pin2) return fail("PINs don't match");
     setBusy(true);
     setErr(null);
     try {
       await (creating ? api.createUser(name.trim(), pin) : api.login(name, pin));
-      onDone();
+      finish();
     } catch (e: any) {
-      setErr(e.message);
+      fail(e.message);
       setPin('');
       setPin2('');
     } finally {
@@ -157,7 +162,7 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
       else window.open(url, '_blank');
     } catch (e: any) {
       tab?.close();
-      return setErr(e.message);
+      return fail(e.message);
     }
     setWaiting(true);
     const until = Date.now() + CLAIM_FOR_MS;
@@ -169,28 +174,49 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
       );
       // finished in this same browser: the callback already set our cookie
       const here = ok || (await api.me().then((m) => m.authenticated, () => false));
-      if (here) return onDone();
+      if (here) return finish();
     }
     setWaiting(false);
-    setErr('Workbench sign-in timed out — try again.');
+    fail('Workbench sign-in timed out — try again.');
   };
   const ready = pin.length === 6 && name.trim() && (!creating || pin2.length === 6);
   return (
     <div className="signin">
-      <form className="signin-card" onSubmit={submit}>
-        <span className="mark">L</span>
+      <div className="signin-belt" aria-hidden="true">
+        {Array.from({ length: 7 }, (_, i) => (
+          <span key={i} className="belt-brick" style={{ '--i': i } as React.CSSProperties} />
+        ))}
+      </div>
+      <form
+        className={`signin-card${shakes ? ` shake-${shakes % 2}` : ''}${leaving ? ' leaving' : ''}${busy ? ' busy' : ''}`}
+        onSubmit={submit}
+      >
+        <div className="signin-logo" aria-hidden="true">
+          <span className="brick b3" />
+          <span className="brick b2" />
+          <span className="brick b1" />
+        </div>
         <h1>
           legos<span> / factory</span>
         </h1>
-        <p className="lead">{creating ? 'Create a local user on this machine.' : 'Mission control for your coding agents.'}</p>
+        <p className="lead" key={creating ? 'c' : 'u'}>
+          {creating ? 'Create a local user on this machine.' : 'Mission control for your coding agents.'}
+        </p>
         {error ? (
           <button type="button" className="btn primary signin-btn" onClick={onDone}>
             Try again
           </button>
         ) : waiting ? (
-          <p className="signin-note">Finish signing in to workbench in the window that opened. This page continues on its own.</p>
+          <div className="signin-waiting">
+            <span className="signin-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <p className="signin-note">Finish signing in to workbench in the window that opened. This page continues on its own.</p>
+          </div>
         ) : (
-          <>
+          <div className="signin-body" key={creating ? 'create' : 'unlock'}>
             <label className="field signin-field">
               {creating ? 'Your name' : 'User'}
               {creating ? (
@@ -203,24 +229,14 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
                 </select>
               )}
             </label>
-            <label className="field signin-field">
-              {creating ? 'Choose a 6-digit PIN' : 'PIN'}
-              <input
-                className="input pin-input"
-                type="password"
-                inputMode="numeric"
-                autoComplete={creating ? 'new-password' : 'current-password'}
-                autoFocus={!creating}
-                value={pin}
-                onChange={(e) => setPin(digits(e.target.value))}
-              />
-            </label>
-            {creating && (
-              <label className="field signin-field">
-                Repeat PIN
-                <input className="input pin-input" type="password" inputMode="numeric" autoComplete="new-password" value={pin2} onChange={(e) => setPin2(digits(e.target.value))} />
-              </label>
-            )}
+            <PinField
+              label={creating ? 'Choose a 6-digit PIN' : 'PIN'}
+              value={pin}
+              autoComplete={creating ? 'new-password' : 'current-password'}
+              autoFocus={!creating}
+              onChange={(v) => setPin(digits(v))}
+            />
+            {creating && <PinField label="Repeat PIN" value={pin2} autoComplete="new-password" onChange={(v) => setPin2(digits(v))} />}
             <button className="btn primary signin-btn" disabled={!ready || busy}>
               {busy ? 'Checking…' : creating ? 'Create user' : 'Unlock'}
             </button>
@@ -242,11 +258,42 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
                 ? 'Local users stay on this machine and can still connect workbench or other MCP servers in Settings.'
                 : 'Each user sees only their own sessions and connections.'}
             </p>
-          </>
+          </div>
         )}
-        {(err || error) && <p className="error">{err ?? error}</p>}
+        {(err || error) && (
+          <p className="error signin-error" role="alert" key={err ?? error}>
+            {err ?? error}
+          </p>
+        )}
       </form>
     </div>
+  );
+}
+
+// The real input stays on top (transparent) so typing, paste and password managers work as usual.
+function PinField({ label, value, autoComplete, autoFocus, onChange }: { label: string; value: string; autoComplete: string; autoFocus?: boolean; onChange: (v: string) => void }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <label className="field signin-field">
+      {label}
+      <span className={`pin-cells${focused ? ' focused' : ''}`}>
+        {Array.from({ length: 6 }, (_, i) => (
+          <span key={i} className={`pin-cell${i < value.length ? ' filled' : ''}${focused && i === Math.min(value.length, 5) ? ' current' : ''}`} />
+        ))}
+        <input
+          className="pin-overlay"
+          type="password"
+          inputMode="numeric"
+          maxLength={6}
+          autoComplete={autoComplete}
+          autoFocus={autoFocus}
+          value={value}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </span>
+    </label>
   );
 }
 

@@ -538,17 +538,79 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .share-full { background: var(--warn-bg); color: var(--warn); }
 .chips { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
-/* sign in */
-.signin { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
-.signin-card { width: min(400px, 100%); background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); padding: 32px 28px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; }
-.signin-card .mark { width: 44px; height: 44px; font-size: 20px; border-radius: 12px; margin-bottom: 4px; }
-.signin-card h1 { font-size: 24px; letter-spacing: -0.04em; }
+/* sign in: a small brick factory — bricks stack into the logo while more roll by on the belt */
+.signin { position: relative; overflow: hidden; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg); }
+.signin-card { position: relative; z-index: 1; width: min(400px, 100%); background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); padding: 32px 28px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; animation: card-in var(--motion-slow) var(--ease) both; }
+/* two identical names so every new error restarts the shake without replaying card-in */
+.signin-card.shake-0 { animation: shake-0 360ms var(--ease); }
+.signin-card.shake-1 { animation: shake-1 360ms var(--ease); }
+.signin-card.leaving { animation: card-out var(--motion-slow) var(--ease) both; }
+.signin-card h1 { font-size: 24px; letter-spacing: -0.04em; animation: rise var(--motion-slow) var(--ease) 240ms both; }
 .signin-card h1 span { color: var(--accent); }
+.signin-card .lead { animation: rise var(--motion-slow) var(--ease) 300ms both; }
+.signin-body { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.signin-body > * { animation: rise var(--motion-slow) var(--ease) both; }
+.signin-body > :nth-child(1) { animation-delay: 340ms; }
+.signin-body > :nth-child(2) { animation-delay: 380ms; }
+.signin-body > :nth-child(3) { animation-delay: 420ms; }
+.signin-body > :nth-child(4) { animation-delay: 460ms; }
+.signin-body > :nth-child(n + 5) { animation-delay: 500ms; }
 .signin-btn { width: 100%; margin-top: 12px; padding: 11px 14px; }
 .signin-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .signin-switch { width: 100%; font-size: 12.5px; color: var(--muted); }
 .signin-or { width: 100%; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11.5px; }
 .signin-or::before, .signin-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.signin-error { animation: rise var(--motion) var(--ease); }
+.signin-field { width: 100%; text-align: left; }
+
+/* bricks: a body plus two studs on top */
+.brick { --c: var(--accent); position: relative; display: block; width: 48px; height: 14px; border-radius: 4px; background: var(--c); }
+.brick::before, .brick::after { content: ''; position: absolute; top: -4px; width: 10px; height: 5px; border-radius: 3px 3px 1px 1px; background: var(--c); }
+.brick::before { left: 9px; }
+.brick::after { right: 9px; }
+.signin-logo { display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 4px; margin-bottom: 6px; }
+.signin-logo .b1 { --c: var(--accent); animation: brick-drop 520ms cubic-bezier(0.3, 1.5, 0.5, 1) 60ms both; }
+.signin-logo .b2 { --c: color-mix(in srgb, var(--accent) 70%, var(--paper)); width: 36px; animation: brick-drop 520ms cubic-bezier(0.3, 1.5, 0.5, 1) 160ms both; }
+.signin-logo .b3 { --c: color-mix(in srgb, var(--accent) 42%, var(--paper)); width: 24px; animation: brick-drop 520ms cubic-bezier(0.3, 1.5, 0.5, 1) 260ms both; }
+.signin-logo .b3::after { display: none; }
+.signin-logo .b3::before { left: 7px; }
+.signin-card.busy .signin-logo .brick { animation: brick-hop 600ms var(--ease) infinite; }
+.signin-card.busy .signin-logo .b2 { animation-delay: 100ms; }
+.signin-card.busy .signin-logo .b3 { animation-delay: 200ms; }
+
+/* conveyor belt behind the card */
+.signin-belt { position: absolute; left: 0; right: 0; bottom: 14vh; height: 36px; border-bottom: 2px dashed color-mix(in srgb, var(--accent) 22%, transparent); pointer-events: none; }
+.belt-brick { --c: color-mix(in srgb, var(--accent) 20%, var(--bg)); position: absolute; bottom: 6px; left: 0; width: 56px; height: 18px; border-radius: 5px; background: var(--c); animation: belt 28s linear calc(var(--i) * -4s) infinite; }
+.belt-brick:nth-child(even) { --c: color-mix(in srgb, var(--accent) 12%, var(--bg)); width: 40px; }
+.belt-brick::before, .belt-brick::after { content: ''; position: absolute; top: -5px; width: 11px; height: 6px; border-radius: 3px 3px 1px 1px; background: var(--c); }
+.belt-brick::before { left: 9px; }
+.belt-brick::after { right: 9px; }
+
+/* PIN cells: the transparent input sits on top and takes the keystrokes */
+.pin-cells { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.pin-cell { height: 46px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); display: grid; place-items: center; transition-duration: var(--motion); }
+.pin-cell::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); transform: scale(0); opacity: 0; transition: transform var(--motion) cubic-bezier(0.3, 1.6, 0.5, 1), opacity var(--motion-fast) var(--ease); }
+.pin-cell.filled { background: var(--soft); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.pin-cell.filled::after { transform: scale(1); opacity: 1; }
+.pin-cell.current { border-color: #b2acfa; box-shadow: 0 0 0 3px #aaa4ee21; }
+.pin-cell.current:not(.filled)::after { width: 2px; height: 18px; border-radius: 1px; transform: none; opacity: 1; animation: caret 1s steps(1) infinite; }
+.pin-overlay { position: absolute; inset: 0; width: 100%; opacity: 0; border: 0; font-size: 16px; cursor: text; }
+
+/* waiting for workbench in another window */
+.signin-waiting { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0; animation: rise var(--motion-slow) var(--ease) both; }
+.signin-dots { display: flex; gap: 6px; }
+.signin-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: brick-hop 900ms var(--ease) infinite; }
+.signin-dots i:nth-child(2) { animation-delay: 150ms; }
+.signin-dots i:nth-child(3) { animation-delay: 300ms; }
+
+@keyframes card-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } }
+@keyframes card-out { to { opacity: 0; transform: translateY(-10px) scale(0.97); } }
+@keyframes shake-0 { 20%, 60% { transform: translateX(-7px); } 40%, 80% { transform: translateX(7px); } }
+@keyframes shake-1 { 20%, 60% { transform: translateX(-7px); } 40%, 80% { transform: translateX(7px); } }
+@keyframes brick-drop { from { opacity: 0; transform: translateY(-26px); } 60% { opacity: 1; } }
+@keyframes brick-hop { 50% { transform: translateY(-4px); } }
+@keyframes belt { from { transform: translateX(-80px); } to { transform: translateX(calc(100vw + 80px)); } }
+@keyframes caret { 50% { opacity: 0; } }
 .account { margin-top: 6px; padding: 6px 4px 0; border-top: 1px solid var(--line); border-radius: 0; }
 .ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -612,7 +674,6 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 @media (max-width: 760px) { .kpis-4 { grid-template-columns: 1fr 1fr; } }
 
 .signin-field { width: 100%; text-align: left; }
-.pin-input { letter-spacing: 0.5em; font-size: 18px; text-align: center; }
 .add-conn { display: flex; flex-direction: column; gap: 12px; padding: 16px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
 .add-conn .segmented { align-self: flex-start; }
 .add-conn-actions { display: flex; justify-content: flex-end; gap: 8px; }
