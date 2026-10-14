@@ -7,7 +7,8 @@ export function toItem(run: Omit<Run, 'events'>): ActivityItem {
     runId: run.id,
     kind: run.kind,
     title: run.prompt.split('\n')[0].slice(0, 120),
-    project: basename(run.cwd),
+    project: run.repo?.split('/')[1] ?? basename(run.cwd),
+    repo: run.repo ?? null,
     ticket: run.ticket,
     share: run.share,
     status: run.status,
@@ -35,7 +36,7 @@ export class ActivityLog {
   constructor(private db: DatabaseSync) {
     // runs live in memory: whatever was still going when the server stopped is gone
     db.prepare(
-      `update runs set item = json_set(item, '$.status', 'failed') where json_extract(item, '$.status') in ('starting', 'running', 'awaiting_decision', 'idle')`,
+      `update runs set item = json_set(item, '$.status', 'failed') where json_extract(item, '$.status') in ('queued', 'starting', 'running', 'awaiting_decision', 'idle')`,
     ).run();
   }
 

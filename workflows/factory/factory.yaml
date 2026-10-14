@@ -1,0 +1,30 @@
+# Read by the legos-factory engine only: stage order, personas and gates. What each stage does lives
+# in SKILL.md; the engine prompts "Run the <stage> stage of the factory skill for <ticket>".
+name: factory
+start: ticket
+branch: feat/{ticket}
+
+# persona for the Brief chat opened from a ticket card
+brief: personas/foreman.md
+
+stages:
+  - id: design
+    persona: personas/foreman.md
+    until: pr_open          # the stage's run is done once a PR from the branch exists
+    gate: pr_merged         # next stage unlocks when that PR merges
+
+  - id: build
+    persona: personas/builder.md
+    until: pr_open
+    on_pr_open: inspect     # start the Inspect stage as soon as PR #2 opens
+    gate: [no_blockers, approved]
+
+  - id: inspect
+    persona: personas/inspector.md
+    read_only: true         # engine denies edits, commits and pushes in this run
+    output: findings
+
+  - id: catalog
+    persona: personas/cataloger.md
+    after: merged           # runs once the build PR merges
+    gate: none

@@ -6,7 +6,8 @@ export const OTHER = 'https://tools.test';
 export const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 
 // Fake workbench (its own authorization server) plus a generic MCP server that delegates auth to it.
-export function fakeServers(opts: { expiresIn?: number } = {}) {
+// `exec` answers workbench execute_tools calls (one execution per call, like the app makes).
+export function fakeServers(opts: { expiresIn?: number; exec?: (tool: string, args: any) => unknown } = {}) {
   const calls: { url: string; body?: string; auth: string | null; headers: Headers }[] = [];
   let n = 0;
   let lastChallenge = '';
@@ -30,6 +31,11 @@ export function fakeServers(opts: { expiresIn?: number } = {}) {
     }
     if (url === `${WB}/mcp` || url === `${OTHER}/mcp`) {
       const msg = body ? JSON.parse(body) : {};
+      if (msg.method === 'tools/call' && msg.params?.name === 'execute_tools' && opts.exec) {
+        const ex = msg.params.arguments.executions[0];
+        const text = JSON.stringify({ results: [{ result: opts.exec(ex.tool, ex.args) }] });
+        return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text }] } }, { headers: { 'mcp-session-id': 'm1' } });
+      }
       if (msg.method === 'tools/call' && msg.params?.name === 'whoami')
         return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify({ id: 'u1', email: 'who@acme.test' }) }] } });
       return new Response(JSON.stringify({ seen: headers.get('authorization'), key: headers.get('x-api-key') }), {

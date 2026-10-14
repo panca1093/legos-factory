@@ -1,0 +1,117 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { createApp } from '../server/app.ts';
+import { RunManager, type QueryFn } from '../server/claude-runs.ts';
+import { openDb } from '../server/db.ts';
+import { managedWorkspace, parseRepo } from '../server/workspace.ts';
+
+const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
+
+// A local "forge": <root>/acme/app.git with main and a feature branch.
+function forge() {
+  const root = mkdtempSync(join(tmpdir(), 'lf-forge-'));
+  const src = join(root, 'src');
+  mkdirSync(src);
+  git(src, 'init', '-q', '-b', 'main');
+  git(src, 'config', 'user.email', 't@t');
+  git(src, 'config', 'user.name', 't');
+  writeFileSync(join(src, 'README.md'), 'main\n');
+  git(src, 'add', '.');
+  git(src, 'commit', '-qm', 'init');
+  git(src, 'checkout', '-qb', 'feat/PROJ-9');
+  writeFileSync(join(src, 'README.md'), 'feature\n');
+  git(src, 'commit', '-qam', 'feat');
+  git(src, 'checkout', '-q', 'main');
+  mkdirSync(join(root, 'acme'));
+  git(root, 'clone', '-q', '--bare', src, join(root, 'acme', 'app.git'));
+  return `file://${root}/{workspace}/{slug}.git`;
+}
+
+// Stays alive until its input closes and reports a session id, like a real chat.
+let sessions = 0;
+const alive = (({ prompt }: any) => {
+  const id = `sess-${++sessions}`;
+  const it = (async function* () {
+    yield { type: 'system', subtype: 'init', session_id: id, model: 'm' };
+    for await (const _ of prompt as AsyncIterable<unknown>);
+  })() as any;
+  it.interrupt = async () => {};
+  return it;
+}) as unknown as QueryFn;
+
+function setup() {
+  const workspaces = mkdtempSync(join(tmpdir(), 'lf-ws-'));
+  const runs = new RunManager(alive);
+  const app = createApp(runs, { db: openDb(':memory:'), workspaces, gitUrl: forge() });
+  const post = (body: object) =>
+    app.request('http://localhost:4317/api/runs', { method: 'POST', headers: { host: 'localhost:4317', 'x-legos': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  return { runs, workspaces, post };
+}
+
+const settle = async (cond: () => boolean) => {
+  for (let i = 0; i < 100 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
+  expect(cond()).toBe(true);
+};
+
+beforeAll(() => {
+  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
+});
+
+describe('repo workspaces', () => {
+  it('parses repo refs and recognises only its own paths', () => {
+    expect(parseRepo('acme/app')).toEqual({ workspace: 'acme', slug: 'app' });
+    for (const bad of ['acme', 'acme/app/x', '../app', 'acme/..', 'ac me/app', '']) expect(parseRepo(bad)).toBeNull();
+    expect(managedWorkspace('/ws', '/ws/u1/acme/app/PROJ-1')).toEqual({ owner: 'u1', repo: { workspace: 'acme', slug: 'app' }, key: 'PROJ-1' });
+    expect(managedWorkspace('/ws', '/ws/u1/acme/app')).toBeNull();
+    expect(managedWorkspace('/ws', '/elsewhere/u1/acme/app/PROJ-1')).toBeNull();
+  });
+
+  it('clones a fresh checkout per ticket, refuses a second run there, and deletes it when the run ends', async () => {
+    const { runs, workspaces, post } = setup();
+    const res = await post({ repo: 'acme/app', prompt: 'work on PROJ-1' });
+    expect(res.status).toBe(201);
+    const run = await res.json();
+    expect(run.cwd).toBe(join(workspaces, 'local', 'acme', 'app', 'PROJ-1'));
+    expect(readFileSync(join(run.cwd, 'README.md'), 'utf8')).toBe('main\n');
+    expect(git(run.cwd, 'rev-list', '--count', 'HEAD')).toBe('1'); // shallow
+
+    expect((await post({ repo: 'acme/app', prompt: 'again', ticket: 'PROJ-1' })).status).toBe(409);
+
+    await runs.end(run.id);
+    await settle(() => !existsSync(run.cwd));
+  });
+
+  it('clones the asked-for branch', async () => {
+    const { runs, post } = setup();
+    const run = await (await post({ repo: 'acme/app', branch: 'feat/PROJ-9', prompt: 'continue PROJ-9' })).json();
+    expect(readFileSync(join(run.cwd, 'README.md'), 'utf8')).toBe('feature\n');
+    await runs.end(run.id);
+  });
+
+  it('continuing a session re-clones into the same path', async () => {
+    const { runs, post } = setup();
+    const first = await (await post({ repo: 'acme/app', prompt: 'PROJ-2 brief' })).json();
+    await settle(() => !!runs.get(first.id)?.sessionId);
+    const session = runs.get(first.id)!.sessionId!;
+    await runs.end(first.id);
+    await settle(() => !existsSync(first.cwd));
+
+    const again = await post({ cwd: first.cwd, resume: session, prompt: 'carry on' });
+    expect(again.status).toBe(201);
+    expect((await again.json()).cwd).toBe(first.cwd);
+    expect(existsSync(join(first.cwd, 'README.md'))).toBe(true);
+  });
+
+  it('rejects bad input, unknown repos and other users\' workspaces', async () => {
+    const { workspaces, post } = setup();
+    expect((await post({ repo: 'not-a-repo', prompt: 'x' })).status).toBe(400);
+    expect((await post({ repo: 'acme/app', branch: '--upload-pack=evil', prompt: 'x' })).status).toBe(400);
+    const missing = await post({ repo: 'acme/nope', prompt: 'x' });
+    expect(missing.status).toBe(400);
+    expect((await missing.json()).error).toMatch(/could not clone acme\/nope/);
+    expect((await post({ cwd: join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1'), prompt: 'x' })).status).toBe(404);
+  });
+});

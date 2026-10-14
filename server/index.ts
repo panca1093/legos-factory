@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createApp } from './app.ts';
@@ -6,6 +7,7 @@ import { openDb } from './db.ts';
 import { createHub } from './hub.ts';
 import { Users } from './users.ts';
 import { Workbench } from './workbench.ts';
+import { workspacesDir } from './workspace.ts';
 
 const port = Number(process.env.LEGOS_API_PORT ?? 4317);
 const selfUrl = `http://localhost:${port}`;
@@ -21,7 +23,9 @@ function startHub() {
   );
 }
 
-function startApp() {
+async function startApp() {
+  // runs don't survive a restart, so neither do their throwaway clones
+  await rm(workspacesDir(), { recursive: true, force: true });
   const runs = new RunManager();
   const db = openDb();
   const users = process.env.LEGOS_AUTH === 'off' ? null : new Users(db);
@@ -29,7 +33,8 @@ function startApp() {
   const wb = process.env.LEGOS_WORKBENCH_URL?.replace(/\/$/, '');
   // a bare workbench host means its MCP endpoint
   const workbenchUrl = wb ? (new URL(wb).pathname === '/' ? `${wb}/mcp` : wb) : null;
-  const app = createApp(runs, { users, db, selfUrl, hubUrl, workbenchUrl });
+  const bitbucketWorkspace = process.env.LEGOS_BITBUCKET_WORKSPACE?.trim() || null;
+  const app = createApp(runs, { users, db, selfUrl, hubUrl, workbenchUrl, bitbucketWorkspace });
   // warm the model list so the first picker open isn't waiting on a CLI spawn
   void runs.models().catch((err) => console.warn('model list unavailable:', err.message));
 
@@ -46,4 +51,4 @@ function startApp() {
 }
 
 if (process.env.LEGOS_MODE === 'hub') startHub();
-else startApp();
+else await startApp();

@@ -19,7 +19,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
   if (res.status === 401 && path.startsWith('/api/')) signedOutListeners.forEach((f) => f());
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true });
   return body as T;
 }
 
@@ -35,8 +35,29 @@ export type Connection = {
 export type NewConnection = Pick<Connection, 'name' | 'kind' | 'url' | 'auth'> & { headers?: Record<string, string> };
 
 export type Integration = { name: string; version: string | null; connected: boolean };
-export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null };
-export type JiraIssue = JiraRow & { issueType: string | null; description: string | null; labels: string[]; url: string | null };
+export type JiraDev = {
+  prs: { count: number; state: string | null; open: boolean } | null;
+  builds: { ok: number; failed: number } | null;
+  deploys: { env: string; status: string }[];
+  stale: boolean;
+};
+export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
+export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
+export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; approved: boolean }[]; comments: number; tasks: number; created: string | null };
+export type PrFile = { status: string; path: string; oldPath: string | null; added: number; removed: number };
+export type PrComment = { id: number; author: string | null; text: string; path: string | null; line: number | null; created: string | null };
+
+// Repos picked in New task, newest first; also where to look for a ticket's PRs.
+export function recentRepos(): string[] {
+  try {
+    const v = JSON.parse(storage('lf:repos') ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+export const rememberRepo = (repo: string) => storage('lf:repos', JSON.stringify([repo, ...recentRepos().filter((r) => r !== repo)].slice(0, 8)));
+export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null; dev: JiraDev | null };
 
 export const api = {
   myActivity: (days: number) => call<{ items: ActivityItem[] }>(`/api/activity/me?days=${days}`),
@@ -45,7 +66,6 @@ export const api = {
   connect: (integration: string) => call<{ url: string | null; connectionId: string | null }>('/api/workbench/connect', { method: 'POST', body: JSON.stringify({ integration }) }),
   jiraIssues: (filter: string, pageToken?: string) =>
     call<{ issues: JiraRow[]; nextPageToken: string | null }>(`/api/jira/issues?filter=${filter}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
-  jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   me: () => call<Me>('/auth/me'),
   createUser: (name: string, pin: string) => call<{ ok: true }>('/auth/users', { method: 'POST', body: JSON.stringify({ name, pin }) }),
   login: (name: string, pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ name, pin }) }),
@@ -62,8 +82,11 @@ export const api = {
   run: (id: string) => call<Run>(`/api/runs/${id}`),
   models: () => call<ModelOption[]>('/api/models'),
   settings: () => call<Settings & { path: string; error: string | null }>('/api/settings'),
-  policy: (cwd: string) => call<{ share: ShareLevel; branch: string | null; ticket: string | null }>(`/api/policy?cwd=${encodeURIComponent(cwd)}`),
-  start: (b: { kind: RunKind; cwd: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
+  findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}&repos=${encodeURIComponent(recentRepos().join(','))}`),
+  pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),
+  prDiff: (repo: string, id: number) => call<{ diff: string; truncated: boolean }>(`/api/prs/${repo}/${id}/diff`),
+  repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
+  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),
   send: (id: string, text: string) => call<{ ok: true }>(`/api/runs/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }),
   setModel: (id: string, model: string) => call<{ ok: true }>(`/api/runs/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) }),

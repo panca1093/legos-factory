@@ -3,6 +3,15 @@
 
 export type Integration = { name: string; version: string | null; connected: boolean };
 
+// Jira's "Development" panel: what the linked repos report for an issue (PRs, builds, deploys).
+export type JiraDev = {
+  prs: { count: number; state: string | null; open: boolean } | null;
+  builds: { ok: number; failed: number } | null;
+  deploys: { env: string; status: string }[];
+  // Jira caches this summary; true means it may lag behind the forge
+  stale: boolean;
+};
+
 export type JiraIssueRow = {
   key: string;
   summary: string;
@@ -10,7 +19,54 @@ export type JiraIssueRow = {
   assignee: string | null;
   priority: string | null;
   updated: string | null;
+  dev: JiraDev | null;
 };
+
+// TODO: uncertain — the Development field's id differs per Jira site and workbench can't list fields; 10000 is the common default, verify per site
+const DEV_FIELD = process.env.LEGOS_JIRA_DEV_FIELD ?? 'customfield_10000';
+// passing `fields` replaces the tool's defaults, so name the ones the row needs too
+const ROW_FIELDS = ['summary', 'status', 'assignee', 'priority', 'updated', DEV_FIELD];
+
+// The field is a string like "{pullrequest={...}, build={...}, json={...}}"; the json= tail holds the real summary.
+export function parseJiraDev(raw: unknown): JiraDev | null {
+  if (typeof raw !== 'string') return null;
+  const at = raw.indexOf('json=');
+  if (at < 0) return null;
+  let doc: any;
+  try {
+    doc = JSON.parse(raw.slice(at + 5, raw.lastIndexOf('}')));
+  } catch {
+    return null;
+  }
+  const sum = doc?.cachedValue?.summary ?? {};
+  const pr = sum.pullrequest?.overall;
+  const build = sum.build?.overall;
+  const dev: JiraDev = {
+    prs: pr ? { count: Number(pr.count ?? 0), state: pr.state ?? null, open: pr.open === true } : null,
+    builds: build ? { ok: Number(build.successfulBuildCount ?? 0), failed: Number(build.failedBuildCount ?? 0) } : null,
+    deploys: (sum['deployment-environment']?.overall?.topEnvironments ?? []).map((e: any) => ({ env: String(e.title), status: String(e.status) })),
+    stale: doc.isStale === true,
+  };
+  return dev.prs || dev.builds || dev.deploys.length ? dev : null;
+}
+
+export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
+
+const REPO_PAGES = 30;
+// pages fetched at once after the first; a 1,100-repo workspace drops from ~33 s serial to a few seconds
+const REPO_PAGE_BATCH = 6;
+
+export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
+export type Pr = PrRow & {
+  description: string;
+  url: string | null;
+  reviewers: { name: string; approved: boolean }[];
+  comments: number;
+  tasks: number;
+  created: string | null;
+};
+export type PrFile = { status: string; path: string; oldPath: string | null; added: number; removed: number };
+export type PrComment = { id: number; author: string | null; text: string; path: string | null; line: number | null; created: string | null };
 
 export type JiraIssue = JiraIssueRow & {
   issueType: string | null;
@@ -20,6 +76,20 @@ export type JiraIssue = JiraIssueRow & {
 };
 
 const PROTOCOL = '2025-06-18';
+
+// Recovers the diff text from a cut-off `{"results":[{"result":"…` envelope, ending at the last whole line.
+export function salvageDiff(raw: string): string | null {
+  const prefix = '{"results":[{"result":"';
+  if (!raw.startsWith(prefix)) return null;
+  const body = raw.slice(prefix.length);
+  const cut = body.lastIndexOf('\\n');
+  if (cut < 0) return null;
+  try {
+    return JSON.parse(`"${body.slice(0, cut)}"`);
+  } catch {
+    return null;
+  }
+}
 
 export class Workbench {
   // MCP session per token; tokens rotate hourly so this stays small
@@ -112,7 +182,7 @@ export class Workbench {
   }
 
   async jiraSearch(token: string, jql: string, maxResults: number, nextPageToken?: string): Promise<{ issues: JiraIssueRow[]; nextPageToken: string | null }> {
-    const out = await this.execute(token, 'jira_search_issues', { jql, maxResults, ...(nextPageToken && { nextPageToken }) });
+    const out = await this.execute(token, 'jira_search_issues', { jql, maxResults, fields: ROW_FIELDS, ...(nextPageToken && { nextPageToken }) });
     return {
       issues: (out?.issues ?? []).map((i: any) => ({
         key: i.key,
@@ -121,9 +191,99 @@ export class Workbench {
         assignee: i.assignee ?? null,
         priority: i.priority ?? null,
         updated: i.updated ?? null,
+        dev: parseJiraDev(i.fields?.[DEV_FIELD]),
       })),
       nextPageToken: out?.nextPageToken ?? null,
     };
+  }
+
+  // Every repo in a Bitbucket workspace, most recently updated first. The tool has no search, so page through all.
+  async bitbucketRepos(token: string, workspace: string): Promise<RepoRow[]> {
+    const page = (n: number) => this.execute(token, 'bitbucket_list_repos', { workspace, pagelen: 100, page: n });
+    const pages = [await page(1)];
+    for (let next = 2; pages.at(-1)?.hasMore && next <= REPO_PAGES; next += REPO_PAGE_BATCH) {
+      const batch = await Promise.all(Array.from({ length: Math.min(REPO_PAGE_BATCH, REPO_PAGES - next + 1) }, (_, i) => page(next + i)));
+      // an empty page past the end has hasMore false; keep everything up to the first such page
+      const end = batch.findIndex((p) => !p?.hasMore);
+      pages.push(...(end < 0 ? batch : batch.slice(0, end + 1)));
+    }
+    const out: RepoRow[] = pages.flatMap((r) =>
+      (r?.repos ?? []).map((x: any) => ({ name: String(x.full_name ?? `${workspace}/${x.slug}`), mainBranch: x.mainbranch ?? null, updated: x.updated_on ?? null, description: x.description || null })),
+    );
+    return out.sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''));
+  }
+
+  async bitbucketPrs(token: string, workspace: string, slug: string, state: 'OPEN' | 'MERGED' | 'DECLINED', pagelen = 50): Promise<PrRow[]> {
+    const r = await this.execute(token, 'bitbucket_list_prs', { workspace, repoSlug: slug, state, pagelen });
+    return (r?.prs ?? []).map((p: any) => ({
+      repo: `${workspace}/${slug}`,
+      id: Number(p.id),
+      title: String(p.title ?? ''),
+      state: String(p.state ?? state),
+      author: p.author ?? null,
+      source: String(p.source ?? ''),
+      destination: String(p.destination ?? ''),
+      updated: p.updated_on ?? null,
+    }));
+  }
+
+  async bitbucketPr(token: string, workspace: string, slug: string, id: number): Promise<Pr> {
+    const p = await this.execute(token, 'bitbucket_get_pr', { workspace, repoSlug: slug, pullRequestId: id });
+    return {
+      repo: `${workspace}/${slug}`,
+      id: Number(p.id),
+      title: String(p.title ?? ''),
+      state: String(p.state ?? ''),
+      author: p.author ?? null,
+      source: String(p.source ?? ''),
+      destination: String(p.destination ?? ''),
+      updated: p.updated_on ?? null,
+      created: p.created_on ?? null,
+      description: String(p.description ?? ''),
+      url: p.url ?? null,
+      reviewers: (p.reviewers ?? []).map((r: any) => ({ name: String(r.display_name ?? 'Reviewer'), approved: r.approved === true })),
+      comments: Number(p.comment_count ?? 0),
+      tasks: Number(p.task_count ?? 0),
+    };
+  }
+
+  async bitbucketPrFiles(token: string, workspace: string, slug: string, id: number): Promise<PrFile[]> {
+    const r = await this.execute(token, 'bitbucket_get_pr_diff', { workspace, repoSlug: slug, prId: id, diffstat: true });
+    return (r?.files ?? []).map((f: any) => ({
+      status: String(f.status ?? 'modified'),
+      path: String(f.new ?? f.old ?? ''),
+      oldPath: f.old && f.old !== f.new ? String(f.old) : null,
+      added: Number(f.lines_added ?? 0),
+      removed: Number(f.lines_removed ?? 0),
+    }));
+  }
+
+  // The whole unified diff, or as much of it as workbench returns: workbench cuts tool text at ~60,000 characters,
+  // which breaks the JSON of a big diff.
+  async bitbucketPrDiff(token: string, workspace: string, slug: string, id: number): Promise<{ diff: string; truncated: boolean }> {
+    const out = await this.call(token, 'execute_tools', { executions: [{ tool: 'bitbucket_get_pr_diff', args: { workspace, repoSlug: slug, prId: id } }] });
+    if (typeof out === 'string') {
+      const partial = salvageDiff(out);
+      if (partial === null) throw new Error('bitbucket_get_pr_diff returned an unreadable result');
+      return { diff: partial, truncated: true };
+    }
+    const first = out?.results?.[0];
+    if (!first) throw new Error('bitbucket_get_pr_diff returned nothing');
+    if (first.error) throw new Error(first.message ?? 'bitbucket_get_pr_diff failed');
+    const r = first.result;
+    return { diff: typeof r === 'string' ? r : String(r?.diff ?? r?.text ?? ''), truncated: false };
+  }
+
+  async bitbucketPrComments(token: string, workspace: string, slug: string, id: number): Promise<PrComment[]> {
+    const r = await this.execute(token, 'bitbucket_list_pr_comments', { workspace, repoSlug: slug, prId: id, pagelen: 100 });
+    return (r?.comments ?? []).map((c: any) => ({
+      id: Number(c.id),
+      author: c.author ?? null,
+      text: String(c.text ?? ''),
+      path: c.inline?.path ?? null,
+      line: c.inline?.line ?? null,
+      created: c.created_on ?? null,
+    }));
   }
 
   async jiraIssue(token: string, issueKey: string): Promise<JiraIssue> {
@@ -135,6 +295,7 @@ export class Workbench {
       assignee: i.assignee ?? null,
       priority: i.priority ?? null,
       updated: i.updated ?? null,
+      dev: null,
       issueType: i.issueType ?? null,
       description: i.description ?? null,
       labels: Array.isArray(i.labels) ? i.labels : [],

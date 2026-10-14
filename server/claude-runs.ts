@@ -8,6 +8,7 @@ export type QueryFn = typeof sdkQuery;
 
 export type StartRequest = {
   owner?: string;
+  repo?: string | null;
   kind?: RunKind;
   cwd: string;
   prompt: string;
@@ -61,19 +62,23 @@ type Live = {
 
 type Waiting = { decision: PendingDecision; resolve: (r: PermissionResult) => void };
 
-export const ALIVE: Run['status'][] = ['starting', 'running', 'awaiting_decision', 'idle'];
+export const ALIVE: Run['status'][] = ['queued', 'starting', 'running', 'awaiting_decision', 'idle'];
 const WORKING: Run['status'][] = ['starting', 'running', 'awaiting_decision'];
 const MAX_EVENTS = 2000;
 const END_GRACE_MS = 10_000;
 
 export class RunManager extends EventEmitter {
   private live = new Map<string, Live>();
+  // started but waiting for a slot; no process yet. FIFO by insertion order.
+  private queued = new Map<string, { run: Run; req: StartRequest }>();
   private waiting = new Map<string, Waiting>();
   private modelCache: Promise<ModelOption[]> | null = null;
 
   constructor(
     private queryFn: QueryFn = sdkQuery,
     private idleTimeoutMs = Number(process.env.LEGOS_IDLE_MS ?? 30 * 60_000),
+    // each live run is a claude process (~100–300 MB, more while it builds/tests): cap how many run at once
+    private maxLive = Number(process.env.LEGOS_MAX_RUNS ?? 3),
   ) {
     super();
   }
@@ -90,19 +95,35 @@ export class RunManager extends EventEmitter {
   snapshot(): StreamMessage {
     return {
       type: 'snapshot',
-      runs: [...this.live.values()].map((l) => l.run),
+      runs: [...this.live.values()].map((l) => l.run).concat([...this.queued.values()].map((x) => x.run)),
       decisions: [...this.waiting.values()].map((w) => w.decision),
     };
   }
 
   get(id: string): Run | undefined {
-    return this.live.get(id)?.run;
+    return this.live.get(id)?.run ?? this.queued.get(id)?.run;
   }
 
   activeRunBySession(): Map<string, string> {
     const m = new Map<string, string>();
-    for (const { run } of this.live.values()) if (run.sessionId && ALIVE.includes(run.status)) m.set(run.sessionId, run.id);
+    for (const { run } of [...this.live.values(), ...this.queued.values()]) if (run.sessionId && ALIVE.includes(run.status)) m.set(run.sessionId, run.id);
     return m;
+  }
+
+  private liveCount(): number {
+    let n = 0;
+    for (const l of this.live.values()) if (!l.run.endedAt) n++;
+    return n;
+  }
+
+  // Starts queued runs, oldest first, while there are free slots.
+  private drain() {
+    for (const [id, { run, req }] of this.queued) {
+      if (this.liveCount() >= this.maxLive) return;
+      this.queued.delete(id);
+      run.status = 'starting';
+      this.launch(run, req);
+    }
   }
 
   start(req: StartRequest): Run {
@@ -110,6 +131,7 @@ export class RunManager extends EventEmitter {
     const run: Run = {
       id: randomUUID(),
       owner: req.owner ?? 'local',
+      repo: req.repo ?? null,
       kind: req.kind ?? 'chat',
       fromTask: false,
       ticket: req.ticket ?? null,
@@ -120,7 +142,7 @@ export class RunManager extends EventEmitter {
       cwd: req.cwd,
       prompt: req.prompt,
       permissionMode: req.permissionMode ?? 'default',
-      status: 'starting',
+      status: 'queued',
       requestedModel: req.model || 'default',
       model: null,
       startedAt: now,
@@ -133,6 +155,17 @@ export class RunManager extends EventEmitter {
       result: null,
       events: [],
     };
+    if (this.liveCount() >= this.maxLive) {
+      this.queued.set(run.id, { run, req });
+      this.publish(run);
+      return run;
+    }
+    run.status = 'starting';
+    this.launch(run, req);
+    return run;
+  }
+
+  private launch(run: Run, req: StartRequest) {
     const input = new InputQueue();
     const abort = new AbortController();
     const q = this.queryFn({
@@ -162,7 +195,6 @@ export class RunManager extends EventEmitter {
     this.enqueue(live, req.prompt);
     this.publish(run);
     void this.consume(live, q);
-    return run;
   }
 
   private enqueue(live: Live, text: string) {
@@ -275,6 +307,7 @@ export class RunManager extends EventEmitter {
       run.endedAt = new Date().toISOString();
       this.withdrawAll(run.id);
       this.publish(run);
+      this.drain();
     }
   }
 
@@ -372,6 +405,14 @@ export class RunManager extends EventEmitter {
   }
 
   async end(id: string, by: 'user' | 'idle_timeout' = 'user'): Promise<boolean> {
+    const q = this.queued.get(id);
+    if (q) {
+      // never started: drop it from the queue
+      this.queued.delete(id);
+      Object.assign(q.run, { status: 'completed', endedBy: by, endedAt: new Date().toISOString() });
+      this.publish(q.run);
+      return true;
+    }
     const live = this.live.get(id);
     if (!live || !ALIVE.includes(live.run.status) || live.input.closed) return false;
     live.run.endedBy = by;

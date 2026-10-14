@@ -39,8 +39,9 @@ export type SessionSummary = {
 
 export type SessionDetail = SessionSummary & { events: TimelineEvent[] };
 
-// idle = turn finished, process alive, waiting for your next message. completed = session ended.
-export type RunStatus = 'starting' | 'running' | 'awaiting_decision' | 'idle' | 'completed' | 'failed';
+// queued = waiting for a free slot (too many live runs). idle = turn finished, process alive, waiting
+// for your next message. completed = session ended.
+export type RunStatus = 'queued' | 'starting' | 'running' | 'awaiting_decision' | 'idle' | 'completed' | 'failed';
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan';
 
@@ -60,6 +61,8 @@ export type Run = {
   id: string;
   // user id of whoever launched it
   owner: string;
+  // "workspace/repo" when it works in a fresh clone of that repo
+  repo: string | null;
   kind: RunKind;
   // a task converted to a chat via Discuss
   fromTask: boolean;
@@ -118,6 +121,7 @@ export type ActivityItem = {
   kind: RunKind;
   title: string;
   project: string;
+  repo: string | null;
   ticket: string | null;
   share: ShareLevel;
   status: RunStatus;

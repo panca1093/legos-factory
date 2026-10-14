@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
-import type { DecisionAnswer, PermissionMode, PendingDecision, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
+import type { DecisionAnswer, PermissionMode, PendingDecision, Run, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
 import { getSession, listSessions } from './claude-sessions.ts';
 import { detectTicket, gitBranch, loadSettings, settingsPath, shareFor } from './policy.ts';
 import { ActivityLog, toTeamItem } from './activity.ts';
@@ -14,6 +14,7 @@ import type { RunManager } from './claude-runs.ts';
 import { Connections, type Pending } from './connections.ts';
 import { openDb } from './db.ts';
 import { Workbench } from './workbench.ts';
+import { createWorkspace, exists, managedWorkspace, parseRepo, removeWorkspace, workspacePath, workspacesDir } from './workspace.ts';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan'];
@@ -22,6 +23,7 @@ const MODEL_RE = /^[\w.\-\[\]]{1,64}$/;
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 const SHARES: ShareLevel[] = ['private', 'status', 'full'];
 const TICKET_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+const BRANCH_RE = /^(?!-)[\w./-]{1,200}$/;
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings): T => ({
   ...s,
@@ -55,6 +57,11 @@ export type AppOptions = {
   hubUrl?: string | null;
   // workbench MCP URL behind "Sign in with workbench"; unset hides that option
   workbenchUrl?: string | null;
+  // where repo runs get their throwaway clones, and how to reach a repo (see workspace.ts)
+  workspaces?: string;
+  gitUrl?: string;
+  // the Bitbucket workspace repos are listed from when none is asked for (the forge can't tell us)
+  bitbucketWorkspace?: string | null;
 };
 
 type Env = { Variables: { uid: string } };
@@ -85,6 +92,10 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   };
   // per-run secret -> run, so only runs launched here reach the connections proxy
   const grants = new Map<string, string>();
+  const wsRoot = opts.workspaces ?? workspacesDir();
+  // run -> its throwaway clone, deleted once no live run works in it
+  const clones = new Map<string, string>();
+  const busyIn = (path: string) => [...runs.activeRunBySession().values(), ...clones.keys()].some((id) => runs.get(id)?.cwd === path && !runs.get(id)?.endedAt);
   // workbench sign-in: OAuth state -> the attempt the app is polling, and finished attempts -> cookie
   const attempts = new Map<string, { attempt: string; at: number }>();
   const claims = new Map<string, { cookie: string; at: number }>();
@@ -104,6 +115,11 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   runs.on('message', (m: StreamMessage) => {
     if (m.type !== 'run') return;
     if (m.run.endedAt) for (const [k, runId] of grants) if (runId === m.run.id) grants.delete(k);
+    const clone = m.run.endedAt ? clones.get(m.run.id) : undefined;
+    if (clone) {
+      clones.delete(m.run.id);
+      if (!busyIn(clone)) void removeWorkspace(wsRoot, clone).catch((err) => console.warn('workspace cleanup failed:', err.message));
+    }
     void activity
       .record(m.run, m.run.owner)
       .then(async (item) => {
@@ -353,7 +369,9 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
 
   app.post('/api/runs', async (c) => {
     const body = await c.req.json().catch(() => null);
-    const cwd = typeof body?.cwd === 'string' ? body.cwd.trim() : '';
+    let cwd = typeof body?.cwd === 'string' ? body.cwd.trim() : '';
+    const repoIn = str(body?.repo);
+    const branch = str(body?.branch) || undefined;
     const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
     const permissionMode: PermissionMode = MODES.includes(body?.permissionMode) ? body.permissionMode : 'default';
     const resume = typeof body?.resume === 'string' && body.resume ? body.resume : undefined;
@@ -363,26 +381,141 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     if (ticketIn && !TICKET_RE.test(ticketIn)) return c.json({ error: 'ticket must look like PROJ-123' }, 400);
     if (!prompt) return c.json({ error: 'prompt is required' }, 400);
     if (model && !MODEL_RE.test(model)) return c.json({ error: 'invalid model' }, 400);
-    if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
-      return c.json({ error: 'cwd must be an existing absolute directory' }, 400);
-    }
+    if (branch && !BRANCH_RE.test(branch)) return c.json({ error: 'invalid branch' }, 400);
     const uid = c.get('uid');
     if (resume && !activity.ownsSession(uid, resume)) return c.json({ error: 'session not found' }, 404);
     if (resume && runs.activeRunBySession().has(resume)) return c.json({ error: 'session already has an active run' }, 409);
     const settings = await loadSettings();
+
+    // A repo run works in a fresh clone; continuing one re-clones into the same path.
+    let clone: { path: string; repo: NonNullable<ReturnType<typeof parseRepo>> } | null = null;
+    if (repoIn) {
+      const repo = parseRepo(repoIn);
+      if (!repo) return c.json({ error: 'repo must look like workspace/repo' }, 400);
+      const key = ticketIn || detectTicket(prompt, settings.ticketKeys) || `run-${randomBytes(4).toString('hex')}`;
+      clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
+    } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
+      const m = managedWorkspace(wsRoot, cwd)!;
+      if (m.owner !== uid) return c.json({ error: 'session not found' }, 404);
+      clone = { path: cwd, repo: m.repo };
+    }
+    if (clone) {
+      if (busyIn(clone.path)) return c.json({ error: `a run is already working in ${clone.path.split('/').pop()}` }, 409);
+      cwd = clone.path;
+      if (repoIn || !(await exists(cwd))) {
+        try {
+          await createWorkspace({ path: cwd, repo: clone.repo, branch, urlTemplate: opts.gitUrl });
+        } catch (err) {
+          return c.json({ error: errMsg(err) }, errStatus(err));
+        }
+      }
+    } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
+      return c.json({ error: 'cwd must be an existing absolute directory, or pass repo' }, 400);
+    }
+    const started = (run: Run) => (clone && clones.set(run.id, clone.path), run);
+    const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
     const ticket = ticketIn || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
     const share: ShareLevel = SHARES.includes(body?.share) ? body.share : shareFor(cwd, settings);
     const connected = opts.selfUrl ? (await connsFor(uid).all()).filter((x) => x.connected) : [];
-    if (!connected.length) return c.json(runs.start({ owner: uid, kind, cwd, prompt, permissionMode, resume, model, ticket, share }), 201);
+    if (!connected.length) return c.json(started(runs.start({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share })), 201);
     const secret = randomBytes(24).toString('base64url');
     const mcp = Object.fromEntries(connected.map((x) => [x.name, { url: `${opts.selfUrl}/mcp/${x.name}`, headers: { 'x-legos-run': secret } }]));
-    const run = runs.start({ owner: uid, kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp });
+    const run = started(runs.start({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp }));
     grants.set(secret, run.id);
     return c.json(run, 201);
   });
 
   const wbError = (c: any, err: unknown) => c.json({ error: errMsg(err) }, 502);
   const NO_WB = 'connect a workbench in Settings first';
+
+  // PRs for a ticket: its key in the source branch or title, looked up in the repos it was worked in
+  // (from runs here) plus the ones the client remembers. The forge API can't search across repos.
+  app.get('/api/prs', async (c) => {
+    const ticket = str(c.req.query('ticket')).toUpperCase();
+    if (!TICKET_RE.test(ticket)) return c.json({ error: 'ticket must look like PROJ-123' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    const fromRuns = (await activity.list(c.get('uid'), 0)).filter((i) => i.ticket === ticket && i.repo).map((i) => i.repo!);
+    const asked = str(c.req.query('repos')).split(',').filter(Boolean);
+    const repos = [...new Set([...fromRuns, ...asked])].map(parseRepo).filter((r) => r !== null).slice(0, 10);
+    const hit = new RegExp(`(^|[^A-Z0-9])${ticket}([^0-9]|$)`, 'i');
+    try {
+      const found = (
+        await Promise.all(
+          repos.flatMap((r) => (['OPEN', 'MERGED'] as const).map((st) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, st, st === 'OPEN' ? 50 : 30))),
+        )
+      )
+        .flat()
+        .filter((p) => hit.test(p.source) || hit.test(p.title))
+        .sort((a, b) => Number(b.state === 'OPEN') - Number(a.state === 'OPEN') || (b.updated ?? '').localeCompare(a.updated ?? ''));
+      return c.json({ prs: found, searched: repos.map((r) => `${r.workspace}/${r.slug}`) });
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
+
+  const prRef = (c: any) => {
+    const repo = parseRepo(`${c.req.param('ws')}/${c.req.param('slug')}`);
+    const id = Number(c.req.param('id'));
+    return repo && Number.isInteger(id) && id > 0 ? { ...repo, id } : null;
+  };
+
+  app.get('/api/prs/:ws/:slug/:id', async (c) => {
+    const ref = prRef(c);
+    if (!ref) return c.json({ error: 'invalid pull request' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    try {
+      const [pr, files, comments] = await Promise.all([
+        wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
+        wb.client.bitbucketPrFiles(wb.token, ref.workspace, ref.slug, ref.id),
+        wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
+      ]);
+      return c.json({ pr, files, comments });
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
+
+  app.get('/api/prs/:ws/:slug/:id/diff', async (c) => {
+    const ref = prRef(c);
+    if (!ref) return c.json({ error: 'invalid pull request' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    try {
+      return c.json(await wb.client.bitbucketPrDiff(wb.token, ref.workspace, ref.slug, ref.id));
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
+
+  // listing a big workspace takes several calls; repos change rarely
+  type Repos = Awaited<ReturnType<Workbench['bitbucketRepos']>>;
+  const repoCache = new Map<string, { at: number; repos: Repos }>();
+  // the UI warms this in the background, so a dialog opened meanwhile joins the same load
+  const repoLoads = new Map<string, Promise<Repos>>();
+  app.get('/api/repos', async (c) => {
+    const workspace = str(c.req.query('workspace')) || opts.bitbucketWorkspace || '';
+    if (!workspace) return c.json({ error: 'workspace is required', needWorkspace: true }, 400);
+    if (!/^[\w.-]{1,100}$/.test(workspace)) return c.json({ error: 'invalid workspace' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    const key = `${c.get('uid')}:${workspace}`;
+    const hit = repoCache.get(key);
+    if (hit && Date.now() - hit.at < 3600_000 && c.req.query('refresh') !== '1') return c.json({ workspace, repos: hit.repos });
+    let load = repoLoads.get(key);
+    if (!load) {
+      load = wb.client.bitbucketRepos(wb.token, workspace).finally(() => repoLoads.delete(key));
+      repoLoads.set(key, load);
+    }
+    try {
+      const repos = await load;
+      repoCache.set(key, { at: Date.now(), repos });
+      return c.json({ workspace, repos });
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
 
   app.get('/api/workbench/integrations', async (c) => {
     const wb = await workbench(c.get('uid'));

@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
-import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type Theme } from './api.ts';
+import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme, recentRepos, rememberRepo } from './api.ts';
 import { Icon } from './icons.tsx';
 
 export const go = (hash: string) => {
@@ -14,6 +14,7 @@ export type Tone = 'good' | 'watch' | 'alert' | 'run' | 'off';
 type RunLike = Pick<Run, 'kind' | 'status' | 'endedBy'>;
 
 const LABEL: Record<Run['status'], string> = {
+  queued: 'Queued',
   starting: 'Starting',
   running: 'Working',
   awaiting_decision: 'Needs you',
@@ -27,7 +28,7 @@ export function runLabel(r: RunLike): string {
   return LABEL[r.status];
 }
 
-const TONE: Record<Run['status'], Tone> = { starting: 'run', running: 'run', awaiting_decision: 'watch', idle: 'good', completed: 'off', failed: 'alert' };
+const TONE: Record<Run['status'], Tone> = { queued: 'off', starting: 'run', running: 'run', awaiting_decision: 'watch', idle: 'good', completed: 'off', failed: 'alert' };
 export function runTone(r: RunLike): Tone {
   if (r.kind === 'task' && r.status === 'completed' && r.endedBy !== 'user') return 'good';
   return TONE[r.status];
@@ -430,7 +431,7 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     node.setAttribute('rel', 'noopener noreferrer');
   }
 });
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }) as string), [text]);
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
@@ -557,6 +558,69 @@ export function Thread({
 
 // ---------- launch dialog ----------
 
+// Search the repos of the Bitbucket workspace. The forge can't search, so the whole list loads once
+// (server-side cache, warmed in the background) and is filtered here.
+export function RepoPicker({ value, onPick }: { value: string; onPick: (r: Pick<RepoRow, 'name' | 'mainBranch'>) => void }) {
+  // only used when the server has no default workspace configured
+  const [ws, setWs] = useState(() => storage('lf:bb-ws') ?? '');
+  const [askWs, setAskWs] = useState(false);
+  const [wsDraft, setWsDraft] = useState('');
+  const [list, setList] = useState<{ workspace: string; repos: RepoRow[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setList(null);
+    setErr(null);
+    api.repos(ws || undefined).then(
+      (r) => (setList(r), setAskWs(false)),
+      (e) => (e.needWorkspace ? setAskWs(true) : setErr(e.status === 409 ? 'Connect workbench in Settings to list repos.' : e.message)),
+    );
+  }, [ws]);
+  const recent = recentRepos();
+  const needle = q.trim().toLowerCase();
+  const matches = needle
+    ? (list?.repos ?? []).filter((r) => r.name.toLowerCase().includes(needle) || (r.description ?? '').toLowerCase().includes(needle)).slice(0, 8)
+    : recent.map((name) => list?.repos.find((r) => r.name === name) ?? { name, mainBranch: null, updated: null, description: null });
+  const pick = (r: Pick<RepoRow, 'name' | 'mainBranch'>) => (onPick(r), setQ(''), setOpen(false));
+  if (askWs)
+    return (
+      <div className="field repo-picker">
+        <span>Bitbucket workspace</span>
+        <form className="repo-ws" onSubmit={(e) => (e.preventDefault(), /^[\w.-]+$/.test(wsDraft) && (storage('lf:bb-ws', wsDraft), setWs(wsDraft)))}>
+          <input className="input mono" value={wsDraft} onChange={(e) => setWsDraft(e.target.value.trim())} placeholder="e.g. acme — set LEGOS_BITBUCKET_WORKSPACE to skip this" />
+        </form>
+      </div>
+    );
+  return (
+    <div className="field repo-picker">
+      <span>Repo</span>
+      <input
+        className="input mono"
+        value={open ? q : value.split('/')[1] ?? value}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={(e) => (setQ(e.target.value), setOpen(true))}
+        onKeyDown={(e) => e.key === 'Enter' && matches[0] && (e.preventDefault(), pick(matches[0]))}
+        placeholder={list ? `Search ${list.repos.length} repos` : 'Search repos'}
+      />
+      {open && (
+        <div className="repo-results" role="listbox">
+          {matches.length === 0 && <div className="repo-empty">{err ?? (!list ? 'Loading repos…' : needle ? 'No repo matches.' : 'Type to search.')}</div>}
+          {matches.map((r) => (
+            <button type="button" key={r.name} role="option" aria-selected={r.name === value} className="repo-result" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(r)}>
+              <b className="mono">{r.name.split('/')[1]}</b>
+              <span>{r.description ?? (r.updated ? `updated ${ago(r.updated, Date.now())}` : 'recent')}</span>
+            </button>
+          ))}
+          {!needle && list && <div className="repo-empty">Type to search all {list.repos.length} repos.</div>}
+        </div>
+      )}
+      {err && !open && <small className="error">{err}</small>}
+    </div>
+  );
+}
+
 const MODES: { value: PermissionMode; label: string }[] = [
   { value: 'default', label: 'Ask me first (Needs you)' },
   { value: 'acceptEdits', label: 'Auto-accept file edits' },
@@ -577,30 +641,31 @@ export function LaunchDialog({
   onClose: () => void;
 }) {
   const [cwd, setCwd] = useState(resume?.cwd ?? defaults?.cwd ?? storage('lf:cwd') ?? '');
+  // a fresh clone of a repo (default) or an existing folder on this machine
+  const [source, setSource] = useState<'repo' | 'folder'>(() => (resume || defaults?.cwd || storage('lf:source') === 'folder' ? 'folder' : 'repo'));
+  const [repo, setRepo] = useState(recentRepos()[0] ?? '');
+  const [branch, setBranch] = useState('');
+  const [mainBranch, setMainBranch] = useState<string | null>(null);
   const [prompt, setPrompt] = useState(defaults?.prompt ?? '');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [model, setModel] = useState(storage('lf:model') ?? 'default');
-  const [ticket, setTicket] = useState(defaults?.ticket ?? '');
-  const [share, setShare] = useState<ShareLevel | ''>('');
-  const [policy, setPolicy] = useState<{ share: ShareLevel; branch: string | null; ticket: string | null } | null>(null);
+  // from a ticket card; otherwise the server finds it in the prompt or branch
+  const ticket = defaults?.ticket;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // What this folder would get by default: share rule and a ticket from its git branch.
-  useEffect(() => {
-    setPolicy(null);
-    if (!cwd.startsWith('/')) return;
-    const t = setTimeout(() => api.policy(cwd).then(setPolicy, () => setPolicy(null)), 300);
-    return () => clearTimeout(t);
-  }, [cwd]);
 
+  const ready = !!prompt.trim() && (source === 'repo' ? /^[\w.-]+\/[\w.-]+$/.test(repo.trim()) : !!cwd);
   const submit = async () => {
-    if (!cwd || !prompt.trim() || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setErr(null);
     try {
-      const run = await api.start({ kind, cwd, prompt, permissionMode: mode, resume: resume?.sessionId, model, ticket: ticket || undefined, share: share || undefined });
-      storage('lf:cwd', cwd);
+      const where = source === 'repo' ? { repo: repo.trim(), branch: branch.trim() || undefined } : { cwd };
+      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model, ticket });
+      if (source === 'repo') rememberRepo(repo.trim());
+      else storage('lf:cwd', cwd);
+      storage('lf:source', source);
       storage('lf:model', model);
       onClose();
       go(`#/runs/${run.id}`);
@@ -623,15 +688,38 @@ export function LaunchDialog({
           </p>
         </div>
         {resume?.recentlyActive && <p className="warn">This session was active in the last few minutes. If it's still open in a terminal, continuing here forks the conversation.</p>}
-        <label className="field">
-          <span>Working directory</span>
-          <input className="input mono" list="lf-projects" value={cwd} disabled={!!resume} onChange={(e) => setCwd(e.target.value)} placeholder="/Users/you/project" />
-          <datalist id="lf-projects">
-            {projects.map((p) => (
-              <option key={p} value={p} />
-            ))}
-          </datalist>
-        </label>
+        {!resume && (
+          <div className="segmented" role="tablist" aria-label="Where to work">
+            <button role="tab" aria-selected={source === 'repo'} className={source === 'repo' ? 'active' : ''} onClick={() => setSource('repo')}>
+              Repo
+            </button>
+            <button role="tab" aria-selected={source === 'folder'} className={source === 'folder' ? 'active' : ''} onClick={() => setSource('folder')}>
+              Local folder
+            </button>
+          </div>
+        )}
+        {source === 'repo' ? (
+          <>
+            <RepoPicker value={repo} onPick={(r) => (setRepo(r.name), setMainBranch(r.mainBranch))} />
+            <details className="more-options">
+              <summary>More options</summary>
+              <label className="field">
+                <span>Branch</span>
+                <input className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder={`${mainBranch ?? 'main branch'} (default) — the run starts from the latest commit here`} />
+              </label>
+            </details>
+          </>
+        ) : (
+          <label className="field">
+            <span>Working directory</span>
+            <input className="input mono" list="lf-projects" value={cwd} disabled={!!resume} onChange={(e) => setCwd(e.target.value)} placeholder="/Users/you/project" />
+            <datalist id="lf-projects">
+              {projects.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
+          </label>
+        )}
         <label className="field">
           <span>{kind === 'task' ? 'Task' : 'Message'}</span>
           <textarea
@@ -660,35 +748,13 @@ export function LaunchDialog({
             </select>
           </label>
         </div>
-        <div className="field-row">
-          <label className="field">
-            <span>Ticket</span>
-            <input
-              className="input mono"
-              value={ticket}
-              onChange={(e) => setTicket(e.target.value.toUpperCase())}
-              placeholder={policy?.ticket ? `${policy.ticket} (from branch)` : 'Auto from prompt or branch'}
-            />
-          </label>
-          <label className="field">
-            <span>Team sharing</span>
-            <select className="input" value={share} onChange={(e) => setShare(e.target.value as ShareLevel | '')}>
-              <option value="">Folder default{policy ? ` · ${SHARE_LABEL[policy.share]}` : ''}</option>
-              {(['private', 'status', 'full'] as const).map((l) => (
-                <option key={l} value={l}>
-                  {SHARE_LABEL[l]}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
         {err && <p className="error">{err}</p>}
         <footer>
           <button className="btn ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={busy || !cwd || !prompt.trim()} onClick={submit}>
-            {busy ? 'Starting…' : kind === 'task' ? 'Start task ⌘↵' : 'Start chat ⌘↵'}
+          <button className="btn primary" disabled={busy || !ready} onClick={submit}>
+            {busy ? (source === 'repo' ? 'Fetching repo…' : 'Starting…') : kind === 'task' ? 'Start task ⌘↵' : 'Start chat ⌘↵'}
           </button>
         </footer>
       </div>

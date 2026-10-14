@@ -10,7 +10,7 @@ import type { Workbench } from './workbench.ts';
 // Identity = the workbench user behind the bearer token, so nobody can post as someone else.
 
 const KINDS = new Set(['chat', 'task']);
-const STATUSES = new Set(['starting', 'running', 'awaiting_decision', 'idle', 'completed', 'failed']);
+const STATUSES = new Set(['queued', 'starting', 'running', 'awaiting_decision', 'idle', 'completed', 'failed']);
 const IDENTITY_TTL_MS = 5 * 60_000;
 const MAX_ITEMS_PER_POST = 50;
 
@@ -27,6 +27,7 @@ function clean(raw: any): TeamItem | null {
     kind: raw.kind,
     title: s(raw.title, 120) ?? '',
     project: s(raw.project, 120) ?? '',
+    repo: s(raw.repo, 200),
     ticket: s(raw.ticket, 32),
     status: raw.status,
     endedBy: raw.endedBy === 'user' || raw.endedBy === 'idle_timeout' ? raw.endedBy : null,

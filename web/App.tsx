@@ -1,12 +1,14 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Run, RunKind, SessionSummary, TeamItem } from '../shared/types.ts';
-import { api, ago, fmtTokens, onSignedOut, projectName, storage, useFetch, useLive, useNow, type Conn, type Connection, type Integration, type JiraRow, type Me } from './api.ts';
+import { api, ago, fmtTokens, onSignedOut, projectName, storage, useFetch, useLive, useNow, type Conn, type Connection, type Integration, type JiraDev, type JiraRow, type Me, type PrRow, rememberRepo } from './api.ts';
 import {
   ApprovalCard,
   ConnChip,
   DecisionRow,
   Empty,
   LaunchDialog,
+  Markdown,
+  RepoPicker,
   ModelSelect,
   ReviewModal,
   ShareBadge,
@@ -22,9 +24,9 @@ import {
 } from './components.tsx';
 import { Icon } from './icons.tsx';
 
-const ALIVE: Run['status'][] = ['starting', 'running', 'awaiting_decision', 'idle'];
+const ALIVE: Run['status'][] = ['queued', 'starting', 'running', 'awaiting_decision', 'idle'];
 const RECENT_MS = 5 * 60 * 1000;
-const ORDER: Run['status'][] = ['awaiting_decision', 'running', 'starting', 'idle', 'failed', 'completed'];
+const ORDER: Run['status'][] = ['awaiting_decision', 'running', 'starting', 'queued', 'idle', 'failed', 'completed'];
 
 type Live = ReturnType<typeof useLive>;
 type ResumeReq = { sessionId: string; cwd: string; recentlyActive: boolean };
@@ -289,6 +291,7 @@ function App({ me }: { me: Me }) {
         <Rail live={live} view={view} id={id} open={railOpen} onNew={newRun} me={me} />
         {!view && <Overview live={live} sessions={sessions.data} error={sessions.error} onNew={newRun} onContinue={continueSession} />}
         {view === 'tasks' && <Tasks live={live} onNew={newRun} />}
+        {view === 'prs' && route.length === 4 && <PrPage repo={`${route[1]}/${route[2]}`} id={Number(route[3])} />}
         {view === 'settings' && <SettingsPage />}
         {view === 'activity' && <MyActivity live={live} />}
         {view === 'team' && <TeamActivity />}
@@ -472,6 +475,8 @@ function calloutOf(r: Run, pending: number, now: number): { icon: 'check' | 'sto
   switch (r.status) {
     case 'awaiting_decision':
       return { icon: 'stop', title: 'Waiting for your approval', text: `${pending} open request${pending === 1 ? '' : 's'} · nothing runs until you answer` };
+    case 'queued':
+      return { icon: 'clock', title: 'Queued', text: 'Waiting for a free slot · starts on its own when another run ends' };
     case 'starting':
     case 'running':
       return { icon: 'spark', title: 'Working', text: `Last event ${ago(r.lastEventAt, now)} · turn ${r.turns}` };
@@ -1401,7 +1406,11 @@ function TaskBar({
       <div className="ended-bar">
         <span className="pulse" />
         <span className="grow">
-          {run.status === 'awaiting_decision' ? 'Task is waiting for your approval above.' : `Claude is working on this task · last event ${ago(run.lastEventAt, now)}.`} The result will appear here.
+          {run.status === 'awaiting_decision'
+            ? 'Task is waiting for your approval above.'
+            : run.status === 'queued'
+              ? 'Queued: too many runs are live right now; it starts on its own when one ends.'
+              : `Claude is working on this task · last event ${ago(run.lastEventAt, now)}.`} The result will appear here.
           {err && <span className="error"> {err}</span>}
         </span>
         <button className="btn sm danger" disabled={busy || paused} onClick={onCancel}>
@@ -1941,17 +1950,204 @@ const JIRA_FILTERS = [
 const jiraTone = (status: string | null) => {
   const st = (status ?? '').toLowerCase();
   if (/done|closed|resolved/.test(st)) return 'good';
-  if (/review|testing|qa|blocked/.test(st)) return 'watch';
+  if (/blocked|impediment/.test(st)) return 'bad';
+  if (/review|testing|qa/.test(st)) return 'watch';
   if (/progress|develop/.test(st)) return 'run';
   return 'off';
 };
 
-function taskPrompt(i: { key: string; summary: string; description: string | null; url: string | null }, kind: RunKind) {
-  const details = i.description ? `\n\nTicket details:\n${i.description.slice(0, 4000)}${i.description.length > 4000 ? '\n…(truncated)' : ''}` : '';
-  const link = i.url ? `\n\nLink: ${i.url}` : '';
+// Unified diff text → one entry per file, keyed by its new path.
+function splitDiff(diff: string): Map<string, string[]> {
+  const files = new Map<string, string[]>();
+  let cur: string[] | null = null;
+  for (const line of diff.split('\n')) {
+    const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (m) files.set(m[2], (cur = []));
+    else if (cur && !/^(index |--- |\+\+\+ |new file mode|deleted file mode|similarity index|rename (from|to) )/.test(line)) cur.push(line);
+  }
+  return files;
+}
+
+const DIFF_LINE_CAP = 1500;
+const PR_TONE: Record<string, string> = { OPEN: 'run', MERGED: 'good', DECLINED: 'bad', SUPERSEDED: 'off' };
+
+function PrPage({ repo, id }: { repo: string; id: number }) {
+  const now = useNow(60000);
+  const { data, error, reload } = useFetch(() => api.pr(repo, id), [repo, id]);
+  const [diff, setDiff] = useState<Map<string, string[]> | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [diffErr, setDiffErr] = useState<string | null>(null);
+  const [openFile, setOpenFile] = useState<string | null>(null);
+  // the full diff can be large: fetch it on the first file opened
+  const show = (path: string) => {
+    setOpenFile(openFile === path ? null : path);
+    if (!diff && !diffErr) api.prDiff(repo, id).then((r) => (setDiff(splitDiff(r.diff)), setTruncated(r.truncated)), (e) => setDiffErr(e.message));
+  };
+  const pr = data?.pr;
+  const inline = (path: string) => (data?.comments ?? []).filter((c) => c.path === path);
+  const general = (data?.comments ?? []).filter((c) => !c.path);
+  return (
+    <Frame
+      crumb={
+        <>
+          <span>Workspace / Pull requests / </span>
+          {repo} #{id}
+        </>
+      }
+    >
+      <div className="scroll">
+        <div className="page">
+          {!data ? (
+            error ? <p className="error">{error}</p> : <Empty>Loading pull request…</Empty>
+          ) : (
+            <>
+              <div className="page-heading">
+                <div style={{ minWidth: 0 }}>
+                  <div className="page-eyebrow">
+                    <span className={`status-pill jira-status tone-${PR_TONE[pr!.state] ?? 'off'}`}>{pr!.state.toLowerCase()}</span>
+                    <span className="mono">{repo} #{id}</span>
+                  </div>
+                  <h1 className="pr-title">{pr!.title}</h1>
+                  <p className="lead">
+                    {pr!.author ?? 'Someone'} wants to merge <code>{pr!.source}</code> into <code>{pr!.destination}</code>
+                    {pr!.updated && ` · updated ${ago(pr!.updated, now)}`}
+                  </p>
+                </div>
+                <div className="pr-actions">
+                  <button className="btn sm ghost" onClick={reload}>
+                    Refresh
+                  </button>
+                  {pr!.url && (
+                    <a className="btn sm" href={pr!.url} target="_blank" rel="noreferrer">
+                      Open in Bitbucket
+                    </a>
+                  )}
+                </div>
+              </div>
+              <div className="pr-reviewers">
+                {pr!.reviewers.length === 0 ? (
+                  <span className="muted">No reviewers yet</span>
+                ) : (
+                  pr!.reviewers.map((r) => (
+                    <span key={r.name} className={`dev-chip tone-${r.approved ? 'good' : 'off'}`}>
+                      {r.approved ? '✓ ' : ''}
+                      {r.name}
+                    </span>
+                  ))
+                )}
+                {pr!.tasks > 0 && <span className="dev-chip tone-watch">{pr!.tasks} open task{pr!.tasks > 1 ? 's' : ''}</span>}
+              </div>
+              {pr!.description && (
+                <section className="pr-box pr-desc">
+                  <Markdown text={pr!.description} />
+                </section>
+              )}
+              <h2 className="section-title">
+                Files <span className="muted">· {data.files.length}</span>
+              </h2>
+              <div className="list-card pr-files">
+                {data.files.map((f) => {
+                  const lines = diff?.get(f.path);
+                  const notes = inline(f.path);
+                  return (
+                    <div key={f.path} className="pr-file">
+                      <button className="pr-file-head" onClick={() => show(f.path)} aria-expanded={openFile === f.path}>
+                        <span className={`pr-file-status ${f.status}`}>{f.status === 'added' ? 'A' : f.status === 'removed' ? 'D' : f.status === 'renamed' ? 'R' : 'M'}</span>
+                        <span className="mono grow ellipsis" title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}>
+                          {f.path}
+                        </span>
+                        {notes.length > 0 && <span className="dev-chip tone-run">{notes.length} comment{notes.length > 1 ? 's' : ''}</span>}
+                        <span className="pr-counts">
+                          <span className="add">+{f.added}</span> <span className="del">−{f.removed}</span>
+                        </span>
+                      </button>
+                      {openFile === f.path && (
+                        <div className="pr-file-body">
+                          {notes.map((c) => (
+                            <div key={c.id} className="pr-comment inline">
+                              <b>{c.author ?? 'Someone'}</b> on line {c.line} · {c.created ? ago(c.created, now) : ''}
+                              <Markdown text={c.text} />
+                            </div>
+                          ))}
+                          {diffErr ? (
+                            <p className="error">{diffErr}</p>
+                          ) : !diff ? (
+                            <Empty>Loading diff…</Empty>
+                          ) : !lines ? (
+                            <Empty>{truncated ? 'This PR is too big to show every file here — open it in Bitbucket for this one.' : 'No textual diff for this file (binary or too large).'}</Empty>
+                          ) : (
+                            <pre className="diff pr-diff">
+                              {lines.slice(0, DIFF_LINE_CAP).map((l, n) => (
+                                <span key={n} className={l.startsWith('@@') ? 'hunk' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : 'ctx'}>
+                                  {l || ' '}
+                                  {'\n'}
+                                </span>
+                              ))}
+                              {lines.length > DIFF_LINE_CAP && <span className="hunk">… {lines.length - DIFF_LINE_CAP} more lines — open in Bitbucket</span>}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <h2 className="section-title">
+                Comments <span className="muted">· {general.length}</span>
+              </h2>
+              {general.length === 0 ? (
+                <Empty>No general comments.</Empty>
+              ) : (
+                general.map((c) => (
+                  <div key={c.id} className="pr-box pr-comment">
+                    <b>{c.author ?? 'Someone'}</b> · {c.created ? ago(c.created, now) : ''}
+                    <Markdown text={c.text} />
+                  </div>
+                ))
+              )}
+              <p className="footnote">Read-only for now, through workbench with your own Bitbucket access.</p>
+            </>
+          )}
+        </div>
+      </div>
+    </Frame>
+  );
+}
+
+// What Jira's Development panel says about the ticket's PRs, builds and deploys.
+function DevChips({ dev, onPr, finding }: { dev: JiraDev | null; onPr?: () => void; finding?: boolean }) {
+  if (!dev) return null;
+  const chips: [string, string][] = [];
+  if (dev.prs) {
+    const n = dev.prs.count > 1 ? `${dev.prs.count} PRs` : 'PR';
+    const st = (dev.prs.state ?? '').toLowerCase();
+    chips.push([dev.prs.open ? `${n} open` : `${n} ${st || 'closed'}`, dev.prs.open ? 'run' : st === 'merged' ? 'good' : 'off']);
+  }
+  if (dev.builds) chips.push(dev.builds.failed > 0 ? [`build failed`, 'bad'] : [`build passed`, 'good']);
+  for (const d of dev.deploys) chips.push([`${d.env} ${d.status.toLowerCase().replace(/_/g, ' ')}`, d.status === 'SUCCESSFUL' || d.status === 'DEPLOYED' ? 'good' : 'off']);
+  const title = dev.stale ? "From Jira's Development panel; it may lag a few minutes behind Bitbucket." : "From Jira's Development panel.";
+  return (
+    <>
+      {chips.map(([text, tone], n) =>
+        n === 0 && dev.prs && onPr ? (
+          <button key={text} type="button" className={`dev-chip tone-${tone} dev-chip-link`} title={`Open in legos-factory. ${title}`} disabled={finding} onClick={onPr}>
+            {finding ? 'Finding PR…' : `${text} →`}
+          </button>
+        ) : (
+          <span key={text} className={`dev-chip tone-${tone}`} title={title}>
+            {text}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+// Short on purpose: the run has the Jira tools, so it reads the ticket itself.
+function taskPrompt(i: { key: string; summary: string }, kind: RunKind) {
   return kind === 'task'
-    ? `Work on Jira ticket ${i.key}: ${i.summary}${details}${link}\n\nRead the relevant code, implement the change, and verify it (tests/build). Use the workbench Jira tools if you need more context. Don't transition or comment on the ticket unless I ask. Finish with a short summary of what changed and what's left open.`
-    : `Let's discuss Jira ticket ${i.key}: ${i.summary}${details}${link}\n\nStart by summarising what it asks for, how you'd approach it in this repo, and the open questions.`;
+    ? `Work on Jira ticket ${i.key}: ${i.summary}\nRead the ticket with the Jira tools first. Implement and verify it; don't transition or comment on the ticket.`
+    : `Brief me on Jira ticket ${i.key}: ${i.summary}\nRead the ticket with the Jira tools first, then give me the approach and open questions.`;
 }
 
 function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?: LaunchReq['defaults']) => void }) {
@@ -1960,7 +2156,20 @@ function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?
   const [rows, setRows] = useState<JiraRow[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [opening, setOpening] = useState<string | null>(null);
+  // a ticket's PR lookup: in progress, or what came back when it wasn't exactly one PR
+  const [prFind, setPrFind] = useState<{ key: string; prs?: PrRow[]; searched?: string[]; error?: string } | null>(null);
+  const openPr = async (key: string) => {
+    setPrFind({ key });
+    try {
+      const r = await api.findPrs(key);
+      if (r.prs.length === 1) {
+        setPrFind(null);
+        go(`#/prs/${r.prs[0].repo}/${r.prs[0].id}`);
+      } else setPrFind({ key, ...r });
+    } catch (e: any) {
+      setPrFind({ key, error: e.message });
+    }
+  };
 
   const load = async (more = false) => {
     setError(null);
@@ -1978,20 +2187,11 @@ function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?
     storage('lf:jira-filter', filter);
     void load();
   }, [filter]);
+  // "Work on this" asks for a repo next; start loading the (slow, cached) list now
+  useEffect(() => void api.repos(storage('lf:bb-ws') ?? undefined).catch(() => undefined), []);
 
   // Pull full ticket details so the run starts with real context, not just a title.
-  const start = async (row: JiraRow, kind: RunKind) => {
-    setOpening(`${row.key}:${kind}`);
-    setError(null);
-    try {
-      const issue = await api.jiraIssue(row.key);
-      onNew(kind, { prompt: taskPrompt(issue, kind), ticket: issue.key });
-    } catch (e: any) {
-      setError(`Could not read ${row.key}: ${e.message}`);
-    } finally {
-      setOpening(null);
-    }
-  };
+  const start = (row: JiraRow, kind: RunKind) => onNew(kind, { prompt: taskPrompt(row, kind), ticket: row.key });
 
   const runsFor = (key: string) => [...live.runs.values()].filter((r) => r.ticket === key);
 
@@ -2025,7 +2225,9 @@ function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?
                 <div className="copy">
                   <b title={i.summary}>{i.summary}</b>
                   <span>
-                    <span className={`status-pill tone-${jiraTone(i.status)}`}>{i.status ?? 'Unknown'}</span> {i.priority && `· ${i.priority} `}· updated {ago(i.updated, now)}
+                    <span className={`status-pill jira-status tone-${jiraTone(i.status)}`}>{i.status ?? 'Unknown'}</span>
+                    <DevChips dev={i.dev} onPr={() => openPr(i.key)} finding={prFind?.key === i.key && !prFind.prs && !prFind.error} /> {i.priority && `· ${i.priority} `}· updated{' '}
+                    {ago(i.updated, now)}
                     {linked.length > 0 && (
                       <a className="text-action" href={`#/runs/${(active ?? linked[0]).id}`}>
                         {' '}
@@ -2033,14 +2235,39 @@ function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, defaults?
                       </a>
                     )}
                   </span>
-                </div>
-                <div className="actions">
-                  <button className="btn sm" disabled={!!opening} onClick={() => start(i, 'chat')}>
-                    {opening === `${i.key}:chat` ? 'Opening…' : 'Discuss'}
-                  </button>
-                  <button className="btn sm primary" disabled={!!opening} onClick={() => start(i, 'task')}>
-                    {opening === `${i.key}:task` ? 'Opening…' : 'Work on this'}
-                  </button>
+                  {prFind?.key === i.key && (prFind.prs || prFind.error) && (
+                    <div className="pr-find">
+                      {prFind.error ? (
+                        <span className="error">{prFind.error}</span>
+                      ) : prFind.prs!.length === 0 ? (
+                        <>
+                          <span>
+                            No PR for {i.key} {prFind.searched!.length ? `in ${prFind.searched!.join(', ')}` : 'yet'}. Bitbucket can't search every repo at once — pick the repo to look in:
+                          </span>
+                          <RepoPicker value="" onPick={(r) => (rememberRepo(r.name), openPr(i.key))} />
+                        </>
+                      ) : (
+                        prFind.prs!.map((p) => (
+                          <a key={`${p.repo}#${p.id}`} className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
+                            <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                            <span className="mono">{p.repo} #{p.id}</span>
+                            <span className="ellipsis">{p.title}</span>
+                          </a>
+                        ))
+                      )}
+                      <button type="button" className="text-action" onClick={() => setPrFind(null)}>
+                        close
+                      </button>
+                    </div>
+                  )}
+                  <div className="actions">
+                    <button className="btn sm" onClick={() => start(i, 'chat')}>
+                      Brief
+                    </button>
+                    <button className="btn sm primary" onClick={() => start(i, 'task')}>
+                      Work on this
+                    </button>
+                  </div>
                 </div>
               </div>
             );

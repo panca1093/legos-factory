@@ -264,3 +264,42 @@ describe('RunManager interactive sessions', () => {
     expect(m.get(run.id)).toMatchObject({ status: 'failed', error: 'spawn claude ENOENT' });
   });
 });
+
+describe('RunManager concurrency cap', () => {
+  it('queues runs beyond the cap and starts them, oldest first, as slots free up', async () => {
+    const { fn, calls, prompts } = fakeQuery();
+    const m = new RunManager(fn, 60_000, 2);
+    const a = m.start({ cwd: '/tmp', prompt: 'a' });
+    const b = m.start({ cwd: '/tmp', prompt: 'b' });
+    const c = m.start({ cwd: '/tmp', prompt: 'c', kind: 'task' });
+    const d = m.start({ cwd: '/tmp', prompt: 'd' });
+    expect([a, b, c, d].map((r) => r.status)).toEqual(['starting', 'starting', 'queued', 'queued']);
+    expect(calls).toHaveLength(2); // no process for queued runs
+    const snap = m.snapshot() as Extract<StreamMessage, { type: 'snapshot' }>;
+    expect(snap.runs.map((r) => r.id).sort()).toEqual([a, b, c, d].map((r) => r.id).sort());
+    expect(m.get(c.id)?.status).toBe('queued');
+
+    await until(() => m.get(a.id)!.status === 'idle');
+    await m.end(a.id);
+    // c (a task) takes the freed slot, finishes, and its slot goes to d
+    await until(() => m.get(c.id)!.status === 'completed');
+    await until(() => m.get(d.id)!.status === 'idle');
+    expect(calls).toHaveLength(4);
+    expect(prompts.indexOf('c')).toBeLessThan(prompts.indexOf('d')); // FIFO
+    expect(m.get(d.id)!.events.some((e) => e.kind === 'user' && e.text === 'd')).toBe(true);
+    expect(m.get(b.id)!.status).toBe('idle'); // b kept its slot throughout
+  });
+
+  it('cancelling a queued run removes it without ever starting a process', async () => {
+    const { fn, calls } = fakeQuery();
+    const m = new RunManager(fn, 60_000, 1);
+    const a = m.start({ cwd: '/tmp', prompt: 'a' });
+    const b = m.start({ cwd: '/tmp', prompt: 'b' });
+    expect(await m.end(b.id)).toBe(true);
+    expect(m.get(b.id)).toBeUndefined();
+    await until(() => m.get(a.id)!.status === 'idle');
+    await m.end(a.id);
+    await until(() => m.get(a.id)!.status === 'completed');
+    expect(calls).toHaveLength(1);
+  });
+});
