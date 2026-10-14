@@ -548,13 +548,21 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .tab-count { font-size: 10px; background: var(--field); color: var(--muted); padding: 1px 6px; border-radius: 6px; margin-left: 3px; }
 .segmented button.active .tab-count { background: var(--soft); color: var(--accent); }
 .source-tabs { margin-top: 14px; width: max-content; }
-.jira-row .copy > span { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; white-space: normal; }
-.jira-row { align-items: flex-start; }
-.jira-status { font-size: 11px; padding: 3px 9px; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); }
+/* Jira rows: labels and buttons share one size (28px, 12px text), on a 6/12px spacing rhythm */
+.jira-row { align-items: flex-start; gap: 12px; padding: 16px 0; }
+.jira-row .ticket-chip { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.jira-row .copy b { line-height: 28px; }
+.jira-row .copy > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; white-space: normal; margin-top: 6px; }
+.jira-status { height: 28px; padding: 0 10px; font-size: 12px; font-weight: 700; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
 .jira-status.tone-off { background: var(--field); color: var(--ink); }
 .tone-bad { background: var(--bad-bg); color: var(--bad); }
-.dev-chip { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 7px; font-size: 10.5px; font-weight: 650; white-space: nowrap; }
-.jira-row .actions { display: flex; gap: 6px; margin-top: 10px; }
+.dev-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 7px; font-size: 11px; font-weight: 650; white-space: nowrap; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+.jira-row .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.jira-row .actions .btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.jira-row .dev-chip { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.jira-row .pr-find { margin-top: 12px; }
+.jira-row .row-meta { white-space: nowrap; margin-left: 2px; }
+.jira-row .text-action.row-meta { padding: 0; font-size: 11.5px; }
 
 /* user menu */
 .user-menu { position: relative; }
@@ -609,8 +617,6 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .repo-meta .text-action { padding: 0; font-size: 11px; }
 
 /* pull requests */
-.dev-chip-link { border: 0; cursor: pointer; }
-.dev-chip-link:hover { text-decoration: underline; }
 .pr-find { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); white-space: normal; }
 .pr-find-row { display: flex; align-items: center; gap: 8px; color: var(--ink); min-width: 0; }
 .pr-find-row:hover .ellipsis { color: var(--accent); }
@@ -632,11 +638,44 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .pr-counts .add { color: var(--good); }
 .pr-counts .del { color: var(--bad); }
 .pr-file-body { padding: 0 16px 14px; }
-.pr-diff { max-height: 520px; overflow: auto; font-size: 11.5px; line-height: 1.5; background: var(--field); border-radius: 10px; padding: 10px 12px; margin: 0; }
-.pr-diff .hunk { color: var(--accent); display: block; }
-.pr-diff .ctx { color: var(--ink); display: block; }
+.pr-diff { max-height: 640px; overflow: auto; font-size: 11.5px; line-height: 1.55; background: var(--field); border-radius: 10px; padding: 6px 0; }
+.pr-diff .dl { display: flex; min-width: max-content; }
+.pr-diff .dl code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; padding: 0 12px 0 8px; color: var(--ink); }
+.pr-diff .ln { width: 42px; flex: none; text-align: right; padding-right: 6px; color: var(--faint); user-select: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pr-diff .dl.add { background: color-mix(in srgb, var(--good) 12%, transparent); }
+.pr-diff .dl.add code { color: var(--good); }
+.pr-diff .dl.del { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.pr-diff .dl.del code { color: var(--bad); }
+.pr-diff .dl.hunk { color: var(--accent); padding: 4px 12px; }
+.pr-diff .dl.hunk code, .pr-diff .dl.hunk .ln { color: var(--accent); }
+.pr-diff .pr-comment.inline { margin: 6px 12px 8px 96px; max-width: 720px; }
 .pr-comment { font-size: 12.5px; }
 .pr-comment.inline { border-left: 3px solid var(--accent); background: var(--soft); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
 .pr-comment .md { margin-top: 4px; }
 .more-options summary { cursor: pointer; font-size: 12px; font-weight: 650; color: var(--muted); padding: 2px 0; }
 .more-options[open] summary { margin-bottom: 10px; }
+
+/* Jira rows open their detail: a calm row highlight instead of the title flashing to the accent color */
+.jira-row { cursor: pointer; margin: 0 -12px; padding-left: 12px; padding-right: 12px; border-radius: 12px; transition: background-color 0.15s ease; }
+.jira-row:hover { background: var(--hover); }
+.list-item.jira-row:hover .copy b { color: inherit; }
+.jira-row + .jira-row { border-top-color: var(--line); }
+.jira-row .btn { transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease; }
+
+/* ticket detail */
+.ticket-modal { width: min(680px, 100%); max-height: calc(100dvh - 32px); overflow: auto; }
+.ticket-modal-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ticket-modal-head .ticket-chip, .ticket-modal-head .jira-status, .ticket-modal-head .dev-chip { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.ticket-modal-close { margin-left: auto; }
+.ticket-modal h2 { overflow-wrap: anywhere; }
+.ticket-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 16px; margin: 0; }
+.ticket-facts dt { font-size: 10.5px; font-weight: 750; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.ticket-facts dd { margin: 2px 0 0; font-size: 13px; color: var(--ink); }
+.ticket-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.ticket-desc { border-top: 1px solid var(--line); padding-top: 14px; }
+.ticket-desc-text { overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; color: var(--ink); max-height: 46vh; overflow: auto; }
+/* .dialog p is muted helper text; a ticket's paragraphs are content */
+.dialog .ticket-desc-text p { font-size: 13px; color: var(--ink); }
+.ticket-modal footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.ticket-modal footer .actions { display: flex; gap: 8px; }
+.ticket-modal footer .btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }

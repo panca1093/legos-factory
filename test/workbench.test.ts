@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseJiraDev, salvageDiff, Workbench } from '../server/workbench.ts';
+import { adfToMarkdown, parseJiraDev, salvageDiff, Workbench } from '../server/workbench.ts';
 
 // Shapes as Jira returns the Development field (values trimmed to what the parser reads)
 const MERGED_DEV =
@@ -8,6 +8,54 @@ const REPO_ONLY_DEV =
   '{repository={count=1, dataType=repository}, json={"cachedValue":{"errors":[],"summary":{"repository":{"overall":{"count":1,"dataType":"repository"}}}},"isStale":true}}';
 const OPEN_DEV =
   '{pullrequest={dataType=pullrequest, state=OPEN, stateCount=2}, json={"cachedValue":{"errors":[],"summary":{"pullrequest":{"overall":{"count":2,"stateCount":2,"state":"OPEN","dataType":"pullrequest","open":true}}}},"isStale":false}}';
+
+describe('workbench responses', () => {
+  it('reads a plain JSON answer whose content mentions "data:"', async () => {
+    const http = (async (_u: any, init: any) => {
+      const msg = JSON.parse(init.body);
+      if (msg.method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), { headers: { 'mcp-session-id': 's1' } });
+      if (msg.method === 'notifications/initialized') return new Response('', { status: 202 });
+      const result = { results: [{ result: { id: 668, title: 'x', description: 'response shape `{data: [...]}`\ndata: not a stream line' } }] };
+      return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify(result) }] } });
+    }) as typeof fetch;
+    const wb = new Workbench('https://wb.test/mcp', http);
+    expect(await wb.execute('tok', 'bitbucket_get_pr', {})).toMatchObject({ id: 668, description: expect.stringContaining('{data: [') });
+  });
+});
+
+describe('Jira rich text', () => {
+  const t = (text: string, marks?: object[]) => ({ type: 'text', text, ...(marks && { marks }) });
+  const p = (...content: object[]) => ({ type: 'paragraph', content });
+  const li = (...content: object[]) => ({ type: 'listItem', content });
+  it('turns headings, nested lists, marks and tables into Markdown', () => {
+    const doc = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'emoji', attrs: { text: '🧭' } }, t(' Context')] },
+        p(t('Uses '), t('GET /v1/x', [{ type: 'code' }]), t(' and tag risk.date:<ts> — see '), t('TRD', [{ type: 'link', attrs: { href: 'https://x/trd' } }])),
+        { type: 'bulletList', content: [li(p(t('rejected if:')), { type: 'bulletList', content: [li(p(t('unknown scheme'))), li(p(t('bad date')))] }), li(p(t('stored', [{ type: 'strong' }])))] },
+        { type: 'orderedList', attrs: { order: 3 }, content: [li(p(t('third'))), li(p(t('fourth')))] },
+        { type: 'table', content: [{ type: 'tableRow', content: [{ type: 'tableHeader', content: [p(t('Case'))] }, { type: 'tableHeader', content: [p(t('Result'))] }] }, { type: 'tableRow', content: [{ type: 'tableCell', content: [p(t('dup'))] }, { type: 'tableCell', content: [p(t('no-op'))] }] }] },
+      ],
+    };
+    expect(adfToMarkdown(doc)).toBe(
+      [
+        '## 🧭 Context',
+        'Uses `GET /v1/x` and tag risk.date:\\<ts\\> — see [TRD](https://x/trd)',
+        '- rejected if:\n  - unknown scheme\n  - bad date\n- **stored**',
+        '3. third\n4. fourth',
+        '| Case | Result |\n| --- | --- |\n| dup | no-op |',
+      ].join('\n\n'),
+    );
+  });
+
+  it('gives up on anything that is not an ADF document', () => {
+    expect(adfToMarkdown('plain text')).toBeNull();
+    expect(adfToMarkdown(null)).toBeNull();
+    expect(adfToMarkdown({ type: 'doc', content: [] })).toBeNull();
+  });
+});
 
 describe('cut-off diffs', () => {
   it('keeps the whole lines of a diff whose JSON envelope was cut, and gives up on anything else', () => {
@@ -60,7 +108,7 @@ function fake(opts: { expireOnce?: boolean } = {}) {
         if (want?.includes('customfield_10000')) row.fields = { customfield_10000: MERGED_DEV };
         return new Response(text({ results: [{ result: { issues: [row], nextPageToken: 'n1' } }] }));
       }
-      if (ex.tool === 'jira_get_issue') return new Response(text({ results: [{ result: { key: 'PROJ-1', summary: 'Do it', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'] } }] }));
+      if (ex.tool === 'jira_get_issue') return new Response(text({ results: [{ result: { key: 'PROJ-1', summary: 'Do it', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'], reporter: 'Rae', parent: 'PROJ-0', created: 'c1' } }] }));
       return new Response(text({ results: [{ error: 'NOT_CONNECTED', integration: 'github', message: 'github not connected. Use connect(\'github\') to connect.' }] }));
     }
     return new Response(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { message: 'unknown tool' } }));
@@ -105,7 +153,7 @@ describe('Workbench client', () => {
       nextPageToken: 'n1',
     });
     expect(seen.at(-1)!.args).toEqual({ executions: [{ tool: 'jira_search_issues', args: { jql: 'assignee = currentUser()', maxResults: 20, fields: ['summary', 'status', 'assignee', 'priority', 'updated', 'customfield_10000'] } }] });
-    expect(await wb.jiraIssue('tok', 'PROJ-1')).toMatchObject({ key: 'PROJ-1', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'] });
+    expect(await wb.jiraIssue('tok', 'PROJ-1')).toMatchObject({ key: 'PROJ-1', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'], reporter: 'Rae', parent: 'PROJ-0', created: 'c1' });
   });
 
   it('surfaces per-tool errors and returns the connect URL', async () => {

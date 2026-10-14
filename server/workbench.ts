@@ -72,10 +72,109 @@ export type JiraIssue = JiraIssueRow & {
   issueType: string | null;
   description: string | null;
   labels: string[];
+  reporter: string | null;
+  // parent issue key, e.g. the epic
+  parent: string | null;
+  created: string | null;
   url: string | null;
 };
 
 const PROTOCOL = '2025-06-18';
+
+// Jira's rich text (ADF) → Markdown. The tool's own plain-text description drops headings and lists.
+const escapeMd = (s: string) => s.replace(/[\\`*_[\]<>|]/g, '\\$&');
+
+function adfInline(nodes: any[] = []): string {
+  return nodes
+    .map((n) => {
+      switch (n?.type) {
+        case 'text': {
+          let t = escapeMd(n.text ?? '');
+          for (const m of n.marks ?? []) {
+            if (m.type === 'code') t = '`' + (n.text ?? '').replace(/`/g, "'") + '`';
+            else if (m.type === 'strong') t = `**${t}**`;
+            else if (m.type === 'em') t = `*${t}*`;
+            else if (m.type === 'strike') t = `~~${t}~~`;
+          }
+          const link = (n.marks ?? []).find((m: any) => m.type === 'link')?.attrs?.href;
+          return link ? `[${t}](${link})` : t;
+        }
+        case 'hardBreak':
+          return '  \n';
+        case 'emoji':
+          return n.attrs?.text ?? n.attrs?.shortName ?? '';
+        case 'mention':
+          return escapeMd(n.attrs?.text ?? '');
+        case 'status':
+          return n.attrs?.text ? `\`${n.attrs.text}\`` : '';
+        case 'inlineCard':
+          return n.attrs?.url ? `<${n.attrs.url}>` : '';
+        case 'date':
+          return n.attrs?.timestamp ? new Date(Number(n.attrs.timestamp)).toISOString().slice(0, 10) : '';
+        default:
+          return adfInline(n?.content);
+      }
+    })
+    .join('');
+}
+
+const indent = (text: string, pad: string) => text.replace(/\n(?=.)/g, `\n${pad}`);
+
+function adfBlocks(nodes: any[] = []): string {
+  return nodes
+    .map((n): string => {
+      switch (n?.type) {
+        case 'paragraph':
+          return adfInline(n.content);
+        case 'heading':
+          return `${'#'.repeat(Math.min(Math.max(Number(n.attrs?.level) || 2, 1), 6))} ${adfInline(n.content)}`;
+        case 'bulletList':
+        case 'orderedList': {
+          const start = Number(n.attrs?.order) || 1;
+          return (n.content ?? [])
+            .map((item: any, i: number) => {
+              const marker = n.type === 'bulletList' ? '- ' : `${start + i}. `;
+              // tight list: an item's paragraphs and nested lists sit on consecutive lines
+              const body = (item.content ?? []).map((c: any) => adfBlocks([c])).join('\n');
+              return marker + indent(body, ' '.repeat(marker.length));
+            })
+            .join('\n');
+        }
+        case 'codeBlock':
+          return '```' + (n.attrs?.language ?? '') + '\n' + (n.content ?? []).map((t: any) => t.text ?? '').join('') + '\n```';
+        case 'blockquote':
+        case 'panel':
+          return adfBlocks(n.content)
+            .split('\n')
+            .map((l) => `> ${l}`)
+            .join('\n');
+        case 'rule':
+          return '---';
+        case 'table': {
+          const rows: string[][] = (n.content ?? []).map((r: any) => (r.content ?? []).map((cell: any) => adfBlocks(cell.content).replace(/\n+/g, ' ')));
+          if (!rows.length) return '';
+          const width = Math.max(...rows.map((r) => r.length));
+          const line = (r: string[]) => `| ${Array.from({ length: width }, (_, i) => r[i] ?? '').join(' | ')} |`;
+          return [line(rows[0]), `|${' --- |'.repeat(width)}`, ...rows.slice(1).map(line)].join('\n');
+        }
+        case 'expand':
+        case 'nestedExpand':
+          return [n.attrs?.title ? `**${escapeMd(n.attrs.title)}**` : '', adfBlocks(n.content)].filter(Boolean).join('\n\n');
+        case 'mediaSingle':
+        case 'mediaGroup':
+          return '*[attachment]*';
+        default:
+          return adfBlocks(n?.content);
+      }
+    })
+    .filter((b) => b !== '')
+    .join('\n\n');
+}
+
+export function adfToMarkdown(doc: unknown): string | null {
+  if (!doc || typeof doc !== 'object' || (doc as any).type !== 'doc') return null;
+  return adfBlocks((doc as any).content).trim() || null;
+}
 
 // Recovers the diff text from a cut-off `{"results":[{"result":"…` envelope, ending at the last whole line.
 export function salvageDiff(raw: string): string | null {
@@ -110,8 +209,10 @@ export class Workbench {
     const res = await this.http(this.mcpUrl, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
     const raw = await res.text();
     if (!res.ok) return { res, msg: null };
-    // streamable HTTP may answer as an SSE stream of data: lines
-    const json = raw.includes('data:') ? raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5)).join('') : raw;
+    // Streamable HTTP may answer as an SSE stream of data: lines. Decide by the shape, not by "data:" appearing
+    // somewhere: a plain JSON answer can carry that text (e.g. a PR description).
+    const sse = (res.headers.get('content-type') ?? '').includes('text/event-stream') || /^(event|data|id|:)/.test(raw.trimStart());
+    const json = sse ? raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5)).join('') : raw;
     try {
       return { res, msg: json.trim() ? JSON.parse(json) : null };
     } catch {
@@ -287,7 +388,8 @@ export class Workbench {
   }
 
   async jiraIssue(token: string, issueKey: string): Promise<JiraIssue> {
-    const i = await this.execute(token, 'jira_get_issue', { issueKey });
+    // the raw description (ADF) keeps headings and lists that the tool's plain-text version flattens
+    const i = await this.execute(token, 'jira_get_issue', { issueKey, fields: ['description'] });
     return {
       key: i.key,
       summary: i.summary ?? '',
@@ -297,8 +399,11 @@ export class Workbench {
       updated: i.updated ?? null,
       dev: null,
       issueType: i.issueType ?? null,
-      description: i.description ?? null,
+      description: adfToMarkdown(i.fields?.description) ?? i.description ?? null,
       labels: Array.isArray(i.labels) ? i.labels : [],
+      reporter: i.reporter ?? null,
+      parent: typeof i.parent === 'string' ? i.parent : (i.parent?.key ?? null),
+      created: i.created ?? null,
       url: i.url ?? null,
     };
   }

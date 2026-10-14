@@ -57,6 +57,15 @@ export function recentRepos(): string[] {
   }
 }
 export const rememberRepo = (repo: string) => storage('lf:repos', JSON.stringify([repo, ...recentRepos().filter((r) => r !== repo)].slice(0, 8)));
+export type JiraIssue = JiraRow & {
+  issueType: string | null;
+  description: string | null;
+  labels: string[];
+  reporter: string | null;
+  parent: string | null;
+  created: string | null;
+  url: string | null;
+};
 export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null; dev: JiraDev | null };
 
 export const api = {
@@ -82,6 +91,7 @@ export const api = {
   run: (id: string) => call<Run>(`/api/runs/${id}`),
   models: () => call<ModelOption[]>('/api/models'),
   settings: () => call<Settings & { path: string; error: string | null }>('/api/settings'),
+  jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}&repos=${encodeURIComponent(recentRepos().join(','))}`),
   pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),
   prDiff: (repo: string, id: number) => call<{ diff: string; truncated: boolean }>(`/api/prs/${repo}/${id}/diff`),
