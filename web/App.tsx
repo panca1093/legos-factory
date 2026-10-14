@@ -115,7 +115,10 @@ const CLAIM_FOR_MS = 10 * 60_000;
 // Two separate kinds of user: local ones (name + PIN) and workbench ones.
 function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: () => void }) {
   const names = me?.users ?? [];
-  const [creating, setCreating] = useState(names.length === 0);
+  // sign-in first; only straight to create when there's nothing to sign in with
+  const canSignIn = names.length > 0 || !!me?.workbenchLogin;
+  const [creating, setCreating] = useState(!canSignIn);
+  const [flip, setFlip] = useState<'out' | 'in' | null>(null);
   const [name, setName] = useState(names[0] ?? '');
   const [pin, setPin] = useState('');
   const [pin2, setPin2] = useState('');
@@ -134,6 +137,18 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
     setPin('');
     setPin2('');
     setErr(null);
+    setShakes(0);
+  };
+  // half-turn out, swap the face, half-turn back in; reduced motion fires no animationend, so swap at once
+  const turn = () => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return mode(!creating);
+    setShakes(0);
+    setFlip('out');
+  };
+  const onCardAnimationEnd = (e: React.AnimationEvent) => {
+    if (e.target !== e.currentTarget || e.animationName !== 'flip-out') return;
+    mode(!creating);
+    setFlip('in');
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,8 +203,9 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
         ))}
       </div>
       <form
-        className={`signin-card${shakes ? ` shake-${shakes % 2}` : ''}${leaving ? ' leaving' : ''}${busy ? ' busy' : ''}`}
+        className={`signin-card${flip ? ` flip-${flip}` : ''}${shakes ? ` shake-${shakes % 2}` : ''}${leaving ? ' leaving' : ''}${busy ? ' busy' : ''}`}
         onSubmit={submit}
+        onAnimationEnd={onCardAnimationEnd}
       >
         <div className="signin-logo" aria-hidden="true">
           <span className="brick b3" />
@@ -200,7 +216,7 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
           legos<span> / factory</span>
         </h1>
         <p className="lead" key={creating ? 'c' : 'u'}>
-          {creating ? 'Create a local user on this machine.' : 'Mission control for your coding agents.'}
+          {creating ? 'Create a local user on this machine.' : 'Sign in to mission control for your coding agents.'}
         </p>
         {error ? (
           <button type="button" className="btn primary signin-btn" onClick={onDone}>
@@ -215,49 +231,54 @@ function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: 
             </span>
             <p className="signin-note">Finish signing in to workbench in the window that opened. This page continues on its own.</p>
           </div>
-        ) : (
-          <div className="signin-body" key={creating ? 'create' : 'unlock'}>
+        ) : creating ? (
+          <div className="signin-body" key="create">
             <label className="field signin-field">
-              {creating ? 'Your name' : 'User'}
-              {creating ? (
-                <input className="input" autoFocus value={name} maxLength={64} autoComplete="name" onChange={(e) => setName(e.target.value)} />
-              ) : (
-                <select className="input" value={name} onChange={(e) => setName(e.target.value)}>
-                  {names.map((n) => (
-                    <option key={n}>{n}</option>
-                  ))}
-                </select>
-              )}
+              Your name
+              <input className="input" autoFocus value={name} maxLength={64} autoComplete="name" onChange={(e) => setName(e.target.value)} />
             </label>
-            <PinField
-              label={creating ? 'Choose a 6-digit PIN' : 'PIN'}
-              value={pin}
-              autoComplete={creating ? 'new-password' : 'current-password'}
-              autoFocus={!creating}
-              onChange={(v) => setPin(digits(v))}
-            />
-            {creating && <PinField label="Repeat PIN" value={pin2} autoComplete="new-password" onChange={(v) => setPin2(digits(v))} />}
+            <PinField label="Choose a 6-digit PIN" value={pin} autoComplete="new-password" onChange={(v) => setPin(digits(v))} />
+            <PinField label="Repeat PIN" value={pin2} autoComplete="new-password" onChange={(v) => setPin2(digits(v))} />
             <button className="btn primary signin-btn" disabled={!ready || busy}>
-              {busy ? 'Checking…' : creating ? 'Create user' : 'Unlock'}
+              {busy ? 'Checking…' : 'Create user'}
             </button>
-            {(names.length > 0 || !creating) && (
-              <button type="button" className="btn ghost signin-switch" onClick={() => mode(!creating)}>
-                {creating ? 'I already have a user' : 'Create a new user'}
+            {canSignIn && (
+              <button type="button" className="btn ghost signin-switch" onClick={turn}>
+                Back to sign in
               </button>
+            )}
+            <p className="signin-note">Local users stay on this machine and can still connect workbench or other MCP servers in Settings.</p>
+          </div>
+        ) : (
+          <div className="signin-body" key="unlock">
+            {names.length > 0 && (
+              <>
+                <label className="field signin-field">
+                  User
+                  <select className="input" value={name} onChange={(e) => setName(e.target.value)}>
+                    {names.map((n) => (
+                      <option key={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <PinField label="PIN" value={pin} autoComplete="current-password" autoFocus onChange={(v) => setPin(digits(v))} />
+                <button className="btn primary signin-btn" disabled={!ready || busy}>
+                  {busy ? 'Checking…' : 'Unlock'}
+                </button>
+              </>
             )}
             {me?.workbenchLogin && (
               <>
-                <div className="signin-or">or</div>
-                <button type="button" className="btn signin-btn" onClick={workbench}>
+                {names.length > 0 && <div className="signin-or">or</div>}
+                <button type="button" className={`btn signin-btn${names.length ? '' : ' primary'}`} onClick={workbench}>
                   Sign in with workbench
                 </button>
               </>
             )}
-            <p className="signin-note">
-              {creating
-                ? 'Local users stay on this machine and can still connect workbench or other MCP servers in Settings.'
-                : 'Each user sees only their own sessions and connections.'}
-            </p>
+            <button type="button" className="btn ghost signin-switch" onClick={turn}>
+              Create a new user
+            </button>
+            <p className="signin-note">Each user sees only their own sessions and connections.</p>
           </div>
         )}
         {(err || error) && (

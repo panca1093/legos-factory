@@ -541,6 +541,10 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 /* sign in: a small brick factory — bricks stack into the logo while more roll by on the belt */
 .signin { position: relative; overflow: hidden; min-height: 100dvh; display: grid; place-items: center; padding: 16px; background: radial-gradient(60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%), var(--bg); }
 .signin-card { position: relative; z-index: 1; width: min(400px, 100%); background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); padding: 32px 28px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; animation: card-in var(--motion-slow) var(--ease) both; }
+/* switching sign in <-> create turns the card over: out to edge-on, swap the face, back in */
+.signin-card.flip-out { animation: flip-out var(--motion) cubic-bezier(0.5, 0, 1, 0.6) both; }
+.signin-card.flip-in { animation: flip-in var(--motion-slow) var(--ease) both; }
+.signin-card.flip-in :is(h1, .lead, .signin-body > *) { animation: none; }
 /* two identical names so every new error restarts the shake without replaying card-in */
 .signin-card.shake-0 { animation: shake-0 360ms var(--ease); }
 .signin-card.shake-1 { animation: shake-1 360ms var(--ease); }
@@ -604,6 +608,8 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .signin-dots i:nth-child(3) { animation-delay: 300ms; }
 
 @keyframes card-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } }
+@keyframes flip-out { to { transform: perspective(1100px) rotateY(90deg); } }
+@keyframes flip-in { from { transform: perspective(1100px) rotateY(-90deg); } to { transform: perspective(1100px) rotateY(0); } }
 @keyframes card-out { to { opacity: 0; transform: translateY(-10px) scale(0.97); } }
 @keyframes shake-0 { 20%, 60% { transform: translateX(-7px); } 40%, 80% { transform: translateX(7px); } }
 @keyframes shake-1 { 20%, 60% { transform: translateX(-7px); } 40%, 80% { transform: translateX(7px); } }
