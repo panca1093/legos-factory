@@ -19,6 +19,8 @@ export type StartRequest = {
   share?: ShareLevel;
   // extra MCP servers for this run only (the Settings connections, via the local proxy)
   mcp?: Record<string, { url: string; headers: Record<string, string> }>;
+  // looks but never touches: every permission request (edits, shell) is denied without asking
+  readOnly?: boolean;
 };
 
 // 'default' = whatever the user's Claude Code settings pick
@@ -66,6 +68,7 @@ export const ALIVE: Run['status'][] = ['queued', 'starting', 'running', 'awaitin
 const WORKING: Run['status'][] = ['starting', 'running', 'awaiting_decision'];
 const MAX_EVENTS = 2000;
 const END_GRACE_MS = 10_000;
+const READ_ONLY: CanUseTool = async () => ({ behavior: 'deny', message: 'This run is read-only: describe the change instead of making it.' });
 
 export class RunManager extends EventEmitter {
   private live = new Map<string, Live>();
@@ -177,7 +180,7 @@ export class RunManager extends EventEmitter {
         model: sdkModel(req.model),
         ...(req.mcp && { mcpServers: Object.fromEntries(Object.entries(req.mcp).map(([name, m]) => [name, { type: 'http' as const, ...m }])) }),
         abortController: abort,
-        canUseTool: this.canUseTool(run),
+        canUseTool: req.readOnly ? READ_ONLY : this.canUseTool(run),
       },
     });
     const live: Live = {

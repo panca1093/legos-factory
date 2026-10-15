@@ -7,7 +7,7 @@ export const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).
 
 // Fake workbench (its own authorization server) plus a generic MCP server that delegates auth to it.
 // `exec` answers workbench execute_tools calls (one execution per call, like the app makes).
-export function fakeServers(opts: { expiresIn?: number; exec?: (tool: string, args: any) => unknown } = {}) {
+export function fakeServers(opts: { expiresIn?: number; exec?: (tool: string, args: any) => unknown; whoami?: object } = {}) {
   const calls: { url: string; body?: string; auth: string | null; headers: Headers }[] = [];
   let n = 0;
   let lastChallenge = '';
@@ -37,7 +37,7 @@ export function fakeServers(opts: { expiresIn?: number; exec?: (tool: string, ar
         return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text }] } }, { headers: { 'mcp-session-id': 'm1' } });
       }
       if (msg.method === 'tools/call' && msg.params?.name === 'whoami')
-        return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify({ id: 'u1', email: 'who@acme.test' }) }] } });
+        return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify(opts.whoami ?? { id: 'u1', email: 'who@acme.test' }) }] } });
       return new Response(JSON.stringify({ seen: headers.get('authorization'), key: headers.get('x-api-key') }), {
         headers: { 'content-type': 'application/json', 'mcp-session-id': 'm1' },
       });

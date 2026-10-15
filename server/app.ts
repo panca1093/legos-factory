@@ -13,7 +13,8 @@ import { PIN_RE, type Users } from './users.ts';
 import type { RunManager } from './claude-runs.ts';
 import { Connections, type Pending } from './connections.ts';
 import { openDb } from './db.ts';
-import { Workbench } from './workbench.ts';
+import { FixQueues } from './pr-fixes.ts';
+import { Workbench, type Pr, type PrRow } from './workbench.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, removeWorkspace, workspacePath, workspacesDir } from './workspace.ts';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -76,6 +77,25 @@ const errStatus = (err: unknown) => {
   return (s && s >= 400 && s < 500 ? s : 502) as 400 | 404 | 409 | 502;
 };
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const NO_WB = 'connect a workbench in Settings first';
+// Review requests scan this many recently updated open PRs (each costs a get_pr and a comments call)
+const REVIEW_SCAN = 30;
+const REVIEW_TTL_MS = 5 * 60_000;
+
+// Runs fn over items, at most `limit` at a time, keeping order.
+async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  }));
+  return out;
+}
+
+export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
 
 export function createApp(runs: RunManager, opts: AppOptions = {}) {
   const app = new Hono<Env>();
@@ -112,6 +132,23 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     return snap.type === 'snapshot' ? snap.decisions.find((d) => d.id === id) : undefined;
   };
   const ownsRun = (uid: string, runId: string) => runs.get(runId)?.owner === uid;
+  const fixes = new FixQueues(runs, {
+    prepare: async (q) => {
+      const repo = parseRepo(q.repo)!;
+      const path = workspacePath(wsRoot, q.owner, repo, `pr-${q.prId}`);
+      if (busyIn(path)) throw new Error(`a run is already working in ${path.split('/').pop()}`);
+      return createWorkspace({ path, repo, branch: q.branch, urlTemplate: opts.gitUrl });
+    },
+    cleanup: async (_q, cwd) => {
+      if (!busyIn(cwd)) await removeWorkspace(wsRoot, cwd);
+    },
+    reply: async (q, item, text) => {
+      const wb = await workbench(q.owner);
+      if (!wb) throw new Error(NO_WB);
+      const repo = parseRepo(q.repo)!;
+      await wb.client.bitbucketAddComment(wb.token, repo.workspace, repo.slug, q.prId, text, item.path && item.line ? { path: item.path, line: item.line } : undefined);
+    },
+  });
   runs.on('message', (m: StreamMessage) => {
     if (m.type !== 'run') return;
     if (m.run.endedAt) for (const [k, runId] of grants) if (runId === m.run.id) grants.delete(k);
@@ -426,7 +463,6 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   const wbError = (c: any, err: unknown) => c.json({ error: errMsg(err) }, 502);
-  const NO_WB = 'connect a workbench in Settings first';
 
   // PRs for a ticket: its key in the source branch or title, looked up in the repos it was worked in
   // (from runs here) plus the ones the client remembers. The forge API can't search across repos.
@@ -484,6 +520,133 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     if (!wb) return c.json({ error: NO_WB }, 409);
     try {
       return c.json(await wb.client.bitbucketPrDiff(wb.token, ref.workspace, ref.slug, ref.id));
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
+
+  // Reply to a review comment, or post a general one. A reply lands on the same line, quoting the original.
+  app.post('/api/prs/:ws/:slug/:id/comments', async (c) => {
+    const ref = prRef(c);
+    if (!ref) return c.json({ error: 'invalid pull request' }, 400);
+    const body = await c.req.json().catch(() => null);
+    const text = str(body?.text);
+    if (!text || text.length > 10_000) return c.json({ error: 'text is required (at most 10,000 characters)' }, 400);
+    const replyTo = body?.replyTo === undefined || body?.replyTo === null ? null : Number(body.replyTo);
+    if (replyTo !== null && !Number.isInteger(replyTo)) return c.json({ error: 'invalid replyTo' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    try {
+      let inline: { path: string; line: number } | undefined;
+      let full = text;
+      if (replyTo !== null) {
+        const parent = (await wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id)).find((x) => x.id === replyTo);
+        if (!parent) return c.json({ error: 'comment not found' }, 404);
+        if (parent.path && parent.line) inline = { path: parent.path, line: parent.line };
+        const quoted = parent.text.split('\n').slice(0, 4).map((l) => `> ${l}`).join('\n');
+        full = `${parent.author ? `> **${parent.author}:**\n` : ''}${quoted}\n\n${text}`;
+      }
+      return c.json(await wb.client.bitbucketAddComment(wb.token, ref.workspace, ref.slug, ref.id, full, inline), 201);
+    } catch (err) {
+      return wbError(c, err);
+    }
+  });
+
+  // Ask factory: work through the chosen comments one at a time (see pr-fixes.ts)
+  app.get('/api/prs/:ws/:slug/:id/fixes', (c) => {
+    const ref = prRef(c);
+    if (!ref) return c.json({ error: 'invalid pull request' }, 400);
+    return c.json({ queue: fixes.forPr(c.get('uid'), `${ref.workspace}/${ref.slug}`, ref.id) });
+  });
+
+  app.post('/api/prs/:ws/:slug/:id/fixes', async (c) => {
+    const ref = prRef(c);
+    if (!ref) return c.json({ error: 'invalid pull request' }, 400);
+    const ids = (await c.req.json().catch(() => null))?.commentIds;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 50 || !ids.every(Number.isInteger)) return c.json({ error: 'commentIds must list 1–50 comment ids' }, 400);
+    const wb = await workbench(c.get('uid'));
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    try {
+      const [pr, comments] = await Promise.all([
+        wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
+        wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
+      ]);
+      if (pr.state !== 'OPEN') return c.json({ error: 'only an open PR can take fixes' }, 409);
+      if (!BRANCH_RE.test(pr.source)) return c.json({ error: 'the PR branch name is not usable' }, 409);
+      const picked = [...new Set(ids as number[])].map((id) => comments.find((x) => x.id === id));
+      if (picked.some((x) => !x)) return c.json({ error: 'comment not found' }, 404);
+      const settings = await loadSettings();
+      const queue = fixes.create({
+        owner: c.get('uid'),
+        repo: `${ref.workspace}/${ref.slug}`,
+        prId: ref.id,
+        branch: pr.source,
+        ticket: detectTicket(pr.source, settings.ticketKeys) ?? detectTicket(pr.title, settings.ticketKeys),
+        comments: picked.map((x) => ({ commentId: x!.id, author: x!.author, text: x!.text, path: x!.path, line: x!.line })),
+      });
+      return c.json(queue, 201);
+    } catch (err) {
+      return (err as { status?: number })?.status === 409 ? c.json({ error: errMsg(err) }, 409) : wbError(c, err);
+    }
+  });
+
+  const myQueue = (c: any) => {
+    const q = fixes.get(c.req.param('id'));
+    return q && q.owner === c.get('uid') ? q : null;
+  };
+  for (const action of ['approve', 'skip', 'retry'] as const) {
+    app.post(`/api/fixes/:id/items/:cid/${action}`, async (c) => {
+      const q = myQueue(c);
+      if (!q) return c.json({ error: 'fix queue not found' }, 404);
+      const cid = Number(c.req.param('cid'));
+      const note = str((await c.req.json().catch(() => null))?.note);
+      const ok = action === 'approve' ? fixes.approve(q.id, cid, note) : action === 'skip' ? fixes.skip(q.id, cid) : fixes.retry(q.id, cid);
+      return ok ? c.json(q) : c.json({ error: `that comment can't be ${action === 'approve' ? 'approved' : action === 'skip' ? 'skipped' : 'retried'} now` }, 409);
+    });
+  }
+
+  app.post('/api/fixes/:id/cancel', async (c) => {
+    const q = myQueue(c);
+    if (!q) return c.json({ error: 'fix queue not found' }, 404);
+    return (await fixes.cancel(q.id)) ? c.json(q) : c.json({ error: 'the queue has already finished' }, 409);
+  });
+
+  // Open PRs that want you: you're a reviewer, or someone @-mentioned you in a comment. The forge can't search
+  // for that, so scan the latest open PRs of the repos you work in. Matching is by your workbench display name.
+  const reviewCache = new Map<string, { at: number; body: object }>();
+  app.get('/api/reviews', async (c) => {
+    const uid = c.get('uid');
+    const wb = await workbench(uid);
+    if (!wb) return c.json({ error: NO_WB }, 409);
+    const fromRuns = (await activity.list(uid, Date.now() - 30 * 86_400_000)).map((i) => i.repo).filter((r): r is string => !!r);
+    const asked = str(c.req.query('repos')).split(',').filter(Boolean);
+    const repos = [...new Set([...asked, ...fromRuns])].map(parseRepo).filter((r) => r !== null).slice(0, 10);
+    const key = `${uid}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
+    const hit = reviewCache.get(key);
+    if (hit && Date.now() - hit.at < REVIEW_TTL_MS && c.req.query('refresh') !== '1') return c.json(hit.body);
+    try {
+      const me = await wb.client.whoami(wb.token);
+      const name = (me?.name ?? '').trim();
+      if (!name) return c.json({ error: 'workbench did not say who you are, so review requests cannot be matched' }, 502);
+      const same = (a: string | null) => (a ?? '').trim().toLowerCase() === name.toLowerCase();
+      const mention = new RegExp(`@\\{?${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')}`, 'i');
+      const open = (await Promise.all(repos.map((r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50))))
+        .flat()
+        .filter((p) => !same(p.author))
+        .sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''))
+        .slice(0, REVIEW_SCAN);
+      const rows = await pool(open, 6, async (p): Promise<ReviewRequest | null> => {
+        const [ws, slug] = p.repo.split('/');
+        const [pr, comments] = await Promise.all([wb.client.bitbucketPr(wb.token, ws, slug, p.id), wb.client.bitbucketPrComments(wb.token, ws, slug, p.id)]);
+        const mine = pr.reviewers.find((r) => same(r.name));
+        const why: ReviewRequest['why'] = [];
+        if (mine) why.push('reviewer');
+        if (comments.some((x) => !same(x.author) && mention.test(x.text))) why.push('mentioned');
+        return why.length ? { ...p, reviewers: pr.reviewers, approvedByMe: mine?.approved === true, why, comments: comments.length, url: pr.url } : null;
+      });
+      const body = { me: name, items: rows.filter((r) => r !== null), searched: repos.map((r) => `${r.workspace}/${r.slug}`), scanned: open.length, at: new Date().toISOString() };
+      reviewCache.set(key, { at: Date.now(), body });
+      return c.json(body);
     } catch (err) {
       return wbError(c, err);
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -46,6 +46,8 @@ export type PrRow = { repo: string; id: number; title: string; state: string; au
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; approved: boolean }[]; comments: number; tasks: number; created: string | null };
 export type PrFile = { status: string; path: string; oldPath: string | null; added: number; removed: number };
 export type PrComment = { id: number; author: string | null; text: string; path: string | null; line: number | null; created: string | null };
+export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
+export type { FixQueue };
 
 // Repos picked in New task, newest first; also where to look for a ticket's PRs.
 export function recentRepos(): string[] {
@@ -95,6 +97,17 @@ export const api = {
   findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}&repos=${encodeURIComponent(recentRepos().join(','))}`),
   pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),
   prDiff: (repo: string, id: number) => call<{ diff: string; truncated: boolean }>(`/api/prs/${repo}/${id}/diff`),
+  comment: (repo: string, id: number, text: string, replyTo?: number) =>
+    call<{ id: number }>(`/api/prs/${repo}/${id}/comments`, { method: 'POST', body: JSON.stringify({ text, replyTo }) }),
+  fixQueue: (repo: string, id: number) => call<{ queue: FixQueue | null }>(`/api/prs/${repo}/${id}/fixes`),
+  startFixes: (repo: string, id: number, commentIds: number[]) => call<FixQueue>(`/api/prs/${repo}/${id}/fixes`, { method: 'POST', body: JSON.stringify({ commentIds }) }),
+  fixAction: (queue: string, commentId: number, action: 'approve' | 'skip' | 'retry', note?: string) =>
+    call<FixQueue>(`/api/fixes/${queue}/items/${commentId}/${action}`, { method: 'POST', body: JSON.stringify({ note }) }),
+  cancelFixes: (queue: string) => call<FixQueue>(`/api/fixes/${queue}/cancel`, { method: 'POST' }),
+  reviews: (refresh = false) =>
+    call<{ me: string; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
+      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}${refresh ? '&refresh=1' : ''}`,
+    ),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),
