@@ -79,7 +79,9 @@ const errStatus = (err: unknown) => {
 const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const NO_WB = 'connect a workbench in Settings first';
 // Review requests scan this many recently updated open PRs (each costs a get_pr and a comments call)
-const REVIEW_SCAN = 30;
+const REVIEW_SCAN = 40;
+// plus this many of the workspace's most recently updated repos, where teammates' PRs live
+const REVIEW_REPOS = 15;
 const REVIEW_TTL_MS = 5 * 60_000;
 
 // Runs fn over items, at most `limit` at a time, keeping order.
@@ -93,6 +95,16 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
     }
   }));
   return out;
+}
+
+// workbench's whoami has no display name; "jane.doe+x@acme.com" -> "Jane Doe", which is usually the Bitbucket name
+export function nameFromEmail(email: string | null | undefined): string {
+  const local = (email ?? '').split('@')[0].split('+')[0];
+  return local
+    .split(/[._-]+/)
+    .filter((w) => w && !/^\d+$/.test(w))
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
 }
 
 export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
@@ -525,6 +537,26 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     }
   });
 
+  // listing a big workspace takes several calls; repos change rarely
+  type Repos = Awaited<ReturnType<Workbench['bitbucketRepos']>>;
+  const repoCache = new Map<string, { at: number; repos: Repos }>();
+  // the UI warms this in the background, so a dialog opened meanwhile joins the same load
+  const repoLoads = new Map<string, Promise<Repos>>();
+  const workspaceRepos = (uid: string, wb: NonNullable<Awaited<ReturnType<typeof workbench>>>, workspace: string, refresh = false): Promise<Repos> => {
+    const key = `${uid}:${workspace}`;
+    const hit = repoCache.get(key);
+    if (hit && Date.now() - hit.at < 3600_000 && !refresh) return Promise.resolve(hit.repos);
+    let load = repoLoads.get(key);
+    if (!load) {
+      load = wb.client
+        .bitbucketRepos(wb.token, workspace)
+        .then((repos) => (repoCache.set(key, { at: Date.now(), repos }), repos))
+        .finally(() => repoLoads.delete(key));
+      repoLoads.set(key, load);
+    }
+    return load;
+  };
+
   // Reply to a review comment, or post a general one. A reply lands on the same line, quoting the original.
   app.post('/api/prs/:ws/:slug/:id/comments', async (c) => {
     const ref = prRef(c);
@@ -612,7 +644,8 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   });
 
   // Open PRs that want you: you're a reviewer, or someone @-mentioned you in a comment. The forge can't search
-  // for that, so scan the latest open PRs of the repos you work in. Matching is by your workbench display name.
+  // for that, so scan the latest open PRs of the repos you work in and the workspace's most active ones. You are
+  // matched by Bitbucket user id when your name resolves to one, else by display name.
   const reviewCache = new Map<string, { at: number; body: object }>();
   app.get('/api/reviews', async (c) => {
     const uid = c.get('uid');
@@ -620,15 +653,29 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     if (!wb) return c.json({ error: NO_WB }, 409);
     const fromRuns = (await activity.list(uid, Date.now() - 30 * 86_400_000)).map((i) => i.repo).filter((r): r is string => !!r);
     const asked = str(c.req.query('repos')).split(',').filter(Boolean);
-    const repos = [...new Set([...asked, ...fromRuns])].map(parseRepo).filter((r) => r !== null).slice(0, 10);
-    const key = `${uid}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
+    const ws = str(c.req.query('workspace')) || opts.bitbucketWorkspace || '';
+    const as = str(c.req.query('as')).slice(0, 100);
+    const key = `${uid}|${as}|${ws}|${[...asked, ...fromRuns].join(',')}`;
     const hit = reviewCache.get(key);
     if (hit && Date.now() - hit.at < REVIEW_TTL_MS && c.req.query('refresh') !== '1') return c.json(hit.body);
     try {
-      const me = await wb.client.whoami(wb.token);
-      const name = (me?.name ?? '').trim();
-      if (!name) return c.json({ error: 'workbench did not say who you are, so review requests cannot be matched' }, 502);
-      const same = (a: string | null) => (a ?? '').trim().toLowerCase() === name.toLowerCase();
+      const active = /^[\w.-]{1,100}$/.test(ws) ? await workspaceRepos(uid, wb, ws).then((r) => r.slice(0, REVIEW_REPOS).map((x) => x.name), () => []) : [];
+      // the forge's full names keep their case ("Acme/api"); the same repo may also come in lowercase
+      const seen = new Set<string>();
+      const repos = [...asked, ...fromRuns, ...active]
+        .map(parseRepo)
+        .filter((r) => r !== null)
+        .filter((r) => !seen.has(`${r.workspace}/${r.slug}`.toLowerCase()) && !!seen.add(`${r.workspace}/${r.slug}`.toLowerCase()))
+        .slice(0, 25);
+      const me = as ? null : await wb.client.whoami(wb.token);
+      const name = as || (me?.name ?? '').trim() || nameFromEmail(me?.email);
+      if (!name) return c.json({ error: 'set your Bitbucket name to match review requests', needName: true }, 400);
+      const norm = (x: string | null) => (x ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+      const same = (a: string | null) => norm(a) === norm(name);
+      const userWs = ws || repos[0]?.workspace;
+      const uuid = userWs ? ((await wb.client.bitbucketSearchUsers(wb.token, userWs, name).catch(() => [])).find((u) => same(u.name))?.uuid ?? null) : null;
+      const isMe = (r: { name: string; uuid: string | null }) => (uuid && r.uuid ? r.uuid === uuid : same(r.name));
+      const bareUuid = uuid?.replace(/[{}]/g, '');
       const mention = new RegExp(`@\\{?${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')}`, 'i');
       const open = (await Promise.all(repos.map((r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50))))
         .flat()
@@ -638,13 +685,13 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
       const rows = await pool(open, 6, async (p): Promise<ReviewRequest | null> => {
         const [ws, slug] = p.repo.split('/');
         const [pr, comments] = await Promise.all([wb.client.bitbucketPr(wb.token, ws, slug, p.id), wb.client.bitbucketPrComments(wb.token, ws, slug, p.id)]);
-        const mine = pr.reviewers.find((r) => same(r.name));
+        const mine = pr.reviewers.find(isMe);
         const why: ReviewRequest['why'] = [];
         if (mine) why.push('reviewer');
-        if (comments.some((x) => !same(x.author) && mention.test(x.text))) why.push('mentioned');
+        if (comments.some((x) => !same(x.author) && (mention.test(x.text) || (!!bareUuid && x.text.includes(bareUuid))))) why.push('mentioned');
         return why.length ? { ...p, reviewers: pr.reviewers, approvedByMe: mine?.approved === true, why, comments: comments.length, url: pr.url } : null;
       });
-      const body = { me: name, items: rows.filter((r) => r !== null), searched: repos.map((r) => `${r.workspace}/${r.slug}`), scanned: open.length, at: new Date().toISOString() };
+      const body = { me: name, matchedById: !!uuid, workspace: ws || null, items: rows.filter((r) => r !== null), searched: repos.map((r) => `${r.workspace}/${r.slug}`), scanned: open.length, at: new Date().toISOString() };
       reviewCache.set(key, { at: Date.now(), body });
       return c.json(body);
     } catch (err) {
@@ -652,29 +699,14 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     }
   });
 
-  // listing a big workspace takes several calls; repos change rarely
-  type Repos = Awaited<ReturnType<Workbench['bitbucketRepos']>>;
-  const repoCache = new Map<string, { at: number; repos: Repos }>();
-  // the UI warms this in the background, so a dialog opened meanwhile joins the same load
-  const repoLoads = new Map<string, Promise<Repos>>();
   app.get('/api/repos', async (c) => {
     const workspace = str(c.req.query('workspace')) || opts.bitbucketWorkspace || '';
     if (!workspace) return c.json({ error: 'workspace is required', needWorkspace: true }, 400);
     if (!/^[\w.-]{1,100}$/.test(workspace)) return c.json({ error: 'invalid workspace' }, 400);
     const wb = await workbench(c.get('uid'));
     if (!wb) return c.json({ error: NO_WB }, 409);
-    const key = `${c.get('uid')}:${workspace}`;
-    const hit = repoCache.get(key);
-    if (hit && Date.now() - hit.at < 3600_000 && c.req.query('refresh') !== '1') return c.json({ workspace, repos: hit.repos });
-    let load = repoLoads.get(key);
-    if (!load) {
-      load = wb.client.bitbucketRepos(wb.token, workspace).finally(() => repoLoads.delete(key));
-      repoLoads.set(key, load);
-    }
     try {
-      const repos = await load;
-      repoCache.set(key, { at: Date.now(), repos });
-      return c.json({ workspace, repos });
+      return c.json({ workspace, repos: await workspaceRepos(c.get('uid'), wb, workspace, c.req.query('refresh') === '1') });
     } catch (err) {
       return wbError(c, err);
     }

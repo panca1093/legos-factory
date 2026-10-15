@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ActivityLog } from '../server/activity.ts';
-import { createApp } from '../server/app.ts';
+import { createApp, nameFromEmail } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import type { Run } from '../shared/types.ts';
@@ -16,18 +16,20 @@ const PRS: Record<string, any[]> = {
   'acme/web:OPEN': [{ id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', updated_on: '2026-10-01' }],
 };
 
-function setup(opts: { bitbucketWorkspace?: string } = {}) {
+function setup(opts: { bitbucketWorkspace?: string; whoami?: object } = {}) {
   const calls: { tool: string; args: any }[] = [];
   const srv = fakeServers({
-    whoami: { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
+    whoami: opts.whoami ?? { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
     exec: (tool, args) => {
       calls.push({ tool, args });
       if (tool === 'bitbucket_list_repos')
         return { repos: args.page === 1 ? [{ slug: 'api', full_name: `${args.workspace}/api`, mainbranch: 'main', updated_on: '2026-10-01' }] : [], hasMore: false };
       if (tool === 'bitbucket_list_prs') return { prs: PRS[`${args.workspace}/${args.repoSlug}:${args.state}`] ?? [], hasMore: false };
       if (tool === 'bitbucket_add_pr_comment') return { id: 99, created_on: '2026-10-05' };
+      if (tool === 'bitbucket_search_users')
+        return { users: args.query === 'Bob Stone' ? [{ display_name: 'Bob Stone', uuid: '{b-1}' }, { display_name: 'Bob Stoneman', uuid: '{b-2}' }] : [], hasMore: false };
       if (tool === 'bitbucket_get_pr' && args.workspace === 'acme' && args.repoSlug === 'web')
-        return { id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', reviewers: [{ display_name: 'Bob Stone', approved: false }], url: 'https://forge/pr/4' };
+        return { id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', reviewers: [{ display_name: 'Robert S.', uuid: '{b-1}', approved: false }], url: 'https://forge/pr/4' };
       if (tool === 'bitbucket_get_pr')
         return { id: 12, title: 'feat: PROJ-7 add export', description: 'adds **export**', state: 'OPEN', author: 'Ada', source: 'feat/PROJ-7', destination: 'main', reviewers: [{ display_name: 'Bob', approved: true }], comment_count: 1, task_count: 0, url: 'https://forge/pr/12' };
       if (tool === 'bitbucket_get_pr_diff')
@@ -47,7 +49,7 @@ function setup(opts: { bitbucketWorkspace?: string } = {}) {
   });
   const db = openDb(':memory:');
   // no such forge: fix queues fail at the clone, which is all these tests need
-  const app = createApp(new RunManager(alive), { db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: 'file:///nonexistent/{workspace}/{slug}.git', ...opts });
+  const app = createApp(new RunManager(alive), { db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: 'file:///nonexistent/{workspace}/{slug}.git', bitbucketWorkspace: opts.bitbucketWorkspace });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
   const post = (p: string, body: unknown = {}) => req(p, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } });
   const connectWorkbench = async () => {
@@ -151,7 +153,9 @@ describe('pull requests', () => {
       ['acme/api#13', ['mentioned']],
       ['acme/web#4', ['reviewer']],
     ]);
-    expect(res.items[1]).toMatchObject({ approvedByMe: false, reviewers: [{ name: 'Bob Stone', approved: false }], url: 'https://forge/pr/4' });
+    // web#4 lists him under another display name: his Bitbucket account id still matches
+    expect(res.matchedById).toBe(true);
+    expect(res.items[1]).toMatchObject({ approvedByMe: false, reviewers: [{ name: 'Robert S.', uuid: '{b-1}', approved: false }], url: 'https://forge/pr/4' });
     // cached for a few minutes unless refreshed
     const scans = () => calls.filter((c) => c.tool === 'bitbucket_list_prs').length;
     const before = scans();
@@ -159,6 +163,37 @@ describe('pull requests', () => {
     expect(scans()).toBe(before);
     await req('/api/reviews?repos=acme/api,acme/web&refresh=1');
     expect(scans()).toBe(before + 2);
+  });
+
+  it("matches you by the name in your email when workbench gives none, or by the name you set", async () => {
+    expect(nameFromEmail('saifullah.panca@amartha.com')).toBe('Saifullah Panca');
+    expect(nameFromEmail('JANE_doe2+ci@x.io')).toBe('Jane Doe2');
+    expect(nameFromEmail('42@x.io')).toBe('');
+
+    const { req, connectWorkbench } = setup({ whoami: { id: 'u1', email: 'bob.stone@acme.test' } });
+    await connectWorkbench();
+    const guessed = await (await req('/api/reviews?repos=acme/web')).json();
+    expect(guessed.me).toBe('Bob Stone');
+    expect(guessed.items.map((p: any) => p.id)).toEqual([4]);
+    const set = await (await req('/api/reviews?repos=acme/web&as=Somebody%20Else')).json();
+    expect(set).toMatchObject({ me: 'Somebody Else', items: [] });
+
+    const anon = setup({ whoami: { id: 'u1', email: '42@acme.test' } });
+    await anon.connectWorkbench();
+    const r = await anon.req('/api/reviews?repos=acme/web');
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ needName: true });
+  });
+
+  it("also scans the workspace's most recently updated repos", async () => {
+    const { req, connectWorkbench, calls } = setup();
+    await connectWorkbench();
+    const res = await (await req('/api/reviews?workspace=acme&repos=ACME/api')).json();
+    // ACME/api and the workspace's acme/api are one repo
+    expect(res).toMatchObject({ workspace: 'acme', searched: ['ACME/api'] });
+    expect(calls.filter((c) => c.tool === 'bitbucket_list_repos').length).toBeGreaterThan(0);
+    const none = await (await req('/api/reviews?workspace=bad%20ws')).json();
+    expect(none).toMatchObject({ workspace: 'bad ws', searched: [] });
   });
 
   it('lists repos from the configured workspace, sharing one load between concurrent callers', async () => {
