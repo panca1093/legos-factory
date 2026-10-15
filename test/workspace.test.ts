@@ -134,5 +134,10 @@ describe('repo workspaces', () => {
     expect(missing.status).toBe(400);
     expect((await missing.json()).error).toMatch(/could not clone acme\/nope/);
     expect((await post({ cwd: join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1'), prompt: 'x' })).status).toBe(404);
+    mkdirSync(join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1', 'src'), { recursive: true });
+    for (const cwd of [join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1', 'src'), join(workspaces, 'local', 'acme')]) {
+      mkdirSync(cwd, { recursive: true });
+      expect((await post({ cwd, prompt: 'x' })).status).toBe(400);
+    }
   });
 });

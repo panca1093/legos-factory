@@ -687,8 +687,6 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 
 /* repo picker */
 .repo-picker { position: relative; }
-.repo-ws { display: flex; gap: 8px; }
-.repo-ws .input { flex: 1; }
 .repo-results { position: absolute; z-index: 5; top: 100%; left: 0; right: 0; margin-top: 4px; max-height: 260px; overflow: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 4px; }
 .repo-result { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; border: 0; background: none; text-align: left; padding: 7px 9px; border-radius: 8px; color: var(--ink); }
 .repo-result:hover, .repo-result[aria-selected='true'] { background: var(--soft); }

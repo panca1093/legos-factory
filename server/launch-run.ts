@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel } from '../shared/types.ts';
 import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
@@ -57,6 +57,8 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     if (deps.busyIn(clone.path)) throw new HttpError(409, `a run is already working in ${clone.path.split('/').pop()}`);
     cwd = clone.path;
     if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo: clone.repo, branch, urlTemplate: opts.gitUrl }));
+  } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
+    throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
   } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
     throw new HttpError(400, 'cwd must be an existing absolute directory, or pass repo');
   }
