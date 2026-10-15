@@ -42,6 +42,8 @@ export type JiraDev = {
   stale: boolean;
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
+export type MyRepo = { name: string; mainBranch: string | null; addedAt: string };
+export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
 export type PrFile = { status: string; path: string; oldPath: string | null; added: number; removed: number };
@@ -49,16 +51,6 @@ export type PrComment = { id: number; author: string | null; text: string; path:
 export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
 export type { FixQueue };
 
-// Repos picked in New task, newest first; also where to look for a ticket's PRs.
-export function recentRepos(): string[] {
-  try {
-    const v = JSON.parse(storage('lf:repos') ?? '[]');
-    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-export const rememberRepo = (repo: string) => storage('lf:repos', JSON.stringify([repo, ...recentRepos().filter((r) => r !== repo)].slice(0, 8)));
 export type JiraIssue = JiraRow & {
   issueType: string | null;
   description: string | null;
@@ -94,7 +86,7 @@ export const api = {
   models: () => call<ModelOption[]>('/api/models'),
   settings: () => call<Settings & { path: string; error: string | null }>('/api/settings'),
   jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
-  findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}&repos=${encodeURIComponent(recentRepos().join(','))}`),
+  findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}`),
   pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),
   prDiff: (repo: string, id: number) => call<{ diff: string; truncated: boolean }>(`/api/prs/${repo}/${id}/diff`),
   comment: (repo: string, id: number, text: string, replyTo?: number) =>
@@ -105,9 +97,12 @@ export const api = {
     call<FixQueue>(`/api/fixes/${queue}/items/${commentId}/${action}`, { method: 'POST', body: JSON.stringify({ note }) }),
   cancelFixes: (queue: string) => call<FixQueue>(`/api/fixes/${queue}/cancel`, { method: 'POST' }),
   reviews: (refresh = false) =>
-    call<{ me: string; matchedById: boolean; workspace: string | null; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
-      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}&workspace=${encodeURIComponent(storage('lf:bb-ws') ?? '')}&as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
+    call<{ me: string; matchedById: boolean; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
+      `/api/reviews?as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
     ),
+  myRepos: () => call<{ repos: MyRepo[] }>('/api/my-repos'),
+  addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
+  removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),

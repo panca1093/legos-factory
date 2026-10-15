@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
+import { MyRepos } from '../server/my-repos.ts';
 import { managedWorkspace, parseRepo } from '../server/workspace.ts';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
@@ -45,10 +46,13 @@ const alive = (({ prompt }: any) => {
 function setup() {
   const workspaces = mkdtempSync(join(tmpdir(), 'lf-ws-'));
   const runs = new RunManager(alive);
-  const app = createApp(runs, { db: openDb(':memory:'), workspaces, gitUrl: forge() });
+  const db = openDb(':memory:');
+  const myRepos = new MyRepos(db);
+  for (const name of ['acme/app', 'acme/nope']) myRepos.add('local', { name, mainBranch: 'main' });
+  const app = createApp(runs, { db, workspaces, gitUrl: forge() });
   const post = (body: object) =>
     app.request('http://localhost:4317/api/runs', { method: 'POST', headers: { host: 'localhost:4317', 'x-legos': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  return { runs, workspaces, post };
+  return { runs, workspaces, post, myRepos };
 }
 
 const settle = async (cond: () => boolean) => {
@@ -105,6 +109,23 @@ describe('repo workspaces', () => {
     expect(existsSync(join(first.cwd, 'README.md'))).toBe(true);
   });
 
+  it('refuses a repo that is not in my repos, also when continuing after it was removed', async () => {
+    const { runs, post, myRepos } = setup();
+    const res = await post({ repo: 'acme/other', prompt: 'x' });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'repo is not in your repos', needRepo: true });
+
+    const first = await (await post({ repo: 'acme/app', prompt: 'PROJ-3 brief' })).json();
+    await settle(() => !!runs.get(first.id)?.sessionId);
+    const session = runs.get(first.id)!.sessionId!;
+    await runs.end(first.id);
+    await settle(() => !existsSync(first.cwd));
+    myRepos.remove('local', 'ACME/app');
+    const again = await post({ cwd: first.cwd, resume: session, prompt: 'carry on' });
+    expect(again.status).toBe(403);
+    expect(await again.json()).toMatchObject({ needRepo: true });
+  });
+
   it('rejects bad input, unknown repos and other users\' workspaces', async () => {
     const { workspaces, post } = setup();
     expect((await post({ repo: 'not-a-repo', prompt: 'x' })).status).toBe(400);
@@ -113,5 +134,10 @@ describe('repo workspaces', () => {
     expect(missing.status).toBe(400);
     expect((await missing.json()).error).toMatch(/could not clone acme\/nope/);
     expect((await post({ cwd: join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1'), prompt: 'x' })).status).toBe(404);
+    mkdirSync(join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1', 'src'), { recursive: true });
+    for (const cwd of [join(workspaces, 'someone-else', 'acme', 'app', 'PROJ-1', 'src'), join(workspaces, 'local', 'acme')]) {
+      mkdirSync(cwd, { recursive: true });
+      expect((await post({ cwd, prompt: 'x' })).status).toBe(400);
+    }
   });
 });

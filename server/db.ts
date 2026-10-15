@@ -29,6 +29,9 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
       run_id text primary key, owner text not null, session_id text, item text not null,
       started_at text not null, last_event_at text not null);
     create index if not exists runs_owner on runs (owner, last_event_at);
+    create table if not exists user_repos (
+      owner text not null, repo_key text not null, name text not null, main_branch text,
+      added_at text not null, primary key (owner, repo_key));
   `);
   return db;
 }

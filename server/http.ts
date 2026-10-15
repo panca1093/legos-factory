@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { RunManager } from './claude-runs.ts';
 import type { ActivityLog } from './activity.ts';
 import type { Connections, Pending } from './connections.ts';
+import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
 import type { Users } from './users.ts';
 import type { Workbench } from './workbench.ts';
@@ -40,6 +41,7 @@ export type Deps = {
   users: Users | null;
   db: DatabaseSync;
   activity: ActivityLog;
+  myRepos: MyRepos;
   http: typeof fetch;
   fixes: FixQueues;
   wsRoot: string;
@@ -108,6 +110,10 @@ export async function requireWorkbench(deps: Deps, uid: string, extra?: object) 
   const wb = await deps.workbench(uid);
   if (!wb) throw new HttpError(409, NO_WB, extra);
   return wb;
+}
+
+export function requireMyRepo(deps: Deps, uid: string, repo: string) {
+  if (!deps.myRepos.has(uid, repo)) throw new HttpError(403, 'repo is not in your repos', { needRepo: true });
 }
 
 // A body that isn't a JSON object reads as {}, so every field falls back to its default.

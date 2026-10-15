@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, useFetch, type Connection, type Integration } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, useFetch, type Connection, type Integration, type MyRepo } from '../api.ts';
+import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
 export function SettingsPage() {
@@ -24,11 +25,12 @@ export function SettingsPage() {
           <div className="page-heading">
             <div>
               <h1>Settings</h1>
-              <p className="lead">Servers your chats and tasks can reach, and how tickets are detected.</p>
+              <p className="lead">Servers your chats and tasks can reach, the repos you work on, and how tickets are detected.</p>
             </div>
           </div>
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
+          <Repositories />
           {error && <p className="error">{error}</p>}
           {s && (
             <>
@@ -51,6 +53,86 @@ export function SettingsPage() {
         </div>
       </div>
     </Frame>
+  );
+}
+
+// The repos you maintain: new tasks, PR pages, ticket PR lookups and Reviews work only on these.
+function Repositories() {
+  const [list, setList] = useState<MyRepo[] | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [ws, setWs] = useState(() => storage('lf:bb-ws') ?? '');
+  const load = () => api.myRepos().then((r) => setList(r.repos), (e) => setErr(e.message));
+  useEffect(() => void load(), []);
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    await load();
+  };
+  const full = (list?.length ?? 0) >= MY_REPOS_CAP;
+  return (
+    <>
+      <div className="sectionbar">
+        <h2>
+          Repositories <span className="muted">· {list?.length ?? 0} / {MY_REPOS_CAP}</span>
+        </h2>
+        {!adding && !full && (
+          <button className="text-action" onClick={() => setAdding(true)}>
+            + Add repository
+          </button>
+        )}
+      </div>
+      {adding && (
+        <div className="pr-box name-box">
+          <label className="field">
+            <span>Bitbucket workspace</span>
+            <input
+              className="input mono"
+              defaultValue={ws}
+              placeholder="e.g. acme — leave empty for the server's default"
+              onBlur={(e) => /^[\w.-]*$/.test(e.target.value.trim()) && (storage('lf:bb-ws', e.target.value.trim()), setWs(e.target.value.trim()))}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+            />
+          </label>
+          <RepoPicker workspace={ws} onPick={(r) => (setAdding(false), act(() => api.addMyRepo(r.name)))} />
+          <div className="pr-reply-actions">
+            <button type="button" className="btn sm ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {err && <p className="error">{err}</p>}
+      {list && !list.length && !adding && <div className="empty">No repos yet. Add the repos you work on — new tasks, pull requests and Reviews use only these.</div>}
+      {!!list?.length && (
+        <div className="section-list">
+          {list.map((r) => (
+            <div key={r.name} className="row">
+              <div className="copy">
+                <b className="mono">{r.name}</b>
+                <span>{r.mainBranch ? `main branch ${r.mainBranch}` : 'no main branch reported'}</span>
+              </div>
+              <div className="actions">
+                {removing === r.name ? (
+                  <button className="btn sm danger" onClick={() => (setRemoving(null), act(() => api.removeMyRepo(r.name)))}>
+                    Confirm remove
+                  </button>
+                ) : (
+                  <button className="btn sm ghost" onClick={() => setRemoving(r.name)}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

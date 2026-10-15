@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel } from '../shared/types.ts';
 import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
-import { BRANCH_RE, HttpError, TICKET_RE, domain, optText, text, type Deps } from './http.ts';
+import { BRANCH_RE, HttpError, TICKET_RE, domain, optText, requireMyRepo, text, type Deps } from './http.ts';
 
 const MODES = ['default', 'acceptEdits', 'plan'] as const satisfies PermissionMode[];
 const SHARES = ['private', 'status', 'full'] as const satisfies ShareLevel[];
@@ -44,17 +44,21 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   if (req.repo) {
     const repo = parseRepo(req.repo);
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
+    requireMyRepo(deps, uid, req.repo);
     const key = req.ticket || detectTicket(prompt, settings.ticketKeys) || `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
     if (m.owner !== uid) throw new HttpError(404, 'session not found');
+    requireMyRepo(deps, uid, `${m.repo.workspace}/${m.repo.slug}`);
     clone = { path: cwd, repo: m.repo };
   }
   if (clone) {
     if (deps.busyIn(clone.path)) throw new HttpError(409, `a run is already working in ${clone.path.split('/').pop()}`);
     cwd = clone.path;
     if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo: clone.repo, branch, urlTemplate: opts.gitUrl }));
+  } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
+    throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
   } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
     throw new HttpError(400, 'cwd must be an existing absolute directory, or pass repo');
   }
