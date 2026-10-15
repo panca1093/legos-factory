@@ -95,6 +95,16 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
   return out;
 }
 
+// workbench's whoami has no display name; "jane.doe+x@acme.com" -> "Jane Doe", which is usually the Bitbucket name
+export function nameFromEmail(email: string | null | undefined): string {
+  const local = (email ?? '').split('@')[0].split('+')[0];
+  return local
+    .split(/[._-]+/)
+    .filter((w) => w && !/^\d+$/.test(w))
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
 export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
 
 export function createApp(runs: RunManager, opts: AppOptions = {}) {
@@ -621,14 +631,16 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
     const fromRuns = (await activity.list(uid, Date.now() - 30 * 86_400_000)).map((i) => i.repo).filter((r): r is string => !!r);
     const asked = str(c.req.query('repos')).split(',').filter(Boolean);
     const repos = [...new Set([...asked, ...fromRuns])].map(parseRepo).filter((r) => r !== null).slice(0, 10);
-    const key = `${uid}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
+    const as = str(c.req.query('as')).slice(0, 100);
+    const key = `${uid}|${as}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
     const hit = reviewCache.get(key);
     if (hit && Date.now() - hit.at < REVIEW_TTL_MS && c.req.query('refresh') !== '1') return c.json(hit.body);
     try {
-      const me = await wb.client.whoami(wb.token);
-      const name = (me?.name ?? '').trim();
-      if (!name) return c.json({ error: 'workbench did not say who you are, so review requests cannot be matched' }, 502);
-      const same = (a: string | null) => (a ?? '').trim().toLowerCase() === name.toLowerCase();
+      const me = as ? null : await wb.client.whoami(wb.token);
+      const name = as || (me?.name ?? '').trim() || nameFromEmail(me?.email);
+      if (!name) return c.json({ error: 'set your Bitbucket name to match review requests', needName: true }, 400);
+      const norm = (x: string | null) => (x ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+      const same = (a: string | null) => norm(a) === norm(name);
       const mention = new RegExp(`@\\{?${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')}`, 'i');
       const open = (await Promise.all(repos.map((r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50))))
         .flat()

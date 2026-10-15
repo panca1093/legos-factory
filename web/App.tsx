@@ -2488,6 +2488,10 @@ function Reviews() {
   const [loading, setLoading] = useState(false);
   useEffect(() => setLoading(false), [data, error]);
   const reload = () => (setLoading(true), setRefresh((n) => n + 1));
+  // Bitbucket name to match on, when the one guessed from your email is wrong
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState(() => storage('lf:bb-name') ?? '');
+  const saveName = () => (storage('lf:bb-name', name.trim()), setNaming(false), reload());
   const rows: ReviewRequest[] = data?.items ?? [];
   const todo = rows.filter((p) => !p.approvedByMe);
   return (
@@ -2506,13 +2510,29 @@ function Reviews() {
           {error && (
             <p className="error">
               {error}
-              {/workbench/.test(error) && (
+              {/workbench in Settings/.test(error) && (
                 <>
                   {' '}
                   <a href="#/settings">Open Settings</a>
                 </>
               )}
             </p>
+          )}
+          {(naming || /Bitbucket name/.test(error ?? '')) && (
+            <div className="pr-box name-box">
+              <label className="field">
+                Your name in Bitbucket, exactly as reviewers see it
+                <input className="input" value={name} placeholder="e.g. Jane Doe" autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveName()} />
+              </label>
+              <div className="pr-reply-actions">
+                <button type="button" className="btn sm ghost" onClick={() => setNaming(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn sm primary" onClick={saveName}>
+                  Save
+                </button>
+              </div>
+            </div>
           )}
           {!data ? (
             !error && <Empty>Looking through your repos' open pull requests…</Empty>
@@ -2554,8 +2574,11 @@ function Reviews() {
           )}
           {data && (
             <p className="footnote">
-              Checked the {data.scanned} most recently updated open PRs in {data.searched.join(', ') || 'no repos'}, matching you as “{data.me}” · {ago(data.at, now)}. Bitbucket can't
-              search for review requests across repos, so add a repo by picking it in New task.
+              Checked the {data.scanned} most recently updated open PRs in {data.searched.join(', ') || 'no repos'}, matching you as “{data.me}” (
+              <button type="button" className="text-action" onClick={() => setNaming(true)}>
+                change
+              </button>
+              ) · {ago(data.at, now)}. Bitbucket can't search for review requests across repos, so add a repo by picking it in New task.
             </p>
           )}
         </div>

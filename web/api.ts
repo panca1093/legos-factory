@@ -106,7 +106,7 @@ export const api = {
   cancelFixes: (queue: string) => call<FixQueue>(`/api/fixes/${queue}/cancel`, { method: 'POST' }),
   reviews: (refresh = false) =>
     call<{ me: string; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
-      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}${refresh ? '&refresh=1' : ''}`,
+      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}&as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
     ),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>

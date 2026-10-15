@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ActivityLog } from '../server/activity.ts';
-import { createApp } from '../server/app.ts';
+import { createApp, nameFromEmail } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import type { Run } from '../shared/types.ts';
@@ -16,10 +16,10 @@ const PRS: Record<string, any[]> = {
   'acme/web:OPEN': [{ id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', updated_on: '2026-10-01' }],
 };
 
-function setup(opts: { bitbucketWorkspace?: string } = {}) {
+function setup(opts: { bitbucketWorkspace?: string; whoami?: object } = {}) {
   const calls: { tool: string; args: any }[] = [];
   const srv = fakeServers({
-    whoami: { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
+    whoami: opts.whoami ?? { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
     exec: (tool, args) => {
       calls.push({ tool, args });
       if (tool === 'bitbucket_list_repos')
@@ -47,7 +47,7 @@ function setup(opts: { bitbucketWorkspace?: string } = {}) {
   });
   const db = openDb(':memory:');
   // no such forge: fix queues fail at the clone, which is all these tests need
-  const app = createApp(new RunManager(alive), { db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: 'file:///nonexistent/{workspace}/{slug}.git', ...opts });
+  const app = createApp(new RunManager(alive), { db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: 'file:///nonexistent/{workspace}/{slug}.git', bitbucketWorkspace: opts.bitbucketWorkspace });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
   const post = (p: string, body: unknown = {}) => req(p, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } });
   const connectWorkbench = async () => {
@@ -159,6 +159,26 @@ describe('pull requests', () => {
     expect(scans()).toBe(before);
     await req('/api/reviews?repos=acme/api,acme/web&refresh=1');
     expect(scans()).toBe(before + 2);
+  });
+
+  it("matches you by the name in your email when workbench gives none, or by the name you set", async () => {
+    expect(nameFromEmail('saifullah.panca@amartha.com')).toBe('Saifullah Panca');
+    expect(nameFromEmail('JANE_doe2+ci@x.io')).toBe('Jane Doe2');
+    expect(nameFromEmail('42@x.io')).toBe('');
+
+    const { req, connectWorkbench } = setup({ whoami: { id: 'u1', email: 'bob.stone@acme.test' } });
+    await connectWorkbench();
+    const guessed = await (await req('/api/reviews?repos=acme/web')).json();
+    expect(guessed.me).toBe('Bob Stone');
+    expect(guessed.items.map((p: any) => p.id)).toEqual([4]);
+    const set = await (await req('/api/reviews?repos=acme/web&as=Somebody%20Else')).json();
+    expect(set).toMatchObject({ me: 'Somebody Else', items: [] });
+
+    const anon = setup({ whoami: { id: 'u1', email: '42@acme.test' } });
+    await anon.connectWorkbench();
+    const r = await anon.req('/api/reviews?repos=acme/web');
+    expect(r.status).toBe(400);
+    expect(await r.json()).toMatchObject({ needName: true });
   });
 
   it('lists repos from the configured workspace, sharing one load between concurrent callers', async () => {

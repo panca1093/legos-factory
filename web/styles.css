@@ -775,3 +775,4 @@ a.list-item:hover, .jira-row:hover, .row.link:hover { background: var(--hover); 
 .fix-proposal { margin-top: 8px; display: grid; gap: 8px; }
 .review-row { text-decoration: none; color: inherit; }
 .review-row .copy > span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.name-box { display: grid; gap: 10px; max-width: 520px; }
