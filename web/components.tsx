@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
-import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme, recentRepos, rememberRepo } from './api.ts';
+import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme } from './api.ts';
 import { Icon } from './icons.tsx';
 
 export const go = (hash: string) => {
@@ -558,13 +558,9 @@ export function Thread({
 
 // ---------- launch dialog ----------
 
-// Search the repos of the Bitbucket workspace. The forge can't search, so the whole list loads once
-// (server-side cache, warmed in the background) and is filtered here.
-export function RepoPicker({ value, onPick }: { value: string; onPick: (r: Pick<RepoRow, 'name' | 'mainBranch'>) => void }) {
-  // only used when the server has no default workspace configured
-  const [ws, setWs] = useState(() => storage('lf:bb-ws') ?? '');
-  const [askWs, setAskWs] = useState(false);
-  const [wsDraft, setWsDraft] = useState('');
+// Search the repos of a Bitbucket workspace (the server's default when none is given). The forge can't
+// search, so the whole list loads once (server-side cache) and is filtered here.
+export function RepoPicker({ workspace, onPick }: { workspace: string; onPick: (r: RepoRow) => void }) {
   const [list, setList] = useState<{ workspace: string; repos: RepoRow[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -572,32 +568,19 @@ export function RepoPicker({ value, onPick }: { value: string; onPick: (r: Pick<
   useEffect(() => {
     setList(null);
     setErr(null);
-    api.repos(ws || undefined).then(
-      (r) => (setList(r), setAskWs(false)),
-      (e) => (e.needWorkspace ? setAskWs(true) : setErr(e.status === 409 ? 'Connect workbench in Settings to list repos.' : e.message)),
+    api.repos(workspace || undefined).then(setList, (e) =>
+      setErr(e.needWorkspace ? 'Type your Bitbucket workspace first.' : e.status === 409 ? 'Connect workbench in Settings to list repos.' : e.message),
     );
-  }, [ws]);
-  const recent = recentRepos();
+  }, [workspace]);
   const needle = q.trim().toLowerCase();
-  const matches = needle
-    ? (list?.repos ?? []).filter((r) => r.name.toLowerCase().includes(needle) || (r.description ?? '').toLowerCase().includes(needle)).slice(0, 8)
-    : recent.map((name) => list?.repos.find((r) => r.name === name) ?? { name, mainBranch: null, updated: null, description: null });
-  const pick = (r: Pick<RepoRow, 'name' | 'mainBranch'>) => (onPick(r), setQ(''), setOpen(false));
-  if (askWs)
-    return (
-      <div className="field repo-picker">
-        <span>Bitbucket workspace</span>
-        <form className="repo-ws" onSubmit={(e) => (e.preventDefault(), /^[\w.-]+$/.test(wsDraft) && (storage('lf:bb-ws', wsDraft), setWs(wsDraft)))}>
-          <input className="input mono" value={wsDraft} onChange={(e) => setWsDraft(e.target.value.trim())} placeholder="e.g. acme — set LEGOS_BITBUCKET_WORKSPACE to skip this" />
-        </form>
-      </div>
-    );
+  const matches = needle ? (list?.repos ?? []).filter((r) => r.name.toLowerCase().includes(needle) || (r.description ?? '').toLowerCase().includes(needle)).slice(0, 8) : [];
+  const pick = (r: RepoRow) => (onPick(r), setQ(''), setOpen(false));
   return (
     <div className="field repo-picker">
       <span>Repo</span>
       <input
         className="input mono"
-        value={open ? q : value.split('/')[1] ?? value}
+        value={q}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onChange={(e) => (setQ(e.target.value), setOpen(true))}
@@ -606,14 +589,13 @@ export function RepoPicker({ value, onPick }: { value: string; onPick: (r: Pick<
       />
       {open && (
         <div className="repo-results" role="listbox">
-          {matches.length === 0 && <div className="repo-empty">{err ?? (!list ? 'Loading repos…' : needle ? 'No repo matches.' : 'Type to search.')}</div>}
+          {matches.length === 0 && <div className="repo-empty">{err ?? (!list ? 'Loading repos…' : needle ? 'No repo matches.' : `Type to search all ${list.repos.length} repos.`)}</div>}
           {matches.map((r) => (
-            <button type="button" key={r.name} role="option" aria-selected={r.name === value} className="repo-result" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(r)}>
+            <button type="button" key={r.name} role="option" className="repo-result" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(r)}>
               <b className="mono">{r.name.split('/')[1]}</b>
               <span>{r.description ?? (r.updated ? `updated ${ago(r.updated, Date.now())}` : 'recent')}</span>
             </button>
           ))}
-          {!needle && list && <div className="repo-empty">Type to search all {list.repos.length} repos.</div>}
         </div>
       )}
       {err && !open && <small className="error">{err}</small>}
@@ -643,9 +625,11 @@ export function LaunchDialog({
   const [cwd, setCwd] = useState(resume?.cwd ?? defaults?.cwd ?? storage('lf:cwd') ?? '');
   // a fresh clone of a repo (default) or an existing folder on this machine
   const [source, setSource] = useState<'repo' | 'folder'>(() => (resume || defaults?.cwd || storage('lf:source') === 'folder' ? 'folder' : 'repo'));
-  const [repo, setRepo] = useState(recentRepos()[0] ?? '');
+  const { data: mine, error: mineErr } = useFetch(api.myRepos, []);
+  const [repo, setRepo] = useState('');
+  useEffect(() => void (mine && !mine.repos.some((r) => r.name === repo) && setRepo(mine.repos[0]?.name ?? '')), [mine]);
+  const mainBranch = mine?.repos.find((r) => r.name === repo)?.mainBranch ?? null;
   const [branch, setBranch] = useState('');
-  const [mainBranch, setMainBranch] = useState<string | null>(null);
   const [prompt, setPrompt] = useState(defaults?.prompt ?? '');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [model, setModel] = useState(storage('lf:model') ?? 'default');
@@ -655,16 +639,15 @@ export function LaunchDialog({
   const [err, setErr] = useState<string | null>(null);
 
 
-  const ready = !!prompt.trim() && (source === 'repo' ? /^[\w.-]+\/[\w.-]+$/.test(repo.trim()) : !!cwd);
+  const ready = !!prompt.trim() && (source === 'repo' ? !!repo : !!cwd);
   const submit = async () => {
     if (!ready || busy) return;
     setBusy(true);
     setErr(null);
     try {
-      const where = source === 'repo' ? { repo: repo.trim(), branch: branch.trim() || undefined } : { cwd };
+      const where = source === 'repo' ? { repo, branch: branch.trim() || undefined } : { cwd };
       const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model, ticket });
-      if (source === 'repo') rememberRepo(repo.trim());
-      else storage('lf:cwd', cwd);
+      if (source === 'folder') storage('lf:cwd', cwd);
       storage('lf:source', source);
       storage('lf:model', model);
       onClose();
@@ -700,7 +683,26 @@ export function LaunchDialog({
         )}
         {source === 'repo' ? (
           <>
-            <RepoPicker value={repo} onPick={(r) => (setRepo(r.name), setMainBranch(r.mainBranch))} />
+            {mine && !mine.repos.length ? (
+              <div className="empty">
+                No repos yet — add them in{' '}
+                <a href="#/settings" onClick={onClose}>
+                  Settings
+                </a>
+              </div>
+            ) : (
+              <label className="field">
+                <span>Repo</span>
+                <select className="input mono" value={repo} onChange={(e) => setRepo(e.target.value)}>
+                  {mine?.repos.map((r) => (
+                    <option key={r.name} value={r.name}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                {mineErr && <small className="error">{mineErr}</small>}
+              </label>
+            )}
             <details className="more-options">
               <summary>More options</summary>
               <label className="field">

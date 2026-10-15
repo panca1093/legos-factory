@@ -270,6 +270,21 @@ export function PrPage({ repo, id }: { repo: string; id: number }) {
       setAsking(false);
     }
   };
+  const [adding, setAdding] = useState(false);
+  const [addErr, setAddErr] = useState<string | null>(null);
+  const addRepo = async () => {
+    setAdding(true);
+    setAddErr(null);
+    try {
+      await api.addMyRepo(repo);
+      reload();
+      refresh();
+    } catch (e) {
+      setAddErr((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  };
   const reviewWithFactory = async () => {
     setAskErr(null);
     try {
@@ -291,7 +306,19 @@ export function PrPage({ repo, id }: { repo: string; id: number }) {
       <div className="scroll">
         <div className="page">
           {!data ? (
-            error ? <p className="error">{error}</p> : <Empty>Loading pull request…</Empty>
+            error && /not in your repos/.test(error) ? (
+              <div className="empty">
+                <p>This repo isn't in your repos.</p>
+                <button className="btn sm primary" disabled={adding} onClick={addRepo}>
+                  Add to my repos
+                </button>
+                {addErr && <p className="error">{addErr}</p>}
+              </div>
+            ) : error ? (
+              <p className="error">{error}</p>
+            ) : (
+              <Empty>Loading pull request…</Empty>
+            )
           ) : (
             <>
               <div className="page-heading">

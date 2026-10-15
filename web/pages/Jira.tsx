@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RunKind } from '../../shared/types.ts';
-import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type PrRow, rememberRepo } from '../api.ts';
-import { Empty, Markdown, RepoPicker, TicketChip, go } from '../components.tsx';
+import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type PrRow } from '../api.ts';
+import { Empty, Markdown, TicketChip, go } from '../components.tsx';
 import { Icon } from '../icons.tsx';
 import { ALIVE, PR_TONE, type Live, type LaunchReq } from '../chrome.tsx';
 
@@ -190,8 +190,6 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
     storage('lf:jira-filter', filter);
     void load();
   }, [filter]);
-  // "Work on this" asks for a repo next; start loading the (slow, cached) list now
-  useEffect(() => void api.repos(storage('lf:bb-ws') ?? undefined).catch(() => undefined), []);
 
   // Pull full ticket details so the run starts with real context, not just a title.
   const start = (row: JiraRow, kind: RunKind) => onNew(kind, { prompt: taskPrompt(row, kind), ticket: row.key });
@@ -247,12 +245,15 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
                       {prFind.error ? (
                         <span className="error">{prFind.error}</span>
                       ) : prFind.prs!.length === 0 ? (
-                        <>
-                          <span>
-                            No PR for {i.key} {prFind.searched!.length ? `in ${prFind.searched!.join(', ')}` : 'yet'}. Bitbucket can't search every repo at once — pick the repo to look in:
-                          </span>
-                          <RepoPicker value="" onPick={(r) => (rememberRepo(r.name), openPr(i.key))} />
-                        </>
+                        <span>
+                          {prFind.searched!.length ? (
+                            `No PR for ${i.key} in your repos (${prFind.searched!.join(', ')}).`
+                          ) : (
+                            <>
+                              No repos yet — add them in <a href="#/settings">Settings</a> to find {i.key}'s PR.
+                            </>
+                          )}
+                        </span>
                       ) : (
                         prFind.prs!.map((p) => (
                           <a key={`${p.repo}#${p.id}`} className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
