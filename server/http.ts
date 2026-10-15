@@ -3,13 +3,15 @@ import type { Context } from 'hono';
 import type { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
-import type { RunManager } from './claude-runs.ts';
+import type { RunManager, StartRequest } from './claude-runs.ts';
+import type { Run } from '../shared/types.ts';
 import type { ActivityLog } from './activity.ts';
 import type { Connections, Pending } from './connections.ts';
 import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
 import type { Users } from './users.ts';
-import type { Workbench } from './workbench.ts';
+import { tokenFromCloneUrl, type Workbench } from './workbench.ts';
+import type { RepoRef } from './workspace.ts';
 
 export type AppOptions = {
   // null = no sign-in (LEGOS_AUTH=off): everything belongs to one local user
@@ -51,8 +53,12 @@ export type Deps = {
   // the owner's connected workbench, if any: apps, Jira and the team hub go through it
   workbench: (owner: string) => Promise<WorkbenchClient | null>;
   workspaceRepos: (uid: string, wb: WorkbenchClient, workspace: string, refresh?: boolean) => Promise<Repos>;
-  // per-run secret -> run, so only runs launched here reach the connections proxy
+  // per-run secret -> run, so only runs launched here reach the connections proxy and git credentials
   grants: Map<string, string>;
+  // how Claude Code processes reach this app
+  selfUrl: string;
+  // runs.start, plus a grant for repo runs (git credentials) and for the named connections (MCP proxy)
+  startRun: (req: StartRequest, mcpNames?: string[]) => Run;
   // run -> its throwaway clone, deleted once no live run works in it
   clones: Map<string, string>;
   busyIn: (path: string) => boolean;
@@ -110,6 +116,14 @@ export async function requireWorkbench(deps: Deps, uid: string, extra?: object) 
   const wb = await deps.workbench(uid);
   if (!wb) throw new HttpError(409, NO_WB, extra);
   return wb;
+}
+
+// A short-lived Bitbucket token minted by the owner's workbench; never logged or stored.
+export async function gitToken(deps: Deps, uid: string, repo: RepoRef): Promise<string> {
+  const wb = await requireWorkbench(deps, uid);
+  const token = tokenFromCloneUrl(await upstream(wb.client.bitbucketCloneUrl(wb.token, repo.workspace, repo.slug)));
+  if (!token) throw new HttpError(502, 'workbench sent an unexpected clone URL');
+  return token;
 }
 
 export function requireMyRepo(deps: Deps, uid: string, repo: string) {

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { FixItem, FixQueue, StreamMessage } from '../shared/types.ts';
-import type { RunManager } from './claude-runs.ts';
+import type { FixItem, FixQueue, Run, StreamMessage } from '../shared/types.ts';
+import type { RunManager, StartRequest } from './claude-runs.ts';
 
 // "Ask factory" on a PR's review comments, strictly one comment at a time on one clone of the PR branch:
 //   propose (read-only run) → you approve, edit or skip → fix (commit + push) → reply on the comment → next.
@@ -22,6 +22,8 @@ export type FixDeps = {
   prepare: (q: FixQueue) => Promise<string>;
   cleanup: (q: FixQueue, cwd: string) => Promise<void>;
   reply: (q: FixQueue, item: FixItem, text: string) => Promise<void>;
+  // defaults to runs.start; the app's adds the run's git credentials
+  start?: (req: StartRequest) => Run;
 };
 
 export type NewQueue = {
@@ -196,7 +198,7 @@ export class FixQueues {
   }
 
   private start(q: FixQueue, item: FixItem, prompt: string, fixing: boolean) {
-    const run = this.runs.start({
+    const run = (this.deps.start ?? ((r) => this.runs.start(r)))({
       owner: q.owner,
       repo: q.repo,
       kind: 'task',

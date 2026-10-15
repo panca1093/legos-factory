@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel } from '../shared/types.ts';
 import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
-import { BRANCH_RE, HttpError, TICKET_RE, domain, optText, requireMyRepo, text, type Deps } from './http.ts';
+import { BRANCH_RE, HttpError, TICKET_RE, domain, gitToken, optText, requireMyRepo, text, type Deps } from './http.ts';
 
 const MODES = ['default', 'acceptEdits', 'plan'] as const satisfies PermissionMode[];
 const SHARES = ['private', 'status', 'full'] as const satisfies ShareLevel[];
@@ -56,7 +56,9 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   if (clone) {
     if (deps.busyIn(clone.path)) throw new HttpError(409, `a run is already working in ${clone.path.split('/').pop()}`);
     cwd = clone.path;
-    if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo: clone.repo, branch, urlTemplate: opts.gitUrl }));
+    const { repo } = clone;
+    const author = deps.users?.get(uid);
+    if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo, branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, uid, repo), author }));
   } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
     throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
   } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
@@ -66,11 +68,6 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
   const ticket = req.ticket || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
   const share = req.share ?? shareFor(cwd, settings);
-  const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected) : [];
-  if (!connected.length) return started(runs.start({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share }));
-  const secret = randomBytes(24).toString('base64url');
-  const mcp = Object.fromEntries(connected.map((x) => [x.name, { url: `${opts.selfUrl}/mcp/${x.name}`, headers: { 'x-legos-run': secret } }]));
-  const run = started(runs.start({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share, mcp }));
-  deps.grants.set(secret, run.id);
-  return run;
+  const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
+  return started(deps.startRun({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share }, connected));
 }
