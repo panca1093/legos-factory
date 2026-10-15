@@ -81,6 +81,16 @@ export type JiraIssue = JiraIssueRow & {
 
 const PROTOCOL = '2025-06-18';
 
+export function tokenFromCloneUrl(raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    const token = u.protocol === 'https:' && u.hostname === 'bitbucket.org' && u.username === 'x-token-auth' && u.password ? decodeURIComponent(u.password) : null;
+    return token && !/[\x00-\x1f\x7f]/.test(token) ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 // Jira's rich text (ADF) → Markdown. The tool's own plain-text description drops headings and lists.
 const escapeMd = (s: string) => s.replace(/[\\`*_[\]<>|]/g, '\\$&');
 
@@ -396,6 +406,12 @@ export class Workbench {
   async bitbucketAddComment(token: string, workspace: string, slug: string, id: number, text: string, inline?: { path: string; line: number }): Promise<{ id: number }> {
     const r = await this.execute(token, 'bitbucket_add_pr_comment', { workspace, repoSlug: slug, prId: id, text, ...(inline && { inline }) });
     return { id: Number(r?.id) };
+  }
+
+  // https://x-token-auth:<token>@bitbucket.org/<ws>/<slug>.git, good for ≤2h; never log or persist it
+  async bitbucketCloneUrl(token: string, workspace: string, slug: string): Promise<string> {
+    const r = await this.execute(token, 'bitbucket_get_clone_url', { workspace, repoSlug: slug });
+    return String((typeof r === 'string' ? r : (r?.url ?? r?.cloneUrl ?? r?.clone_url)) ?? '');
   }
 
   async jiraIssue(token: string, issueKey: string): Promise<JiraIssue> {

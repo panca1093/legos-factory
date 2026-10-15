@@ -21,6 +21,8 @@ export type StartRequest = {
   mcp?: Record<string, { url: string; headers: Record<string, string> }>;
   // looks but never touches: every permission request (edits, shell) is denied without asking
   readOnly?: boolean;
+  // set over process.env for the Claude Code process
+  env?: Record<string, string>;
 };
 
 // 'default' = whatever the user's Claude Code settings pick
@@ -179,6 +181,7 @@ export class RunManager extends EventEmitter {
         resume: req.resume,
         model: sdkModel(req.model),
         ...(req.mcp && { mcpServers: Object.fromEntries(Object.entries(req.mcp).map(([name, m]) => [name, { type: 'http' as const, ...m }])) }),
+        ...(req.env && { env: { ...process.env, ...req.env } }),
         abortController: abort,
         canUseTool: req.readOnly ? READ_ONLY : this.canUseTool(run),
       },
