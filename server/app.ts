@@ -5,11 +5,13 @@ import { ActivityLog, toTeamItem } from './activity.ts';
 import type { RunManager } from './claude-runs.ts';
 import { Connections, type Pending } from './connections.ts';
 import { openDb } from './db.ts';
+import { MyRepos } from './my-repos.ts';
 import { NO_WB, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
 import { FixQueues } from './pr-fixes.ts';
 import { authRoutes, SID_COOKIE } from './routes/auth.ts';
 import { connectionsRoutes } from './routes/connections.ts';
 import { jiraRoutes } from './routes/jira.ts';
+import { myReposRoutes } from './routes/my-repos.ts';
 import { prsRoutes } from './routes/prs.ts';
 import { runsRoutes } from './routes/runs.ts';
 import { Workbench } from './workbench.ts';
@@ -41,6 +43,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.route('/', connectionsRoutes(deps));
   app.route('/', prsRoutes(deps));
   app.route('/', jiraRoutes(deps));
+  app.route('/', myReposRoutes(deps));
   app.onError(onError);
   return app;
 }
@@ -49,6 +52,7 @@ function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   const users = opts.users ?? null;
   const db = opts.db ?? openDb(':memory:');
   const activity = new ActivityLog(db);
+  const myRepos = new MyRepos(db);
   const http = opts.fetch ?? fetch;
   const callbackUrl = `${opts.selfUrl ?? 'http://localhost:4317'}/auth/callback`;
   const pending = new Map<string, Pending>();
@@ -112,7 +116,7 @@ function buildDeps(runs: RunManager, opts: AppOptions): Deps {
 
   // listing a big workspace takes several calls; repos change rarely
   const repoCache = new Map<string, { at: number; repos: Repos }>();
-  // the UI warms this in the background, so a dialog opened meanwhile joins the same load
+  // concurrent callers join the same load
   const repoLoads = new Map<string, Promise<Repos>>();
   const workspaceRepos = (uid: string, wb: WorkbenchClient, workspace: string, refresh = false): Promise<Repos> => {
     const key = `${uid}:${workspace}`;
@@ -129,5 +133,5 @@ function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  return { runs, opts, users, db, activity, http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, clones, busyIn, ownsRun };
+  return { runs, opts, users, db, activity, myRepos, http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, clones, busyIn, ownsRun };
 }

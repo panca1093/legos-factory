@@ -4,6 +4,7 @@ import { ActivityLog } from '../server/activity.ts';
 import { createApp, nameFromEmail } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
+import { MyRepos } from '../server/my-repos.ts';
 import type { Run } from '../shared/types.ts';
 import { alive, fakeServers, WB } from './fakes.ts';
 
@@ -16,7 +17,7 @@ const PRS: Record<string, any[]> = {
   'acme/web:OPEN': [{ id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', updated_on: '2026-10-01' }],
 };
 
-function setup(opts: { bitbucketWorkspace?: string; whoami?: object } = {}) {
+function setup(opts: { bitbucketWorkspace?: string; whoami?: object; repos?: string[] } = {}) {
   const calls: { tool: string; args: any }[] = [];
   const srv = fakeServers({
     whoami: opts.whoami ?? { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
@@ -48,6 +49,7 @@ function setup(opts: { bitbucketWorkspace?: string; whoami?: object } = {}) {
     },
   });
   const db = openDb(':memory:');
+  for (const name of opts.repos ?? ['acme/api', 'acme/web']) new MyRepos(db).add('local', { name, mainBranch: 'main' });
   // no such forge: fix queues fail at the clone, which is all these tests need
   const app = createApp(new RunManager(alive), { db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: 'file:///nonexistent/{workspace}/{slug}.git', bitbucketWorkspace: opts.bitbucketWorkspace });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
@@ -75,16 +77,29 @@ describe('pull requests', () => {
     expect((await req('/api/prs/acme/api/0')).status).toBe(400);
   });
 
-  it("finds a ticket's PRs by key in branch or title across its repos, open first", async () => {
-    const { req, connectWorkbench, db } = setup();
+  it("finds a ticket's PRs by key in branch or title across my repos only, open first", async () => {
+    const { req, connectWorkbench, db, calls } = setup();
     await connectWorkbench();
-    // a run on acme/web for this ticket makes that repo a candidate without the client naming it
+    // a run on a repo that is not in my repos doesn't make it a candidate
     const now = new Date().toISOString();
-    await new ActivityLog(db).record({ id: 'r1', owner: 'local', repo: 'acme/web', ticket: 'PROJ-7', sessionId: null, cwd: '/x', prompt: 'p', kind: 'task', status: 'completed', startedAt: now, lastEventAt: now } as Run, 'local');
+    await new ActivityLog(db).record({ id: 'r1', owner: 'local', repo: 'acme/legacy', ticket: 'PROJ-7', sessionId: null, cwd: '/x', prompt: 'p', kind: 'task', status: 'completed', startedAt: now, lastEventAt: now } as Run, 'local');
 
-    const res = await (await req('/api/prs?ticket=PROJ-7&repos=acme/api,bad repo')).json();
-    expect(res.searched.sort()).toEqual(['acme/api', 'acme/web']);
+    const res = await (await req('/api/prs?ticket=PROJ-7&repos=acme/other')).json();
+    expect(res.searched).toEqual(['acme/api', 'acme/web']);
     expect(res.prs.map((p: any) => `${p.repo}#${p.id}`)).toEqual(['acme/api#12', 'acme/web#4', 'acme/api#9']); // PROJ-70 is not PROJ-7
+    expect([...new Set(calls.filter((c) => c.tool === 'bitbucket_list_prs').map((c) => `${c.args.workspace}/${c.args.repoSlug}`))].sort()).toEqual(['acme/api', 'acme/web']);
+  });
+
+  it('refuses PRs of a repo that is not in my repos', async () => {
+    const { req, post, connectWorkbench, calls } = setup();
+    await connectWorkbench();
+    for (const r of [req('/api/prs/acme/legacy/12'), req('/api/prs/acme/legacy/12/diff'), req('/api/prs/acme/legacy/12/fixes'), post('/api/prs/acme/legacy/12/comments', { text: 'hi' }), post('/api/prs/acme/legacy/12/fixes', { commentIds: [1] })]) {
+      const res = await r;
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'repo is not in your repos', needRepo: true });
+    }
+    expect(calls).toEqual([]);
+    expect((await req('/api/prs/ACME/Api/12')).status).toBe(200);
   });
 
   it('serves one PR with its files and comments, and its diff separately', async () => {
@@ -146,7 +161,7 @@ describe('pull requests', () => {
     const { req, connectWorkbench, calls } = setup();
     expect((await req('/api/reviews')).status).toBe(409);
     await connectWorkbench();
-    const res = await (await req('/api/reviews?repos=acme/api,acme/web')).json();
+    const res = await (await req('/api/reviews')).json();
     expect(res).toMatchObject({ me: 'Bob Stone', searched: ['acme/api', 'acme/web'], scanned: 3 });
     // web#4 has him as reviewer; api#13 (by a different Bob) mentions him; api#12 does neither
     expect(res.items.map((p: any) => [`${p.repo}#${p.id}`, p.why])).toEqual([
@@ -159,9 +174,9 @@ describe('pull requests', () => {
     // cached for a few minutes unless refreshed
     const scans = () => calls.filter((c) => c.tool === 'bitbucket_list_prs').length;
     const before = scans();
-    await req('/api/reviews?repos=acme/api,acme/web');
+    await req('/api/reviews');
     expect(scans()).toBe(before);
-    await req('/api/reviews?repos=acme/api,acme/web&refresh=1');
+    await req('/api/reviews?refresh=1');
     expect(scans()).toBe(before + 2);
   });
 
@@ -170,30 +185,35 @@ describe('pull requests', () => {
     expect(nameFromEmail('JANE_doe2+ci@x.io')).toBe('Jane Doe2');
     expect(nameFromEmail('42@x.io')).toBe('');
 
-    const { req, connectWorkbench } = setup({ whoami: { id: 'u1', email: 'bob.stone@acme.test' } });
+    const { req, connectWorkbench } = setup({ whoami: { id: 'u1', email: 'bob.stone@acme.test' }, repos: ['acme/web'] });
     await connectWorkbench();
-    const guessed = await (await req('/api/reviews?repos=acme/web')).json();
+    const guessed = await (await req('/api/reviews')).json();
     expect(guessed.me).toBe('Bob Stone');
     expect(guessed.items.map((p: any) => p.id)).toEqual([4]);
-    const set = await (await req('/api/reviews?repos=acme/web&as=Somebody%20Else')).json();
+    const set = await (await req('/api/reviews?as=Somebody%20Else')).json();
     expect(set).toMatchObject({ me: 'Somebody Else', items: [] });
 
-    const anon = setup({ whoami: { id: 'u1', email: '42@acme.test' } });
+    const anon = setup({ whoami: { id: 'u1', email: '42@acme.test' }, repos: ['acme/web'] });
     await anon.connectWorkbench();
-    const r = await anon.req('/api/reviews?repos=acme/web');
+    const r = await anon.req('/api/reviews');
     expect(r.status).toBe(400);
     expect(await r.json()).toMatchObject({ needName: true });
   });
 
-  it("also scans the workspace's most recently updated repos", async () => {
-    const { req, connectWorkbench, calls } = setup();
+  it('scans only my repos, looking you up in the first one\'s workspace', async () => {
+    const { req, connectWorkbench, calls } = setup({ bitbucketWorkspace: 'acme', repos: ['ACME/api'] });
     await connectWorkbench();
-    const res = await (await req('/api/reviews?workspace=acme&repos=ACME/api')).json();
-    // ACME/api and the workspace's acme/api are one repo
-    expect(res).toMatchObject({ workspace: 'acme', searched: ['ACME/api'] });
-    expect(calls.filter((c) => c.tool === 'bitbucket_list_repos').length).toBeGreaterThan(0);
-    const none = await (await req('/api/reviews?workspace=bad%20ws')).json();
-    expect(none).toMatchObject({ workspace: 'bad ws', searched: [] });
+    const res = await (await req('/api/reviews?workspace=other&repos=acme/web')).json();
+    expect(res).toMatchObject({ searched: ['ACME/api'] });
+    expect(calls.filter((c) => c.tool === 'bitbucket_list_repos')).toEqual([]);
+    expect(calls.filter((c) => c.tool === 'bitbucket_list_prs').map((c) => c.args.repoSlug)).toEqual(['api']);
+    expect(calls.find((c) => c.tool === 'bitbucket_search_users')!.args.workspace).toBe('ACME');
+
+    const empty = setup({ repos: [] });
+    await empty.connectWorkbench();
+    const r = await empty.req('/api/reviews');
+    expect(r.status).toBe(409);
+    expect(await r.json()).toMatchObject({ needRepos: true });
   });
 
   it('lists repos from the configured workspace, sharing one load between concurrent callers', async () => {
@@ -212,5 +232,26 @@ describe('pull requests', () => {
     const r = await req('/api/repos');
     expect(r.status).toBe(400);
     expect(await r.json()).toMatchObject({ needWorkspace: true });
+  });
+});
+
+describe('my repos api', () => {
+  it('adds a repo found in its workspace, with the forge spelling and main branch', async () => {
+    const { req, post, connectWorkbench } = setup({ repos: [] });
+    await connectWorkbench();
+    expect((await post('/api/my-repos', { repo: 'not a repo' })).status).toBe(400);
+    const unknown = await post('/api/my-repos', { repo: 'acme/nope' });
+    expect(unknown.status).toBe(404);
+
+    const added = await post('/api/my-repos', { repo: 'acme/API' });
+    expect(added.status).toBe(201);
+    expect(await added.json()).toMatchObject({ name: 'acme/api', mainBranch: 'main' });
+    expect((await post('/api/my-repos', { repo: 'ACME/api' })).status).toBe(409);
+    const { repos } = await (await req('/api/my-repos')).json();
+    expect(repos).toEqual([{ name: 'acme/api', mainBranch: 'main', addedAt: expect.any(String) }]);
+
+    const del = await req('/api/my-repos/acme/api', { method: 'DELETE', headers: { 'x-legos': '1' } });
+    expect(del.status).toBe(204);
+    expect(await (await req('/api/my-repos')).json()).toEqual({ repos: [] });
   });
 });

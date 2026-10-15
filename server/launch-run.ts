@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel } from '../shared/types.ts';
 import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
-import { BRANCH_RE, HttpError, TICKET_RE, domain, optText, text, type Deps } from './http.ts';
+import { BRANCH_RE, HttpError, TICKET_RE, domain, optText, requireMyRepo, text, type Deps } from './http.ts';
 
 const MODES = ['default', 'acceptEdits', 'plan'] as const satisfies PermissionMode[];
 const SHARES = ['private', 'status', 'full'] as const satisfies ShareLevel[];
@@ -44,11 +44,13 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   if (req.repo) {
     const repo = parseRepo(req.repo);
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
+    requireMyRepo(deps, uid, req.repo);
     const key = req.ticket || detectTicket(prompt, settings.ticketKeys) || `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
     if (m.owner !== uid) throw new HttpError(404, 'session not found');
+    requireMyRepo(deps, uid, `${m.repo.workspace}/${m.repo.slug}`);
     clone = { path: cwd, repo: m.repo };
   }
   if (clone) {
