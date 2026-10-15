@@ -7,5 +7,6 @@
       { "path": "/work/bad", "level": "public" }
     ]
   },
-  "ticketKeys": ["PROJ", "bad-key"]
+  "ticketKeys": ["PROJ", "bad-key"],
+  "jiraFlow": { "codeReview": "In Review", "readyForQa": " ", "todo": 7 }
 }

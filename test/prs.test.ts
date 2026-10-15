@@ -248,7 +248,7 @@ describe('my repos api', () => {
     expect(await added.json()).toMatchObject({ name: 'acme/api', mainBranch: 'main' });
     expect((await post('/api/my-repos', { repo: 'ACME/api' })).status).toBe(409);
     const { repos } = await (await req('/api/my-repos')).json();
-    expect(repos).toEqual([{ name: 'acme/api', mainBranch: 'main', addedAt: expect.any(String) }]);
+    expect(repos).toEqual([{ name: 'acme/api', mainBranch: 'main', addedAt: expect.any(String), projects: [] }]);
 
     const del = await req('/api/my-repos/acme/api', { method: 'DELETE', headers: { 'x-legos': '1' } });
     expect(del.status).toBe(204);

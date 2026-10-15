@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { Settings, ShareLevel } from '../shared/types.ts';
+import type { JiraFlow, Settings, ShareLevel } from '../shared/types.ts';
 
 const run = promisify(execFile);
 
@@ -11,7 +11,8 @@ export function settingsPath(): string {
   return process.env.LEGOS_SETTINGS ?? join(homedir(), '.legos-factory', 'settings.json');
 }
 
-const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, ticketKeys: [] };
+const FLOW: JiraFlow = { todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' };
+const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, ticketKeys: [], jiraFlow: FLOW };
 const LEVELS: ShareLevel[] = ['private', 'status', 'full'];
 
 const expand = (p: string) => resolve(p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
@@ -33,6 +34,7 @@ export async function loadSettings(): Promise<Settings & { error: string | null 
         .map((r: any) => ({ path: expand(r.path), level: r.level })),
     },
     ticketKeys: Array.isArray(raw?.ticketKeys) ? raw.ticketKeys.filter((k: unknown) => typeof k === 'string' && /^[A-Z][A-Z0-9]+$/.test(k)) : [],
+    jiraFlow: Object.fromEntries(Object.entries(FLOW).map(([k, d]) => [k, typeof raw?.jiraFlow?.[k] === 'string' && raw.jiraFlow[k].trim() ? raw.jiraFlow[k].trim() : d])) as JiraFlow,
     error: null,
   };
 }

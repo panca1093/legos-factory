@@ -10,6 +10,7 @@ import type { Connections, Pending } from './connections.ts';
 import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
 import type { Users } from './users.ts';
+import type { WorkItems } from './work-items.ts';
 import { tokenFromCloneUrl, type Workbench } from './workbench.ts';
 import type { RepoRef } from './workspace.ts';
 
@@ -44,6 +45,9 @@ export type Deps = {
   db: DatabaseSync;
   activity: ActivityLog;
   myRepos: MyRepos;
+  workItems: WorkItems;
+  // the Jira sync running or queued per work item (see jira-sync.ts)
+  syncs: Map<string, Promise<void>>;
   http: typeof fetch;
   fixes: FixQueues;
   wsRoot: string;

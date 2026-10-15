@@ -32,6 +32,22 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create table if not exists user_repos (
       owner text not null, repo_key text not null, name text not null, main_branch text,
       added_at text not null, primary key (owner, repo_key));
+    create table if not exists work_items (
+      owner text not null, ticket text not null, created_at text not null,
+      status text, done integer not null default 0, primary key (owner, ticket));
+    create table if not exists work_item_repos (
+      owner text not null, ticket text not null, repo_key text not null, name text not null,
+      added_at text not null, primary key (owner, ticket, repo_key));
+    create table if not exists ticket_links (
+      owner text not null, ticket text not null, repo_key text not null, kind text not null,
+      pr_id integer not null, branch text not null, title text not null, state text not null,
+      source text not null, run_id text, commented integer not null default 0, updated_at text not null,
+      primary key (owner, ticket, repo_key, pr_id));
+    create table if not exists work_item_events (
+      owner text not null, ticket text not null, at text not null, type text not null, detail text not null);
+    create index if not exists work_item_events_item on work_item_events (owner, ticket, at);
+    create table if not exists repo_projects (
+      owner text not null, repo_key text not null, project text not null, primary key (owner, repo_key, project));
   `);
   return db;
 }

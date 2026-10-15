@@ -10,6 +10,7 @@ export function toItem(run: Omit<Run, 'events'>): ActivityItem {
     project: run.repo?.split('/')[1] ?? basename(run.cwd),
     repo: run.repo ?? null,
     ticket: run.ticket,
+    stage: run.stage ?? null,
     share: run.share,
     status: run.status,
     endedBy: run.endedBy,
@@ -24,7 +25,7 @@ export function toItem(run: Omit<Run, 'events'>): ActivityItem {
 }
 
 export function toTeamItem(i: ActivityItem): TeamItem {
-  const { share: _s, estimatedCostUsd: _c, ...rest } = i;
+  const { share: _s, estimatedCostUsd: _c, stage: _st, ...rest } = i;
   return rest;
 }
 
@@ -69,6 +70,13 @@ export class ActivityLog {
       .prepare(`select session_id from runs where owner = ? and session_id is not null group by session_id order by max(last_event_at) desc limit ?`)
       .all(owner, limit) as { session_id: string }[];
     return rows.map((r) => r.session_id);
+  }
+
+  // a design or build run on this ticket has started
+  workedOn(owner: string, ticket: string): boolean {
+    return !!this.db
+      .prepare(`select 1 from runs where owner = ? and json_extract(item, '$.ticket') = ? and json_extract(item, '$.stage') is not null limit 1`)
+      .get(owner, ticket);
   }
 
   ownsSession(owner: string, sessionId: string): boolean {

@@ -13,6 +13,7 @@ describe('settings', () => {
     process.env.LEGOS_SETTINGS = fx('missing.json');
     const s = await loadSettings();
     expect(s).toMatchObject({ share: { default: 'private', rules: [] }, ticketKeys: [], error: null });
+    expect(s.jiraFlow).toEqual({ todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' });
   });
 
   it('falls back to private and reports a broken file', async () => {
@@ -27,6 +28,7 @@ describe('settings', () => {
     const s = await loadSettings();
     expect(s.share.rules.map((r) => r.level)).toEqual(['status', 'full']);
     expect(s.ticketKeys).toEqual(['PROJ']);
+    expect(s.jiraFlow).toEqual({ todo: 'To Do', inProgress: 'In Progress', codeReview: 'In Review', readyForQa: 'Ready for QA' });
   });
 });
 
