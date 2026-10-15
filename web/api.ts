@@ -43,7 +43,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
-export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; approved: boolean }[]; comments: number; tasks: number; created: string | null };
+export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
 export type PrFile = { status: string; path: string; oldPath: string | null; added: number; removed: number };
 export type PrComment = { id: number; author: string | null; text: string; path: string | null; line: number | null; created: string | null };
 export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: boolean; why: ('reviewer' | 'mentioned')[]; comments: number; url: string | null };
@@ -105,8 +105,8 @@ export const api = {
     call<FixQueue>(`/api/fixes/${queue}/items/${commentId}/${action}`, { method: 'POST', body: JSON.stringify({ note }) }),
   cancelFixes: (queue: string) => call<FixQueue>(`/api/fixes/${queue}/cancel`, { method: 'POST' }),
   reviews: (refresh = false) =>
-    call<{ me: string; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
-      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}&as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
+    call<{ me: string; matchedById: boolean; workspace: string | null; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
+      `/api/reviews?repos=${encodeURIComponent(recentRepos().join(','))}&workspace=${encodeURIComponent(storage('lf:bb-ws') ?? '')}&as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
     ),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>

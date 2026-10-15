@@ -2491,7 +2491,14 @@ function Reviews() {
   // Bitbucket name to match on, when the one guessed from your email is wrong
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState(() => storage('lf:bb-name') ?? '');
-  const saveName = () => (storage('lf:bb-name', name.trim()), setNaming(false), reload());
+  const [ws, setWs] = useState(() => storage('lf:bb-ws') ?? '');
+  const saveName = () => {
+    storage('lf:bb-name', name.trim());
+    if (/^[\w.-]+$/.test(ws.trim())) storage('lf:bb-ws', ws.trim());
+    setNaming(false);
+    reload();
+  };
+  const noWorkspace = !!data && !data.workspace;
   const rows: ReviewRequest[] = data?.items ?? [];
   const todo = rows.filter((p) => !p.approvedByMe);
   return (
@@ -2518,11 +2525,15 @@ function Reviews() {
               )}
             </p>
           )}
-          {(naming || /Bitbucket name/.test(error ?? '')) && (
+          {(naming || /Bitbucket name/.test(error ?? '') || (noWorkspace && rows.length === 0)) && (
             <div className="pr-box name-box">
               <label className="field">
-                Your name in Bitbucket, exactly as reviewers see it
-                <input className="input" value={name} placeholder="e.g. Jane Doe" autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveName()} />
+                Bitbucket workspace, where your team's repos live
+                <input className="input" value={ws} placeholder="e.g. acme" autoFocus={noWorkspace} onChange={(e) => setWs(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveName()} />
+              </label>
+              <label className="field">
+                Your name in Bitbucket, exactly as reviewers see it (leave empty to use the one from your email)
+                <input className="input" value={name} placeholder="e.g. Jane Doe" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveName()} />
               </label>
               <div className="pr-reply-actions">
                 <button type="button" className="btn sm ghost" onClick={() => setNaming(false)}>
@@ -2537,7 +2548,7 @@ function Reviews() {
           {!data ? (
             !error && <Empty>Looking through your repos' open pull requests…</Empty>
           ) : data.searched.length === 0 ? (
-            <Empty>No repos to look in yet. Repos you pick in New task, or work in here, are checked for review requests.</Empty>
+            <Empty>No repos to look in yet. Set your Bitbucket workspace above, and its most active repos are checked for review requests.</Empty>
           ) : rows.length === 0 ? (
             <Empty>Nothing is waiting on you.</Empty>
           ) : (
@@ -2574,11 +2585,12 @@ function Reviews() {
           )}
           {data && (
             <p className="footnote">
-              Checked the {data.scanned} most recently updated open PRs in {data.searched.join(', ') || 'no repos'}, matching you as “{data.me}” (
+              Checked the {data.scanned} most recently updated open PRs in {data.searched.length} repo{data.searched.length === 1 ? '' : 's'}
+              {data.workspace ? ` (yours plus ${data.workspace}'s most active)` : ''}, matching you as “{data.me}”{data.matchedById ? ' by Bitbucket account' : ' by name'} (
               <button type="button" className="text-action" onClick={() => setNaming(true)}>
                 change
               </button>
-              ) · {ago(data.at, now)}. Bitbucket can't search for review requests across repos, so add a repo by picking it in New task.
+              ) · {ago(data.at, now)}.
             </p>
           )}
         </div>

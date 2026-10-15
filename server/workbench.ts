@@ -60,7 +60,7 @@ export type PrRow = { repo: string; id: number; title: string; state: string; au
 export type Pr = PrRow & {
   description: string;
   url: string | null;
-  reviewers: { name: string; approved: boolean }[];
+  reviewers: { name: string; uuid: string | null; approved: boolean }[];
   comments: number;
   tasks: number;
   created: string | null;
@@ -342,7 +342,7 @@ export class Workbench {
       created: p.created_on ?? null,
       description: String(p.description ?? ''),
       url: p.url ?? null,
-      reviewers: (p.reviewers ?? []).map((r: any) => ({ name: String(r.display_name ?? 'Reviewer'), approved: r.approved === true })),
+      reviewers: (p.reviewers ?? []).map((r: any) => ({ name: String(r.display_name ?? 'Reviewer'), uuid: r.uuid ?? null, approved: r.approved === true })),
       comments: Number(p.comment_count ?? 0),
       tasks: Number(p.task_count ?? 0),
     };
@@ -385,6 +385,11 @@ export class Workbench {
       line: c.inline?.line ?? null,
       created: c.created_on ?? null,
     }));
+  }
+
+  async bitbucketSearchUsers(token: string, workspace: string, query: string): Promise<{ name: string; uuid: string }[]> {
+    const r = await this.execute(token, 'bitbucket_search_users', { workspace, query, pagelen: 20 });
+    return (r?.users ?? []).map((u: any) => ({ name: String(u.display_name ?? ''), uuid: String(u.uuid ?? '') })).filter((u: { uuid: string }) => u.uuid);
   }
 
   // The tool has no parent id, so a reply is a new comment on the same line (or a general one).
