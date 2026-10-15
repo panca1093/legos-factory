@@ -84,7 +84,8 @@ const PROTOCOL = '2025-06-18';
 export function tokenFromCloneUrl(raw: string): string | null {
   try {
     const u = new URL(raw);
-    return u.protocol === 'https:' && u.hostname === 'bitbucket.org' && u.username === 'x-token-auth' && u.password ? decodeURIComponent(u.password) : null;
+    const token = u.protocol === 'https:' && u.hostname === 'bitbucket.org' && u.username === 'x-token-auth' && u.password ? decodeURIComponent(u.password) : null;
+    return token && !/[\x00-\x1f\x7f]/.test(token) ? token : null;
   } catch {
     return null;
   }

@@ -84,11 +84,16 @@ beforeAll(async () => {
   process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
   root = forgeRoot();
   server = await gitServer(root);
-  // https://bitbucket.org/ → the local server, appended to whatever GIT_CONFIG_* the environment already has
-  const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
-  process.env[`GIT_CONFIG_KEY_${n}`] = `url.http://127.0.0.1:${(server.address() as AddressInfo).port}/.insteadOf`;
-  process.env[`GIT_CONFIG_VALUE_${n}`] = 'https://bitbucket.org/';
-  process.env.GIT_CONFIG_COUNT = String(n + 1);
+  // hermetic, plus the global SSH rewrite many machines have; each repo URL → the local server
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const rules = [
+    ['url.ssh://git@bitbucket.org/.insteadOf', 'https://bitbucket.org/'],
+    ...['app', 'web'].map((slug) => [`url.${local}/acme/${slug}.git.insteadOf`, `https://bitbucket.org/acme/${slug}.git`]),
+  ];
+  rules.forEach(([k, v], i) => ((process.env[`GIT_CONFIG_KEY_${i}`] = k), (process.env[`GIT_CONFIG_VALUE_${i}`] = v)));
+  process.env.GIT_CONFIG_COUNT = String(rules.length);
   delete process.env.GIT_ASKPASS;
 });
 
@@ -100,7 +105,7 @@ afterAll(() => {
 describe('tokenFromCloneUrl', () => {
   it('reads the token from a Bitbucket clone URL, null for anything else', () => {
     expect(tokenFromCloneUrl(cloneUrl('acme', 'app'))).toBe(TOKEN);
-    for (const bad of ['', 'not a url', 'https://bitbucket.org/acme/app.git', 'https://x-token-auth:@bitbucket.org/acme/app.git', 'https://bob:t@bitbucket.org/acme/app.git', 'http://x-token-auth:t@bitbucket.org/acme/app.git', 'https://x-token-auth:t@evil.test/acme/app.git'])
+    for (const bad of ['', 'not a url', 'https://bitbucket.org/acme/app.git', 'https://x-token-auth:@bitbucket.org/acme/app.git', 'https://bob:t@bitbucket.org/acme/app.git', 'http://x-token-auth:t@bitbucket.org/acme/app.git', 'https://x-token-auth:t@evil.test/acme/app.git', 'https://x-token-auth:a%0Ab@bitbucket.org/acme/app.git'])
       expect(tokenFromCloneUrl(bad)).toBeNull();
   });
 });
@@ -114,6 +119,7 @@ describe('cloning with a workbench credential', () => {
     const config = readFileSync(join(cwd, '.git', 'config'), 'utf8');
     expect(config).not.toContain('tok-SECRET');
     expect(git(cwd, 'config', '--local', 'remote.origin.url')).toBe('https://bitbucket.org/acme/app.git');
+    expect(git(cwd, 'config', '--local', 'url.https://bitbucket.org/acme/.insteadOf')).toBe('https://bitbucket.org/acme/');
     expect(execFileSync('git', ['config', '--local', '--get-all', 'credential.https://bitbucket.org.helper'], { cwd }).toString()).toBe(
       '\n!f() { test "$1" = get || exit 0; curl -fsS -H "x-legos-run: $LEGOS_RUN_SECRET" "$LEGOS_URL/git/credential"; }; f\n',
     );
