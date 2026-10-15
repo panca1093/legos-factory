@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, LinkKind, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -19,7 +19,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
   if (res.status === 401 && path.startsWith('/api/')) signedOutListeners.forEach((f) => f());
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true });
+  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true, needWorkItem: body.needWorkItem === true });
   return body as T;
 }
 
@@ -42,7 +42,8 @@ export type JiraDev = {
   stale: boolean;
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
-export type MyRepo = { name: string; mainBranch: string | null; addedAt: string };
+export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
+export type { LinkKind, Stage, WorkItem };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -103,8 +104,16 @@ export const api = {
   myRepos: () => call<{ repos: MyRepo[] }>('/api/my-repos'),
   addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
+  repoProjects: (repo: string, projects: string[]) => call<{ projects: string[] }>(`/api/my-repos/${repo}/projects`, { method: 'PUT', body: JSON.stringify({ projects }) }),
+  workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  workItem: (ticket: string) => call<WorkItem>(`/api/work-items/${ticket}`),
+  addWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'POST', body: JSON.stringify({ repos }) }),
+  removeWorkItemRepo: (ticket: string, repo: string) => call<unknown>(`/api/work-items/${ticket}/repos/${repo}`, { method: 'DELETE' }),
+  linkPr: (ticket: string, repo: string, prId: number, kind: LinkKind) => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
+  unlinkPr: (ticket: string, repo: string, prId: number) => call<unknown>(`/api/work-items/${ticket}/links/${repo}/${prId}`, { method: 'DELETE' }),
+  syncWorkItem: (ticket: string) => call<WorkItem>(`/api/work-items/${ticket}/sync`, { method: 'POST' }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
-  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
+  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),
   send: (id: string, text: string) => call<{ ok: true }>(`/api/runs/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }),
   setModel: (id: string, model: string) => call<{ ok: true }>(`/api/runs/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) }),

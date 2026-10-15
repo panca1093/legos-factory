@@ -116,6 +116,19 @@ function Repositories() {
               <div className="copy">
                 <b className="mono">{r.name}</b>
                 <span>{r.mainBranch ? `main branch ${r.mainBranch}` : 'no main branch reported'}</span>
+                <label className="project-keys">
+                  <span>Jira projects</span>
+                  <input
+                    className="input sm mono"
+                    defaultValue={r.projects.join(', ')}
+                    placeholder="e.g. PROJ, OPS — pre-selects this repo for their tickets"
+                    onBlur={(e) => {
+                      const keys = e.target.value.split(/[\s,]+/).filter(Boolean);
+                      if (keys.join() !== r.projects.join()) void act(() => api.repoProjects(r.name, keys));
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                  />
+                </label>
               </div>
               <div className="actions">
                 {removing === r.name ? (

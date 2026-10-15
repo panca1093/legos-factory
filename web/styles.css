@@ -774,3 +774,17 @@ a.list-item:hover, .jira-row:hover, .row.link:hover { background: var(--hover); 
 .review-row { text-decoration: none; color: inherit; }
 .review-row .copy > span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .name-box { display: grid; gap: 10px; max-width: 520px; }
+
+/* work items */
+.link-chip { display: inline-flex; align-items: center; gap: 2px; }
+.link-chip .text-action { padding: 0 4px; }
+.check-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.project-keys { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.input.sm { padding: 5px 8px; font-size: 12px; width: auto; }
+.work-item { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.work-item h3 { margin: 0; font-size: 14px; }
+.work-item-repo { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.work-item-events { margin: 0; padding-left: 18px; font-size: 12px; }
+.work-item-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.work-item-actions > span { display: inline-flex; gap: 6px; align-items: center; }
