@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Context } from 'hono';
 import type { HTTPException } from 'hono/http-exception';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
 import type { RunManager } from './claude-runs.ts';
 import type { ActivityLog } from './activity.ts';
@@ -93,7 +94,7 @@ export const upstream = <T>(work: Promise<T>) =>
   });
 
 export const onError = (err: Error, c: Context) => {
-  if (err instanceof HttpError) return c.json({ error: err.message, ...err.extra }, err.status as 400);
+  if (err instanceof HttpError) return c.json({ error: err.message, ...err.extra }, err.status as ContentfulStatusCode);
   // the rest as Hono's default handler would
   if ('getResponse' in err) {
     const res = (err as HTTPException).getResponse();

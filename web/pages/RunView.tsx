@@ -3,8 +3,7 @@ import type { Run, RunKind } from '../../shared/types.ts';
 import { api, ago, projectName, useFetch, useNow } from '../api.ts';
 import { ApprovalCard, Empty, ModelSelect, ShareBadge, TicketChip, StatusPill, Thread, runTone } from '../components.tsx';
 import { Icon } from '../icons.tsx';
-import { ALIVE, type Live, type ResumeReq, type LaunchReq, useReview, Frame } from '../chrome.tsx';
-import { useStickyScroll } from './Sessions.tsx';
+import { ALIVE, type Live, type ResumeReq, type LaunchReq, useReview, useStickyScroll, Frame } from '../chrome.tsx';
 
 export function RunView({
   id,

@@ -89,20 +89,7 @@ export function prsRoutes(deps: Deps) {
     const ref = prRef(c);
     const { text, replyTo } = parse(commentSchema, await readBody(c));
     const wb = await requireWorkbench(deps, c.get('uid'));
-    const comment = await upstream(
-      (async () => {
-        let inline: { path: string; line: number } | undefined;
-        let full = text;
-        if (replyTo !== null) {
-          const parent = (await wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id)).find((x) => x.id === replyTo);
-          if (!parent) throw new HttpError(404, 'comment not found');
-          if (parent.path && parent.line) inline = { path: parent.path, line: parent.line };
-          const quoted = parent.text.split('\n').slice(0, 4).map((l) => `> ${l}`).join('\n');
-          full = `${parent.author ? `> **${parent.author}:**\n` : ''}${quoted}\n\n${text}`;
-        }
-        return wb.client.bitbucketAddComment(wb.token, ref.workspace, ref.slug, ref.id, full, inline);
-      })(),
-    );
+    const comment = await upstream(postComment(wb, ref, text, replyTo));
     return c.json(comment, 201);
   });
 
@@ -117,25 +104,7 @@ export function prsRoutes(deps: Deps) {
     const { commentIds } = parse(fixesSchema, await readBody(c));
     const wb = await requireWorkbench(deps, c.get('uid'));
     const queue = await upstream(
-      (async () => {
-        const [pr, comments] = await Promise.all([
-          wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
-          wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
-        ]);
-        if (pr.state !== 'OPEN') throw new HttpError(409, 'only an open PR can take fixes');
-        if (!BRANCH_RE.test(pr.source)) throw new HttpError(409, 'the PR branch name is not usable');
-        const picked = [...new Set(commentIds)].map((id) => comments.find((x) => x.id === id));
-        if (picked.some((x) => !x)) throw new HttpError(404, 'comment not found');
-        const settings = await loadSettings();
-        return fixes.create({
-          owner: c.get('uid'),
-          repo: `${ref.workspace}/${ref.slug}`,
-          prId: ref.id,
-          branch: pr.source,
-          ticket: detectTicket(pr.source, settings.ticketKeys) ?? detectTicket(pr.title, settings.ticketKeys),
-          comments: picked.map((x) => ({ commentId: x!.id, author: x!.author, text: x!.text, path: x!.path, line: x!.line })),
-        });
-      })().catch((err) => {
+      startFixes(deps, c.get('uid'), wb, ref, commentIds).catch((err) => {
         // FixQueues says 409 when the factory is already on this PR
         throw (err as { status?: number })?.status === 409 ? new HttpError(409, errMsg(err)) : err;
       }),
@@ -243,4 +212,39 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
     }
   }));
   return out;
+}
+
+type PrRef = ReturnType<typeof prRef>;
+
+async function postComment(wb: WorkbenchClient, ref: PrRef, text: string, replyTo: number | null) {
+  let inline: { path: string; line: number } | undefined;
+  let full = text;
+  if (replyTo !== null) {
+    const parent = (await wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id)).find((x) => x.id === replyTo);
+    if (!parent) throw new HttpError(404, 'comment not found');
+    if (parent.path && parent.line) inline = { path: parent.path, line: parent.line };
+    const quoted = parent.text.split('\n').slice(0, 4).map((l) => `> ${l}`).join('\n');
+    full = `${parent.author ? `> **${parent.author}:**\n` : ''}${quoted}\n\n${text}`;
+  }
+  return wb.client.bitbucketAddComment(wb.token, ref.workspace, ref.slug, ref.id, full, inline);
+}
+
+async function startFixes({ fixes }: Deps, uid: string, wb: WorkbenchClient, ref: PrRef, commentIds: number[]) {
+  const [pr, comments] = await Promise.all([
+    wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
+    wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
+  ]);
+  if (pr.state !== 'OPEN') throw new HttpError(409, 'only an open PR can take fixes');
+  if (!BRANCH_RE.test(pr.source)) throw new HttpError(409, 'the PR branch name is not usable');
+  const picked = [...new Set(commentIds)].map((id) => comments.find((x) => x.id === id));
+  if (picked.some((x) => !x)) throw new HttpError(404, 'comment not found');
+  const settings = await loadSettings();
+  return fixes.create({
+    owner: uid,
+    repo: `${ref.workspace}/${ref.slug}`,
+    prId: ref.id,
+    branch: pr.source,
+    ticket: detectTicket(pr.source, settings.ticketKeys) ?? detectTicket(pr.title, settings.ticketKeys),
+    comments: picked.map((x) => ({ commentId: x!.id, author: x!.author, text: x!.text, path: x!.path, line: x!.line })),
+  });
 }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Run, RunKind } from '../shared/types.ts';
 import { api, useLive, type Conn, type Me } from './api.ts';
 import { ConnChip, go } from './components.tsx';
@@ -127,3 +127,20 @@ export const initials = (s: string) =>
     .slice(0, 2)
     .map((w) => w[0]!.toUpperCase())
     .join('') || '?';
+
+// Keeps the thread pinned to the bottom while new events arrive, unless the user scrolled up.
+export function useStickyScroll(dep: unknown) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [dep]);
+  const onScroll = () => {
+    const el = ref.current;
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+  return { ref, onScroll };
+}
+
+export const PR_TONE: Record<string, string> = { OPEN: 'run', MERGED: 'good', DECLINED: 'bad', SUPERSEDED: 'off' };

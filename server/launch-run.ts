@@ -30,8 +30,7 @@ export const launchSchema = z.object({
 
 export type LaunchRequest = z.output<typeof launchSchema>;
 
-// Starts a run for uid: in cwd, or in a fresh clone when a repo is given. Tags it with a ticket and a
-// share level, and hands it the user's connected MCP servers through this app's proxy.
+// Runs in cwd or a fresh clone of repo, with the owner's connections reached through this app's proxy.
 export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Promise<Run> {
   const { runs, activity, opts, wsRoot } = deps;
   const { prompt, branch, permissionMode, resume, model, kind } = req;

@@ -3,7 +3,7 @@ import type { FixItem, FixQueue } from '../../shared/types.ts';
 import { api, ago, useFetch, useNow, type Pr, type PrComment } from '../api.ts';
 import { Empty, Markdown } from '../components.tsx';
 import { Icon } from '../icons.tsx';
-import { Frame } from '../chrome.tsx';
+import { PR_TONE, Frame } from '../chrome.tsx';
 import { splitDiff, DIFF_LINE_CAP, numberDiff } from '../lib/diff.ts';
 
 const FIX_LABEL: Record<FixItem['status'], [string, string]> = {
@@ -194,8 +194,6 @@ function reviewPrompt(pr: Pr) {
 Read the PR, its diff and its existing comments with the workbench Bitbucket tools (bitbucket_get_pr, bitbucket_get_pr_diff, bitbucket_list_pr_comments), and the code around the changes for context.
 Do not post, approve or change anything. Answer with a review I can post myself: blocking issues first, then suggestions, then questions, each with file:line and a one-paragraph reason.`;
 }
-
-export const PR_TONE: Record<string, string> = { OPEN: 'run', MERGED: 'good', DECLINED: 'bad', SUPERSEDED: 'off' };
 
 // The latest fix queue for this PR, polled while it runs. refresh() starts polling again after a change.
 function useFixQueue(repo: string, id: number) {

@@ -3,8 +3,7 @@ import type { RunKind } from '../../shared/types.ts';
 import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type PrRow, rememberRepo } from '../api.ts';
 import { Empty, Markdown, RepoPicker, TicketChip, go } from '../components.tsx';
 import { Icon } from '../icons.tsx';
-import { ALIVE, type Live, type LaunchReq } from '../chrome.tsx';
-import { PR_TONE } from './PrPage.tsx';
+import { ALIVE, PR_TONE, type Live, type LaunchReq } from '../chrome.tsx';
 
 const JIRA_FILTERS = [
   ['mine', 'Assigned to me'],

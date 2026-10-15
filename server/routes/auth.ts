@@ -31,6 +31,14 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
   const prune = (m: Map<string, { at: number }>) => {
     for (const [k, v] of m) if (Date.now() - v.at > ATTEMPT_TTL_MS) m.delete(k);
   };
+  const startWorkbenchLogin = async (workbenchUrl: string, attempt: string) => {
+    const lc = connsFor(LOGIN_OWNER);
+    if (!(await lc.all()).some((x) => x.name === 'workbench')) await lc.add({ name: 'workbench', kind: 'workbench', url: workbenchUrl, auth: 'oauth' });
+    const url = await lc.startOAuth('workbench');
+    prune(attempts);
+    if (attempt) attempts.set(new URL(url).searchParams.get('state')!, { attempt, at: Date.now() });
+    return url;
+  };
   const authWrite = (c: Context) => {
     if (c.req.header('x-legos') !== '1') throw new HttpError(403, 'missing x-legos header');
     if (!users) throw new HttpError(409, 'sign-in is off');
@@ -85,16 +93,7 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
     const workbenchUrl = opts.workbenchUrl;
     if (!workbenchUrl) throw new HttpError(404, 'workbench sign-in is not configured');
     const { attempt } = parse(attemptSchema, await readBody(c));
-    const lc = connsFor(LOGIN_OWNER);
-    const url = await domain(
-      (async () => {
-        if (!(await lc.all()).some((x) => x.name === 'workbench')) await lc.add({ name: 'workbench', kind: 'workbench', url: workbenchUrl, auth: 'oauth' });
-        const url = await lc.startOAuth('workbench');
-        prune(attempts);
-        if (attempt) attempts.set(new URL(url).searchParams.get('state')!, { attempt, at: Date.now() });
-        return url;
-      })(),
-    );
+    const url = await domain(startWorkbenchLogin(workbenchUrl, attempt));
     return c.json({ url });
   });
 

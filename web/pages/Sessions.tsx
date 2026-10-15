@@ -1,9 +1,9 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { SessionSummary } from '../../shared/types.ts';
 import { api, ago, fmtTokens, projectName, useFetch, useNow } from '../api.ts';
 import { Empty, ShareBadge, TicketChip, Thread, UsageRows, totalTokens } from '../components.tsx';
 import { Icon } from '../icons.tsx';
-import { ALIVE, RECENT_MS, type Live, type ResumeReq, Frame } from '../chrome.tsx';
+import { ALIVE, RECENT_MS, type Live, type ResumeReq, useStickyScroll, Frame } from '../chrome.tsx';
 
 export function Sessions({ sessions, error, live }: { sessions: SessionSummary[] | null; error: string | null; live: Live }) {
   const now = useNow();
@@ -95,21 +95,6 @@ export function Sessions({ sessions, error, live }: { sessions: SessionSummary[]
 }
 
 // ---------- chat views ----------
-
-// Keeps the thread pinned to the bottom while new events arrive, unless the user scrolled up.
-export function useStickyScroll(dep: unknown) {
-  const ref = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [dep]);
-  const onScroll = () => {
-    const el = ref.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  return { ref, onScroll };
-}
 
 export function SessionView({ id, live, onContinue }: { id: string; live: Live; onContinue: (r: ResumeReq) => void }) {
   const now = useNow();
