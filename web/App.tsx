@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { Run, RunKind, SessionSummary, TeamItem } from '../shared/types.ts';
-import { api, ago, fmtTokens, onSignedOut, projectName, storage, useFetch, useLive, useNow, type Conn, type Connection, type Integration, type JiraDev, type JiraRow, type Me, type PrComment, type PrRow, rememberRepo } from './api.ts';
+import type { FixItem, FixQueue, Run, RunKind, SessionSummary, TeamItem } from '../shared/types.ts';
+import { api, ago, fmtTokens, onSignedOut, projectName, storage, useFetch, useLive, useNow, type Conn, type Connection, type Integration, type JiraDev, type JiraRow, type Me, type Pr, type PrComment, type PrRow, type ReviewRequest, rememberRepo } from './api.ts';
 import {
   ApprovalCard,
   ConnChip,
@@ -359,6 +359,7 @@ function App({ me }: { me: Me }) {
         <Rail live={live} view={view} id={id} open={railOpen} onNew={newRun} me={me} />
         {!view && <Overview live={live} sessions={sessions.data} error={sessions.error} onNew={newRun} onContinue={continueSession} />}
         {view === 'tasks' && <Tasks live={live} onNew={newRun} />}
+        {view === 'reviews' && <Reviews />}
         {view === 'prs' && route.length === 4 && <PrPage repo={`${route[1]}/${route[2]}`} id={Number(route[3])} />}
         {view === 'settings' && <SettingsPage />}
         {view === 'activity' && <MyActivity live={live} />}
@@ -411,6 +412,9 @@ function Rail({ live, view, id, open, onNew, me }: { live: Live; view?: string; 
         <a className={`navrow ${view === 'tasks' || runView?.kind === 'task' ? 'active' : ''}`} href="#/tasks">
           <Icon name="spark" /> Tasks
           {activeTasks > 0 && <span className="later">{activeTasks} running</span>}
+        </a>
+        <a className={`navrow ${view === 'reviews' ? 'active' : ''}`} href="#/reviews">
+          <Icon name="check" /> Reviews
         </a>
         <a className={`navrow ${view === 'sessions' ? 'active' : ''}`} href="#/sessions">
           <Icon name="clock" /> Sessions
@@ -2059,14 +2063,195 @@ function numberDiff(lines: string[]): DiffLine[] {
   });
 }
 
-function Comment({ c, now }: { c: PrComment; now: number }) {
+const FIX_LABEL: Record<FixItem['status'], [string, string]> = {
+  pending: ['queued', 'off'],
+  proposing: ['proposing…', 'run'],
+  proposed: ['proposal ready', 'watch'],
+  fixing: ['fixing…', 'run'],
+  done: ['fixed', 'good'],
+  skipped: ['skipped', 'off'],
+  failed: ['failed', 'bad'],
+};
+const QUEUE_OPEN: FixQueue['status'][] = ['preparing', 'working', 'waiting'];
+
+// What a comment can do on an open PR: reply as you, or be picked for the factory.
+type CommentActions = { repo: string; prId: number; picked: boolean; canPick: boolean; onPick: (v: boolean) => void; onReplied: () => void };
+
+function Comment({ c, now, general, fix, act }: { c: PrComment; now: number; general?: boolean; fix?: FixItem; act?: CommentActions }) {
+  const [replying, setReplying] = useState(false);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const send = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.comment(act!.repo, act!.prId, text.trim(), c.id);
+      setText('');
+      setReplying(false);
+      act!.onReplied();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="pr-comment inline">
-      <b>{c.author ?? 'Someone'}</b> · {c.created ? ago(c.created, now) : ''}
+    <div className={general ? 'pr-box pr-comment' : 'pr-comment inline'}>
+      <div className="pr-comment-head">
+        <span>
+          <b>{c.author ?? 'Someone'}</b> · {c.created ? ago(c.created, now) : ''}
+        </span>
+        {fix && <span className={`dev-chip tone-${FIX_LABEL[fix.status][1]}`}>factory: {FIX_LABEL[fix.status][0]}</span>}
+      </div>
       <Markdown text={c.text} />
+      {act && (
+        <div className="pr-comment-bar">
+          <button type="button" className="text-action" onClick={() => setReplying(!replying)}>
+            Reply
+          </button>
+          {act.canPick && (
+            <label className="pick">
+              <input type="checkbox" checked={act.picked} onChange={(e) => act.onPick(e.target.checked)} /> Ask factory
+            </label>
+          )}
+        </div>
+      )}
+      {replying && (
+        <div className="pr-reply">
+          <textarea className="input" rows={3} autoFocus value={text} placeholder={`Reply to ${c.author ?? 'this comment'}…`} onChange={(e) => setText(e.target.value)} />
+          {err && <p className="error">{err}</p>}
+          <div className="pr-reply-actions">
+            <button type="button" className="btn sm ghost" onClick={() => setReplying(false)}>
+              Cancel
+            </button>
+            <button type="button" className="btn sm primary" disabled={busy || !text.trim()} onClick={send}>
+              {busy ? 'Posting…' : 'Post reply'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// The factory working through picked comments, one at a time; whatever needs you is opened up.
+function FixPanel({ q, onChange }: { q: FixQueue; onChange: (q: FixQueue) => void }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const act = async (f: () => Promise<FixQueue>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      onChange(await f());
+      setNote('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const open = QUEUE_OPEN.includes(q.status);
+  const settled = q.items.filter((i) => i.status === 'done' || i.status === 'skipped').length;
+  const current = open ? q.items.find((i) => i.status !== 'done' && i.status !== 'skipped') : undefined;
+  const headline =
+    q.status === 'preparing' ? `Checking out ${q.branch}…`
+    : q.status === 'failed' ? 'Could not start'
+    : q.status === 'cancelled' ? 'Stopped'
+    : q.status === 'done' ? 'All picked comments handled'
+    : `Comment ${settled + 1} of ${q.items.length}`;
+  return (
+    <section className="pr-box fix-panel">
+      <div className="fix-head">
+        <div>
+          <div className="page-eyebrow">Factory · review fixes</div>
+          <b>{headline}</b>
+        </div>
+        {open && (
+          <button type="button" className="btn sm ghost" disabled={busy} onClick={() => act(() => api.cancelFixes(q.id))}>
+            Stop
+          </button>
+        )}
+      </div>
+      {q.error && <p className="error">{q.error}</p>}
+      <ol className="fix-items">
+        {q.items.map((i) => {
+          const [label, tone] = FIX_LABEL[i.status];
+          const isCurrent = current?.commentId === i.commentId;
+          return (
+            <li key={i.commentId} className={isCurrent ? 'current' : ''}>
+              <div className="fix-row">
+                <span className={`dev-chip tone-${tone}`}>{label}</span>
+                <span className="ellipsis grow">
+                  <b>{i.author ?? 'Someone'}</b>
+                  {i.path && <span className="mono muted"> · {i.path}{i.line ? `:${i.line}` : ''}</span>} — {i.text.split('\n')[0]}
+                </span>
+                {i.runId && (
+                  <a className="text-action" href={`#/runs/${i.runId}`}>
+                    run →
+                  </a>
+                )}
+              </div>
+              {i.status === 'done' && (
+                <p className="fix-note">
+                  Pushed <code>{i.commit?.slice(0, 7)}</code>
+                  {i.replied ? ' and replied on the comment.' : '.'}
+                  {i.error && <span className="error"> {i.error}</span>}
+                </p>
+              )}
+              {isCurrent && i.status === 'proposing' && <p className="fix-note">Reading the code and drafting a proposal. Nothing changes in this step.</p>}
+              {isCurrent && i.status === 'fixing' && (
+                <p className="fix-note">Applying the fix, then committing and pushing to {q.branch}. Shell commands (tests, commit, push) ask you in Needs you.</p>
+              )}
+              {isCurrent && i.status === 'proposed' && (
+                <div className="fix-proposal">
+                  <Markdown text={i.proposal ?? ''} />
+                  <textarea
+                    className="input"
+                    rows={2}
+                    value={note}
+                    placeholder="Optional: change the proposal or add instructions for the fix"
+                    onChange={(e) => setNote(e.target.value)}
+                  />
+                  <div className="pr-reply-actions">
+                    <button type="button" className="btn sm ghost" disabled={busy} onClick={() => act(() => api.fixAction(q.id, i.commentId, 'skip'))}>
+                      Skip
+                    </button>
+                    <button type="button" className="btn sm primary" disabled={busy} onClick={() => act(() => api.fixAction(q.id, i.commentId, 'approve', note))}>
+                      Approve &amp; fix
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isCurrent && i.status === 'failed' && (
+                <div className="fix-proposal">
+                  <p className="error">{i.error}</p>
+                  <div className="pr-reply-actions">
+                    <button type="button" className="btn sm ghost" disabled={busy} onClick={() => act(() => api.fixAction(q.id, i.commentId, 'skip'))}>
+                      Skip
+                    </button>
+                    <button type="button" className="btn sm primary" disabled={busy} onClick={() => act(() => api.fixAction(q.id, i.commentId, 'retry'))}>
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {err && <p className="error">{err}</p>}
+    </section>
+  );
+}
+
+function reviewPrompt(pr: Pr) {
+  return `Review pull request #${pr.id} in ${pr.repo}: "${pr.title}" (${pr.source} into ${pr.destination}). You are in a checkout of ${pr.source}.
+Read the PR, its diff and its existing comments with the workbench Bitbucket tools (bitbucket_get_pr, bitbucket_get_pr_diff, bitbucket_list_pr_comments), and the code around the changes for context.
+Do not post, approve or change anything. Answer with a review I can post myself: blocking issues first, then suggestions, then questions, each with file:line and a one-paragraph reason.`;
+}
+
 const PR_TONE: Record<string, string> = { OPEN: 'run', MERGED: 'good', DECLINED: 'bad', SUPERSEDED: 'off' };
 
 function PrPage({ repo, id }: { repo: string; id: number }) {
@@ -2084,6 +2269,70 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
   const pr = data?.pr;
   const inline = (path: string) => (data?.comments ?? []).filter((c) => c.path === path);
   const general = (data?.comments ?? []).filter((c) => !c.path);
+
+  // the latest fix queue for this PR, polled while it runs
+  const [queue, setQueue] = useState<FixQueue | null>(null);
+  const [kick, setKick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    let t: ReturnType<typeof setTimeout>;
+    const tick = () =>
+      api.fixQueue(repo, id).then(
+        (r) => {
+          if (!alive) return;
+          setQueue(r.queue);
+          if (r.queue && QUEUE_OPEN.includes(r.queue.status)) t = setTimeout(tick, 2500);
+        },
+        () => alive && (t = setTimeout(tick, 5000)),
+      );
+    tick();
+    return () => ((alive = false), clearTimeout(t));
+  }, [repo, id, kick]);
+  // the factory's replies show up as new comments
+  const replied = queue?.items.filter((i) => i.replied).length ?? 0;
+  useEffect(() => void (replied && reload()), [replied]);
+  const queueOpen = !!queue && QUEUE_OPEN.includes(queue.status);
+  const fixFor = (cid: number) => (queue && queue.items.find((i) => i.commentId === cid)) || undefined;
+
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [askErr, setAskErr] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const canAct = pr?.state === 'OPEN';
+  const actions = (c: PrComment): CommentActions | undefined =>
+    canAct
+      ? {
+          repo,
+          prId: id,
+          picked: picked.has(c.id),
+          canPick: !queueOpen,
+          onPick: (v) => setPicked((p) => (v ? new Set(p).add(c.id) : new Set([...p].filter((x) => x !== c.id)))),
+          onReplied: reload,
+        }
+      : undefined;
+  const ask = async () => {
+    setAsking(true);
+    setAskErr(null);
+    try {
+      // page order: files top to bottom, then general comments
+      const order = [...data!.files.flatMap((f) => inline(f.path)), ...general].map((c) => c.id).filter((cid) => picked.has(cid));
+      setQueue(await api.startFixes(repo, id, order));
+      setPicked(new Set());
+      setKick((k) => k + 1);
+    } catch (e) {
+      setAskErr((e as Error).message);
+    } finally {
+      setAsking(false);
+    }
+  };
+  const reviewWithFactory = async () => {
+    setAskErr(null);
+    try {
+      const run = await api.start({ kind: 'task', repo, branch: pr!.source, prompt: reviewPrompt(pr!), permissionMode: 'default' });
+      location.hash = `#/runs/${run.id}`;
+    } catch (e) {
+      setAskErr((e as Error).message);
+    }
+  };
   return (
     <Frame
       crumb={
@@ -2112,6 +2361,16 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
                   </p>
                 </div>
                 <div className="pr-actions">
+                  {canAct && picked.size > 0 && (
+                    <button className="btn sm primary" disabled={asking} onClick={ask} title="Propose and fix the picked comments one at a time; you approve each proposal">
+                      <Icon name="spark" size={14} /> Ask factory ({picked.size})
+                    </button>
+                  )}
+                  {canAct && (
+                    <button className="btn sm" onClick={reviewWithFactory} title="A task reads the PR and drafts a review for you; it posts nothing">
+                      Review with factory
+                    </button>
+                  )}
                   <button className="btn sm ghost" onClick={reload}>
                     Refresh
                   </button>
@@ -2135,6 +2394,8 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
                 )}
                 {pr!.tasks > 0 && <span className="dev-chip tone-watch">{pr!.tasks} open task{pr!.tasks > 1 ? 's' : ''}</span>}
               </div>
+              {askErr && <p className="error">{askErr}</p>}
+              {queue && <FixPanel q={queue} onChange={(q) => (setQueue(q), setKick((k) => k + 1))} />}
               {pr!.description && (
                 <section className="pr-box pr-desc">
                   <Markdown text={pr!.description} />
@@ -2168,7 +2429,7 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
                             return loose.map((c) => (
                               <div key={c.id}>
                                 <small className="muted">{c.line ? `line ${c.line} (not in this diff)` : 'on this file'}</small>
-                                <Comment c={c} now={now} />
+                                <Comment c={c} now={now} fix={fixFor(c.id)} act={actions(c)} />
                               </div>
                             ));
                           })()}
@@ -2187,7 +2448,7 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
                                     <span className="ln">{d.newNo ?? ''}</span>
                                     <code>{d.text || ' '}</code>
                                   </div>
-                                  {d.newNo !== null && d.kind !== 'del' && notes.filter((c) => c.line === d.newNo).map((c) => <Comment key={c.id} c={c} now={now} />)}
+                                  {d.newNo !== null && d.kind !== 'del' && notes.filter((c) => c.line === d.newNo).map((c) => <Comment key={c.id} c={c} now={now} fix={fixFor(c.id)} act={actions(c)} />)}
                                 </div>
                               ))}
                               {lines.length > DIFF_LINE_CAP && <div className="dl hunk">… {lines.length - DIFF_LINE_CAP} more lines — open in Bitbucket</div>}
@@ -2205,15 +2466,97 @@ function PrPage({ repo, id }: { repo: string; id: number }) {
               {general.length === 0 ? (
                 <Empty>No general comments.</Empty>
               ) : (
-                general.map((c) => (
-                  <div key={c.id} className="pr-box pr-comment">
-                    <b>{c.author ?? 'Someone'}</b> · {c.created ? ago(c.created, now) : ''}
-                    <Markdown text={c.text} />
-                  </div>
-                ))
+                general.map((c) => <Comment key={c.id} c={c} now={now} general fix={fixFor(c.id)} act={actions(c)} />)
               )}
-              <p className="footnote">Read-only for now, through workbench with your own Bitbucket access.</p>
+              <p className="footnote">
+                Through workbench with your own Bitbucket access. Replies post as you, on the same line as the comment (Bitbucket threads aren't available through
+                workbench yet). Ask factory fixes picked comments one at a time on a fresh checkout of {pr!.source}, and only after you approve each proposal.
+              </p>
             </>
+          )}
+        </div>
+      </div>
+    </Frame>
+  );
+}
+
+// Open PRs from others that want you: you're a reviewer, or someone @-mentioned you.
+function Reviews() {
+  const now = useNow(60000);
+  const [refresh, setRefresh] = useState(0);
+  const { data, error } = useFetch(() => api.reviews(refresh > 0), [refresh]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => setLoading(false), [data, error]);
+  const reload = () => (setLoading(true), setRefresh((n) => n + 1));
+  const rows: ReviewRequest[] = data?.items ?? [];
+  const todo = rows.filter((p) => !p.approvedByMe);
+  return (
+    <Frame crumb={<span>Workspace / Reviews</span>}>
+      <div className="scroll">
+        <div className="page">
+          <div className="page-heading">
+            <div>
+              <h1>Reviews</h1>
+              <p className="lead">Pull requests from others that are waiting on you: you're a reviewer, or someone mentioned you.</p>
+            </div>
+            <button className="btn sm ghost" disabled={loading} onClick={reload}>
+              {loading ? 'Checking…' : 'Refresh'}
+            </button>
+          </div>
+          {error && (
+            <p className="error">
+              {error}
+              {/workbench/.test(error) && (
+                <>
+                  {' '}
+                  <a href="#/settings">Open Settings</a>
+                </>
+              )}
+            </p>
+          )}
+          {!data ? (
+            !error && <Empty>Looking through your repos' open pull requests…</Empty>
+          ) : data.searched.length === 0 ? (
+            <Empty>No repos to look in yet. Repos you pick in New task, or work in here, are checked for review requests.</Empty>
+          ) : rows.length === 0 ? (
+            <Empty>Nothing is waiting on you.</Empty>
+          ) : (
+            <>
+              <h2 className="section-title">
+                To review <span className="muted">· {todo.length}</span>
+              </h2>
+              <div className="list-card">
+                {[...todo, ...rows.filter((p) => p.approvedByMe)].map((p) => (
+                  <a key={`${p.repo}#${p.id}`} className="list-item review-row" href={`#/prs/${p.repo}/${p.id}`}>
+                    <span className={`dev-chip tone-${p.approvedByMe ? 'good' : 'run'}`}>{p.approvedByMe ? '✓ approved' : 'to review'}</span>
+                    <div className="copy">
+                      <b className="ellipsis" title={p.title}>
+                        {p.title}
+                      </b>
+                      <span>
+                        <span className="mono">
+                          {p.repo} #{p.id}
+                        </span>
+                        {p.why.map((w) => (
+                          <span key={w} className="dev-chip tone-off">
+                            {w === 'reviewer' ? 'reviewer' : 'mentioned'}
+                          </span>
+                        ))}
+                        <span className="row-meta">
+                          {[p.author, `${p.comments} comment${p.comments === 1 ? '' : 's'}`, p.updated && `updated ${ago(p.updated, now)}`].filter(Boolean).join(' · ')}
+                        </span>
+                      </span>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
+          {data && (
+            <p className="footnote">
+              Checked the {data.scanned} most recently updated open PRs in {data.searched.join(', ') || 'no repos'}, matching you as “{data.me}” · {ago(data.at, now)}. Bitbucket can't
+              search for review requests across repos, so add a repo by picking it in New task.
+            </p>
           )}
         </div>
       </div>

@@ -387,6 +387,12 @@ export class Workbench {
     }));
   }
 
+  // The tool has no parent id, so a reply is a new comment on the same line (or a general one).
+  async bitbucketAddComment(token: string, workspace: string, slug: string, id: number, text: string, inline?: { path: string; line: number }): Promise<{ id: number }> {
+    const r = await this.execute(token, 'bitbucket_add_pr_comment', { workspace, repoSlug: slug, prId: id, text, ...(inline && { inline }) });
+    return { id: Number(r?.id) };
+  }
+
   async jiraIssue(token: string, issueKey: string): Promise<JiraIssue> {
     // the raw description (ADF) keeps headings and lists that the tool's plain-text version flattens
     const i = await this.execute(token, 'jira_get_issue', { issueKey, fields: ['description'] });

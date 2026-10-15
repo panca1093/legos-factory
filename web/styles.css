@@ -758,3 +758,20 @@ a.list-item:hover, .jira-row:hover, .row.link:hover { background: var(--hover); 
 .ticket-modal footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .ticket-modal footer .actions { display: flex; gap: 8px; }
 .ticket-modal footer .btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+
+/* PR review: replies, Ask factory and the fix queue */
+.pr-comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.pr-comment-bar { display: flex; align-items: center; gap: 14px; margin-top: 6px; font-size: 12px; }
+.pr-comment-bar .pick { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; }
+.pr-reply { margin-top: 8px; display: grid; gap: 8px; }
+.pr-reply-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.fix-panel { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.fix-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.fix-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.fix-items li { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12.5px; }
+.fix-items li.current { border-color: var(--accent); background: var(--soft); }
+.fix-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.fix-note { margin: 6px 0 0; color: var(--muted); }
+.fix-proposal { margin-top: 8px; display: grid; gap: 8px; }
+.review-row { text-decoration: none; color: inherit; }
+.review-row .copy > span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

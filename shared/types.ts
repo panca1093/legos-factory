@@ -108,6 +108,43 @@ export type PendingDecision = {
 // answers: AskUserQuestion clarifications, keyed by question text
 export type DecisionAnswer = { behavior: 'allow'; answers?: Record<string, string> } | { behavior: 'deny'; message?: string };
 
+// "Ask factory" on a PR: review comments worked through one at a time. Each gets a read-only proposal,
+// waits for your approval, then a fix run commits and pushes and the factory replies on the comment.
+export type FixStatus = 'pending' | 'proposing' | 'proposed' | 'fixing' | 'done' | 'skipped' | 'failed';
+
+export type FixItem = {
+  commentId: number;
+  author: string | null;
+  text: string;
+  path: string | null;
+  line: number | null;
+  status: FixStatus;
+  proposal: string | null;
+  // your edits or extra instructions, given when approving
+  note: string | null;
+  // the run working on it right now, or the last one that did
+  runId: string | null;
+  commit: string | null;
+  replied: boolean;
+  error: string | null;
+};
+
+// preparing = cloning the PR branch; waiting = a proposal or a failure needs you
+export type FixQueueStatus = 'preparing' | 'working' | 'waiting' | 'done' | 'cancelled' | 'failed';
+
+export type FixQueue = {
+  id: string;
+  owner: string;
+  repo: string;
+  prId: number;
+  branch: string;
+  status: FixQueueStatus;
+  error: string | null;
+  items: FixItem[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type StreamMessage =
   | { type: 'snapshot'; runs: Run[]; decisions: PendingDecision[] }
   | { type: 'run'; run: Omit<Run, 'events'> }
