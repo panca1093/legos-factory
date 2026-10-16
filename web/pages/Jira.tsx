@@ -286,6 +286,7 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
   const unlinked = item?.repos.filter((r) => !item.links.some((l) => same(l.repo, r.name))).map((r) => r.name).join() ?? '';
   // PRs that already mention the ticket, offered for the repos that have none linked yet
   const found = useFetch(() => (unlinked ? api.findPrs(ticket) : Promise.resolve(null)), [ticket, unlinked]);
+  const suggested = (repo: string) => (found.data?.prs ?? []).filter((p) => same(p.repo, repo));
   const link = async (p: PrRow, kind: 'spec' | 'impl') => {
     setErr(null);
     setBusy(true);
@@ -316,26 +317,26 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
                   <LinkChips item={{ ...item, links }} />
                 ) : (
                   <>
-                    <span className="muted">no PR yet</span>
+                    <span className="muted">{suggested(r.name).length ? 'PR found, not linked yet' : 'no PR yet'}</span>
                     <button type="button" className="text-action" disabled={busy} onClick={() => setRepos(names.filter((n) => n !== r.name))}>
                       remove
                     </button>
-                    {(found.data?.prs ?? [])
-                      .filter((p) => same(p.repo, r.name))
-                      .map((p) => (
-                        <div key={p.id} className="pr-find-row">
-                          <a className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
-                            <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
-                            <span className="mono">#{p.id}</span>
-                            <span className="ellipsis">{p.title}</span>
-                          </a>
-                          {(['impl', 'spec'] as const).map((kind) => (
-                            <button key={kind} type="button" className="text-action" disabled={busy} onClick={() => link(p, kind)}>
-                              Link as {kind}
-                            </button>
-                          ))}
-                        </div>
-                      ))}
+                    {suggested(r.name).map((p) => (
+                      <div key={p.id} className="found-pr">
+                        <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                        <span className="mono">#{p.id}</span>
+                        <span className="ellipsis" title={p.title}>{p.title}</span>
+                        <a className="btn sm ghost" href={`#/prs/${p.repo}/${p.id}`}>
+                          Open
+                        </a>
+                        <button type="button" className="btn sm primary" disabled={busy} onClick={() => link(p, 'impl')}>
+                          Link as impl
+                        </button>
+                        <button type="button" className="btn sm" disabled={busy} onClick={() => link(p, 'spec')}>
+                          Link as spec
+                        </button>
+                      </div>
+                    ))}
                   </>
                 )}
               </div>
