@@ -4,13 +4,13 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { DecisionAnswer, PendingDecision, SessionSummary, Settings, StreamMessage } from '../../shared/types.ts';
 import { getSession, listSessions } from '../claude-sessions.ts';
-import { detectTicket, gitBranch, loadSettings, settingsPath, shareFor } from '../policy.ts';
+import { gitBranch, loadSettings, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { MODEL_RE, launchRun, launchSchema } from '../launch-run.ts';
 
-const annotate = <T extends SessionSummary>(s: T, settings: Settings): T => ({
+const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
   ...s,
-  ticket: detectTicket(s.title, settings.ticketKeys) ?? detectTicket(s.gitBranch, settings.ticketKeys),
+  ticket: tickets.get(s.id) ?? null,
   share: shareFor(s.cwd, settings),
 });
 
@@ -47,14 +47,15 @@ export function runsRoutes(deps: Deps) {
     const limit = Math.min(Number(c.req.query('limit') ?? 200) || 200, 1000);
     const active = runs.activeRunBySession();
     const [list, settings] = await Promise.all([listSessions(activity.sessionIds(c.get('uid'), limit)), loadSettings()]);
-    return c.json(list.map((s) => ({ ...annotate(s, settings), activeRunId: active.get(s.id) ?? null })));
+    const tickets = activity.sessionTickets(c.get('uid'));
+    return c.json(list.map((s) => ({ ...annotate(s, settings, tickets), activeRunId: active.get(s.id) ?? null })));
   });
 
   routes.get('/api/sessions/:id', async (c) => {
     const id = c.req.param('id');
     const s = activity.ownsSession(c.get('uid'), id) ? await getSession(id) : null;
     if (!s) throw new HttpError(404, 'session not found');
-    return c.json({ ...annotate(s, await loadSettings()), activeRunId: runs.activeRunBySession().get(s.id) ?? null });
+    return c.json({ ...annotate(s, await loadSettings(), activity.sessionTickets(c.get('uid'))), activeRunId: runs.activeRunBySession().get(s.id) ?? null });
   });
 
   routes.get('/api/runs/:id', (c) => {
@@ -139,7 +140,7 @@ export function runsRoutes(deps: Deps) {
     if (!isAbsolute(cwd)) throw new HttpError(400, 'cwd must be absolute');
     const settings = await loadSettings();
     const branch = await gitBranch(cwd);
-    return c.json({ share: shareFor(cwd, settings), branch, ticket: detectTicket(branch, settings.ticketKeys) });
+    return c.json({ share: shareFor(cwd, settings), branch });
   });
 
   routes.get('/api/models', async (c) => {

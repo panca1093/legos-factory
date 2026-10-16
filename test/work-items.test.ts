@@ -321,6 +321,16 @@ describe('link source', () => {
     s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'manual', title: 'new' });
     expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'spec', source: 'factory', runId: 'r1', title: 'new' })]);
   });
+
+  it('a linked PR gives its ticket to fix queues; an unlinked one gives none', () => {
+    const s = setup();
+    s.items.create('local', 'PROJ-1');
+    s.items.addRepo('local', 'PROJ-1', 'acme/api');
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'factory', runId: 'r1' });
+    expect(s.items.ticketForPr('local', 'ACME/api', 12)).toBe('PROJ-1');
+    expect(s.items.ticketForPr('local', 'acme/api', 13)).toBeNull();
+    expect(s.items.ticketForPr('other', 'acme/api', 12)).toBeNull();
+  });
 });
 
 describe('work-item API', () => {

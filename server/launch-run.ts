@@ -4,7 +4,7 @@ import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel, Stage } from '../shared/types.ts';
 import { syncWorkItem } from './jira-sync.ts';
-import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
+import { loadSettings, shareFor } from './policy.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
 import { BRANCH_RE, HttpError, TICKET_RE, domain, gitToken, optText, requireMyRepo, text, type Deps } from './http.ts';
 
@@ -58,7 +58,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
     requireMyRepo(deps, uid, req.repo);
     if (stage && !deps.workItems.hasRepo(uid, req.ticket, req.repo)) throw new HttpError(409, `add ${req.repo} to ${req.ticket}'s work item first`, { needWorkItem: true });
-    const key = req.ticket || detectTicket(prompt, settings.ticketKeys) || `run-${randomBytes(4).toString('hex')}`;
+    const key = req.ticket || `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
@@ -79,7 +79,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   }
   const started = (run: Run) => (clone && deps.clones.set(run.id, clone.path), run);
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
-  const ticket = req.ticket || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
+  const ticket = req.ticket || null;
   const share = req.share ?? shareFor(cwd, settings);
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
   const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt, permissionMode, resume, model, ticket, stage, share }, connected));

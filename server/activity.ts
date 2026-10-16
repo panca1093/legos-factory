@@ -79,6 +79,17 @@ export class ActivityLog {
       .get(owner, ticket);
   }
 
+  // session -> the ticket its latest ticketed run was started with
+  sessionTickets(owner: string): Map<string, string> {
+    const rows = this.db
+      .prepare(
+        `select session_id, json_extract(item, '$.ticket') as ticket from runs
+         where owner = ? and session_id is not null and json_extract(item, '$.ticket') is not null order by started_at`,
+      )
+      .all(owner) as { session_id: string; ticket: string }[];
+    return new Map(rows.map((r) => [r.session_id, r.ticket]));
+  }
+
   ownsSession(owner: string, sessionId: string): boolean {
     return !!this.db.prepare(`select 1 from runs where owner = ? and session_id = ? limit 1`).get(owner, sessionId);
   }

@@ -76,16 +76,16 @@ describe('repo workspaces', () => {
 
   it('clones a fresh checkout per ticket, refuses a second run there, and deletes it when the run ends', async () => {
     const { runs, workspaces, post, db } = setup();
-    const res = await post({ repo: 'acme/app', prompt: 'work on PROJ-1' });
+    const items = new WorkItems(db);
+    items.create('local', 'PROJ-1');
+    items.addRepo('local', 'PROJ-1', 'acme/app');
+    const res = await post({ repo: 'acme/app', prompt: 'work on it', ticket: 'PROJ-1', stage: 'build' });
     expect(res.status).toBe(201);
     const run = await res.json();
     expect(run.cwd).toBe(join(workspaces, 'local', 'acme', 'app', 'PROJ-1'));
     expect(readFileSync(join(run.cwd, 'README.md'), 'utf8')).toBe('main\n');
     expect(git(run.cwd, 'rev-list', '--count', 'HEAD')).toBe('1'); // shallow
 
-    const items = new WorkItems(db);
-    items.create('local', 'PROJ-1');
-    items.addRepo('local', 'PROJ-1', 'acme/app');
     const again = await post({ repo: 'acme/app', prompt: 'again', ticket: 'PROJ-1', stage: 'build' });
     expect(again.status).toBe(409);
     expect((await again.json()).error).toMatch(/already working/);

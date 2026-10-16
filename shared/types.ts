@@ -50,8 +50,6 @@ export type ShareLevel = 'private' | 'status' | 'full';
 
 export type Settings = {
   share: { default: ShareLevel; rules: { path: string; level: ShareLevel }[] };
-  // e.g. ["PROJ"]; empty = detect any KEY-123 shaped ticket
-  ticketKeys: string[];
   // the Jira status names work items move through, in order
   jiraFlow: JiraFlow;
 };

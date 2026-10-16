@@ -84,6 +84,11 @@ export class WorkItems {
       .run(set.state ?? null, set.title ?? null, set.commented === undefined ? null : Number(set.commented), now(), owner, ticket, keyOf(repo), prId);
   }
 
+  ticketForPr(owner: string, repo: string, prId: number): string | null {
+    const row = this.db.prepare(`select ticket from ticket_links where owner = ? and repo_key = ? and pr_id = ? limit 1`).get(owner, keyOf(repo), prId) as { ticket: string } | undefined;
+    return row?.ticket ?? null;
+  }
+
   unlink(owner: string, ticket: string, repo: string, prId: number) {
     this.db.prepare(`delete from ticket_links where owner = ? and ticket = ? and repo_key = ? and pr_id = ?`).run(owner, ticket, keyOf(repo), prId);
   }

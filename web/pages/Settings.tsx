@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, useFetch, type Connection, type Integration, type MyRepo } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
 export function SettingsPage() {
-  const { data: s, error } = useFetch(api.settings, []);
   const [conns, setConns] = useState<Connection[] | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
   const loadConns = () => api.connections().then((r) => (setConns(r.connections), setConnError(null), r.connections), (e) => (setConnError(e.message), null));
@@ -25,31 +24,12 @@ export function SettingsPage() {
           <div className="page-heading">
             <div>
               <h1>Settings</h1>
-              <p className="lead">Servers your chats and tasks can reach, the repos you work on, and how tickets are detected.</p>
+              <p className="lead">Servers your chats and tasks can reach, and the repos you work on.</p>
             </div>
           </div>
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           <Repositories />
-          {error && <p className="error">{error}</p>}
-          {s && (
-            <>
-              <div className="sectionbar">
-                <h2>Ticket detection</h2>
-              </div>
-              <div className="section-list">
-                <div className="row">
-                  <div className="copy">
-                    <b>{s.ticketKeys.length ? s.ticketKeys.join(', ') : 'Any KEY-123 pattern'}</b>
-                    <span>Detected from the prompt, then the git branch. You can always type one when starting a chat or task.</span>
-                  </div>
-                </div>
-              </div>
-              <p className="footnote">
-                Set <code>ticketKeys</code> (e.g. <code>["PROJ"]</code>) in <span className="mono">{s.path}</span> to only match your projects.
-              </p>
-            </>
-          )}
         </div>
       </div>
     </Frame>

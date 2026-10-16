@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, LinkKind, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, LinkKind, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -85,7 +85,6 @@ export const api = {
   session: (id: string) => call<SessionDetail>(`/api/sessions/${id}`),
   run: (id: string) => call<Run>(`/api/runs/${id}`),
   models: () => call<ModelOption[]>('/api/models'),
-  settings: () => call<Settings & { path: string; error: string | null }>('/api/settings'),
   jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}`),
   pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),

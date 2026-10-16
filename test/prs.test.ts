@@ -142,6 +142,7 @@ describe('pull requests', () => {
     expect(res.status).toBe(201);
     const q = await res.json();
     expect(q).toMatchObject({ repo: 'acme/api', prId: 12, branch: 'feat/PROJ-7', status: 'preparing' });
+    expect(q.ticket ?? null).toBeNull();
     expect(q.items.map((i: any) => [i.commentId, i.status])).toEqual([[2, 'pending'], [1, 'pending']]);
     expect(q.items[1]).toMatchObject({ author: 'Bob', text: 'nice', path: 'a.go', line: 3 });
 

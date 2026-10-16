@@ -67,9 +67,9 @@ describe('api', () => {
     expect((await post('/api/runs/nope/end', {})).status).toBe(409);
   });
 
-  it('tags runs with a ticket and a share level', async () => {
+  it('tags runs with an explicit ticket only, and a share level', async () => {
     const auto = await (await post('/api/runs', { cwd: '/tmp', prompt: 'fix PROJ-2341 export' })).json();
-    expect(auto).toMatchObject({ ticket: 'PROJ-2341', share: 'status' });
+    expect(auto).toMatchObject({ ticket: null, share: 'status' });
     const manual = await (await post('/api/runs', { cwd: '/tmp', prompt: 'hi', ticket: 'plat-7', stage: 'build', share: 'full' })).json();
     expect(manual).toMatchObject({ ticket: 'PLAT-7', stage: 'build', share: 'full' });
     expect(auto.stage).toBeNull();

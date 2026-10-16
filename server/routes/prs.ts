@@ -1,6 +1,5 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { detectTicket, loadSettings } from '../policy.ts';
 import { parseRepo, type RepoRef } from '../workspace.ts';
 import type { Pr, PrRow } from '../workbench.ts';
 import { BRANCH_RE, HttpError, TICKET_RE, errMsg, parse, readBody, requireMyRepo, requireWorkbench, text, upstream, type Deps, type Env, type WorkbenchClient } from '../http.ts';
@@ -219,7 +218,7 @@ async function postComment(wb: WorkbenchClient, ref: PrRef, text: string, replyT
   return wb.client.bitbucketAddComment(wb.token, ref.workspace, ref.slug, ref.id, full, inline);
 }
 
-async function startFixes({ fixes }: Deps, uid: string, wb: WorkbenchClient, ref: PrRef, commentIds: number[]) {
+async function startFixes({ fixes, workItems }: Deps, uid: string, wb: WorkbenchClient, ref: PrRef, commentIds: number[]) {
   const [pr, comments] = await Promise.all([
     wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
     wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
@@ -228,13 +227,12 @@ async function startFixes({ fixes }: Deps, uid: string, wb: WorkbenchClient, ref
   if (!BRANCH_RE.test(pr.source)) throw new HttpError(409, 'the PR branch name is not usable');
   const picked = [...new Set(commentIds)].map((id) => comments.find((x) => x.id === id));
   if (picked.some((x) => !x)) throw new HttpError(404, 'comment not found');
-  const settings = await loadSettings();
   return fixes.create({
     owner: uid,
     repo: `${ref.workspace}/${ref.slug}`,
     prId: ref.id,
     branch: pr.source,
-    ticket: detectTicket(pr.source, settings.ticketKeys) ?? detectTicket(pr.title, settings.ticketKeys),
+    ticket: workItems.ticketForPr(uid, `${ref.workspace}/${ref.slug}`, ref.id),
     comments: picked.map((x) => ({ commentId: x!.id, author: x!.author, text: x!.text, path: x!.path, line: x!.line })),
   });
 }

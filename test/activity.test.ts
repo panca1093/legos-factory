@@ -52,6 +52,14 @@ describe('ActivityLog', () => {
     expect(log.ownsSession('alice', 's-b')).toBe(false);
   });
 
+  it('gives a session the ticket its runs were started with, never one guessed from text', async () => {
+    const log = new ActivityLog(openDb(':memory:'));
+    await log.record(run({ id: 'a1', sessionId: 's-a', ticket: null, prompt: 'fix PROJ-9' }), 'alice');
+    await log.record(run({ id: 'a2', sessionId: 's-b', ticket: 'PROJ-2' }), 'alice');
+    await log.record(run({ id: 'b1', sessionId: 's-b', ticket: 'PROJ-3' }), 'bob');
+    expect(log.sessionTickets('alice')).toEqual(new Map([['s-b', 'PROJ-2']]));
+  });
+
   it('team items never carry cost or share level', () => {
     const t = toTeamItem(toItem(run()));
     expect(t).not.toHaveProperty('estimatedCostUsd');

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { detectTicket, loadSettings, shareFor } from '../server/policy.ts';
+import { loadSettings, shareFor } from '../server/policy.ts';
 
 const fx = (f: string) => join(import.meta.dirname, 'fixtures/settings', f);
 
@@ -12,7 +12,7 @@ describe('settings', () => {
   it('defaults to private with no file', async () => {
     process.env.LEGOS_SETTINGS = fx('missing.json');
     const s = await loadSettings();
-    expect(s).toMatchObject({ share: { default: 'private', rules: [] }, ticketKeys: [], error: null });
+    expect(s).toMatchObject({ share: { default: 'private', rules: [] }, error: null });
     expect(s.jiraFlow).toEqual({ todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' });
   });
 
@@ -23,11 +23,10 @@ describe('settings', () => {
     expect(s.error).toContain('could not read');
   });
 
-  it('drops invalid rules and keys', async () => {
+  it('drops invalid rules', async () => {
     process.env.LEGOS_SETTINGS = fx('settings.json');
     const s = await loadSettings();
     expect(s.share.rules.map((r) => r.level)).toEqual(['status', 'full']);
-    expect(s.ticketKeys).toEqual(['PROJ']);
     expect(s.jiraFlow).toEqual({ todo: 'To Do', inProgress: 'In Progress', codeReview: 'In Review', readyForQa: 'Ready for QA' });
   });
 });
@@ -44,15 +43,3 @@ describe('shareFor', () => {
   });
 });
 
-describe('detectTicket', () => {
-  it('finds a ticket in a prompt or branch', () => {
-    expect(detectTicket('fix PROJ-2341 export', [])).toBe('PROJ-2341');
-    expect(detectTicket('feature/proj-1885-checkout', ['PROJ'])).toBe('PROJ-1885');
-    expect(detectTicket('nothing here', [])).toBeNull();
-  });
-
-  it('ignores ticket-shaped words that are not tickets', () => {
-    expect(detectTicket('encode as UTF-8 and hash with SHA-256', [])).toBeNull();
-    expect(detectTicket('see PLAT-12 and PROJ-9', ['PROJ'])).toBe('PROJ-9');
-  });
-});
