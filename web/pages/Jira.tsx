@@ -282,6 +282,21 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
     setBusy(false);
   };
   const names = item?.repos.map((r) => r.name) ?? [];
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const unlinked = item?.repos.filter((r) => !item.links.some((l) => same(l.repo, r.name))).map((r) => r.name).join() ?? '';
+  // PRs that already mention the ticket, offered for the repos that have none linked yet
+  const found = useFetch(() => (unlinked ? api.findPrs(ticket) : Promise.resolve(null)), [ticket, unlinked]);
+  const link = async (p: PrRow, kind: 'spec' | 'impl') => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.linkPr(ticket, p.repo, p.id, kind);
+      onChange();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
   const addable = (mine?.repos ?? []).filter((r) => !names.some((n) => n.toLowerCase() === r.name.toLowerCase()));
   return (
     <section className="work-item">
@@ -305,6 +320,22 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
                     <button type="button" className="text-action" disabled={busy} onClick={() => setRepos(names.filter((n) => n !== r.name))}>
                       remove
                     </button>
+                    {(found.data?.prs ?? [])
+                      .filter((p) => same(p.repo, r.name))
+                      .map((p) => (
+                        <div key={p.id} className="pr-find-row">
+                          <a className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
+                            <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                            <span className="mono">#{p.id}</span>
+                            <span className="ellipsis">{p.title}</span>
+                          </a>
+                          {(['impl', 'spec'] as const).map((kind) => (
+                            <button key={kind} type="button" className="text-action" disabled={busy} onClick={() => link(p, kind)}>
+                              Link as {kind}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
                   </>
                 )}
               </div>
