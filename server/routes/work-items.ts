@@ -28,13 +28,13 @@ export function workItemsRoutes(deps: Deps) {
   const view = (owner: string, ticket: string): WorkItem => {
     const item = workItems.get(owner, ticket);
     if (!item) throw new HttpError(404, 'no work item for this ticket');
-    return { ticket, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), events: workItems.events(owner, ticket), status: item.status };
+    return { ticket, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), note: item.note, status: item.status };
   };
 
   // Every work item with its repos and links, for the Jira cards.
   routes.get('/api/work-items', (c) => {
     const uid = c.get('uid');
-    return c.json({ items: workItems.list(uid).map((t) => ({ ...view(uid, t), events: [] })) });
+    return c.json({ items: workItems.list(uid).map((t) => view(uid, t)) });
   });
 
   routes.get('/api/work-items/:ticket', (c) => c.json(view(c.get('uid'), ticketOf(c))));

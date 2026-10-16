@@ -29,6 +29,9 @@ Today a run remembers only ticket and repo. The factory does not know which bran
 ```sql
 create table if not exists work_items (
   owner text not null, ticket text not null, created_at text not null,
+  status text,                    -- Jira status last read
+  done integer not null default 0, -- out of the flow: no periodic sync
+  note text, note_at text,        -- latest skip or error; transitions live in Jira's history
   primary key (owner, ticket));
 create table if not exists work_item_repos (
   owner text not null, ticket text not null, repo_key text not null, name text not null,
@@ -41,13 +44,7 @@ create table if not exists ticket_links (
   source text not null,           -- 'factory' | 'manual'
   run_id text, commented integer not null default 0, updated_at text not null,
   primary key (owner, ticket, repo_key, pr_id));
-create table if not exists work_item_events (
-  owner text not null, ticket text not null, at text not null,
-  type text not null,             -- 'transition' | 'skipped' | 'comment' | 'error'
-  detail text not null);
-create table if not exists repo_projects (
-  owner text not null, repo_key text not null, project text not null,
-  primary key (owner, repo_key, project));
+-- plus user_repos.jira_projects: comma-separated Jira project keys mapped to that repo
 ```
 server/work-items.ts: a WorkItems class in the style of ActivityLog/MyRepos. Rules live in the usecase file server/jira-sync.ts, not in SQL.
 
@@ -62,11 +59,11 @@ syncWorkItem(deps, owner, ticket):
 1. Refresh each linked PR's state with bitbucket_get_pr.
 2. For each new factory link with commented = 0, post one jira_add_comment line `<Spec|Implementation> PR for <repo>: <title> — <url>`, then set commented = 1 (no remote-link tool in workbench, so the comment is how the link reaches Jira).
 3. Read the current status with jira_get_issue; apply the status rules with compare-and-swap.
-4. Write every move, skip and error to work_item_events.
-When it runs: right after a run with a ticket starts (In Progress move); right after PR capture at run end; on a "Sync now" button; every LEGOS_SYNC_MS (default 120 s) for work items not yet at readyForQa and only for owners with a connected workbench. At most one sync at a time per work item. Errors are recorded as events and never thrown into the run.
+4. Keep the latest skip or error in work_items.note (an error outranks a skip). A clean sync clears it, except a PR capture failure, which a new factory link clears.
+When it runs: right after a run with a ticket starts (In Progress move); right after PR capture at run end; on a "Sync now" button; every LEGOS_SYNC_MS (default 120 s) for work items not yet at readyForQa and only for owners with a connected workbench. At most one sync at a time per work item. Errors are noted on the work item and never thrown into the run.
 
 ## API
-- GET /api/work-items/:ticket → { ticket, repos, links, events, status } (status = last Jira status read).
+- GET /api/work-items/:ticket → { ticket, repos, links, note, status } (status = last Jira status read).
 - POST /api/work-items/:ticket { repos: string[] } → create the work item or add repos; every repo must be in My repos (403 needRepo otherwise).
 - DELETE /api/work-items/:ticket/repos/:ws/:slug → remove a repo; 409 if that repo already has links.
 - POST /api/work-items/:ticket/links { repo, prId, kind } → link an existing PR by hand (source 'manual'); checks the PR exists and its title or branch contains the key.
@@ -77,7 +74,7 @@ When it runs: right after a run with a ticket starts (In Progress move); right a
 
 ## Web
 - Jira tab "Work on this" opens a work-item dialog: my repos as checkboxes (repos mapped to the ticket's project pre-checked), a stage picker (Design / Build). On start: create/update the work item, then launch one run per selected repo (the existing run queue limits concurrency).
-- Ticket modal gains a Work item panel: one row per repo with spec and impl PR chips (state-coloured, linking to the factory PR page); "Add repo", "Link PR", "Sync now"; last Jira status and recent events (e.g. "skipped: status was ON HOLD").
+- Ticket modal gains a Work item panel: one row per repo with spec and impl PR chips (state-coloured, linking to the factory PR page); "Add repo", "Link PR", "Sync now"; last Jira status and the latest note (e.g. "Skipped In Progress → Code Review: status was ON HOLD").
 - Jira cards take PR chips from ticket_links when a work item exists; otherwise today's chips. Jira's Development field stays a secondary hint.
 - Settings → Repositories: each repo gets an editable list of Jira project keys.
 

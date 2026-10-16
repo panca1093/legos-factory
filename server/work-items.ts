@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { TicketLink, WorkItemEvent } from '../shared/types.ts';
+import type { TicketLink, WorkItemNote } from '../shared/types.ts';
 
 const keyOf = (repo: string) => repo.trim().toLowerCase();
 const now = () => new Date().toISOString();
@@ -12,9 +12,15 @@ const LINK_COLS = `name as repo, l.kind, l.pr_id as prId, l.branch, l.title, l.s
 export class WorkItems {
   constructor(private db: DatabaseSync) {}
 
-  get(owner: string, ticket: string): { status: string | null; done: boolean } | null {
-    const row = this.db.prepare(`select status, done from work_items where owner = ? and ticket = ?`).get(owner, ticket) as { status: string | null; done: number } | undefined;
-    return row ? { status: row.status, done: !!row.done } : null;
+  get(owner: string, ticket: string): { status: string | null; done: boolean; note: WorkItemNote | null } | null {
+    const row = this.db.prepare(`select status, done, note, note_at from work_items where owner = ? and ticket = ?`).get(owner, ticket) as
+      | { status: string | null; done: number; note: string | null; note_at: string | null }
+      | undefined;
+    return row ? { status: row.status, done: !!row.done, note: row.note ? { text: row.note, at: row.note_at! } : null } : null;
+  }
+
+  setNote(owner: string, ticket: string, text: string | null) {
+    this.db.prepare(`update work_items set note = ?, note_at = ? where owner = ? and ticket = ?`).run(text, text ? now() : null, owner, ticket);
   }
 
   list(owner: string): string[] {
@@ -91,15 +97,5 @@ export class WorkItems {
 
   unlink(owner: string, ticket: string, repo: string, prId: number) {
     this.db.prepare(`delete from ticket_links where owner = ? and ticket = ? and repo_key = ? and pr_id = ?`).run(owner, ticket, keyOf(repo), prId);
-  }
-
-  events(owner: string, ticket: string, limit = 50): WorkItemEvent[] {
-    return this.db
-      .prepare(`select at, type, detail from work_item_events where owner = ? and ticket = ? order by at desc, rowid desc limit ?`)
-      .all(owner, ticket, limit) as WorkItemEvent[];
-  }
-
-  addEvent(owner: string, ticket: string, type: WorkItemEvent['type'], detail: string) {
-    this.db.prepare(`insert into work_item_events (owner, ticket, at, type, detail) values (?, ?, ?, ?, ?)`).run(owner, ticket, now(), type, detail);
   }
 }

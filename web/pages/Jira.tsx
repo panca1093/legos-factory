@@ -331,14 +331,10 @@ function WorkItemPanel({ ticket, onChange }: { ticket: string; onChange: () => v
           <p className="muted">
             Jira status (last read): <b>{item.status ?? 'not synced yet'}</b>
           </p>
-          {item.events.length > 0 && (
-            <ul className="work-item-events">
-              {item.events.slice(0, 5).map((e, i) => (
-                <li key={i} className={e.type === 'error' ? 'error' : undefined}>
-                  {e.type}: {e.detail} <span className="muted">· {ago(e.at, now)}</span>
-                </li>
-              ))}
-            </ul>
+          {item.note && (
+            <p className={item.note.text.startsWith('Error') ? 'error' : 'muted'}>
+              {item.note.text} <span className="muted">· {ago(item.note.at, now)}</span>
+            </p>
           )}
         </>
       )}

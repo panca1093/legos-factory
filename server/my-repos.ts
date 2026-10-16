@@ -6,6 +6,7 @@ export const MY_REPOS_CAP = 25;
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
 
 const keyOf = (repo: string) => repo.trim().toLowerCase();
+const splitKeys = (s: string) => s.split(',').filter(Boolean);
 const conflict = (message: string) => Object.assign(new Error(message), { status: 409 });
 
 // The repos each user maintains; every repo-scoped action is limited to these.
@@ -14,9 +15,9 @@ export class MyRepos {
 
   list(owner: string): MyRepo[] {
     const rows = this.db
-      .prepare(`select repo_key as key, name, main_branch as mainBranch, added_at as addedAt from user_repos where owner = ? order by repo_key`)
-      .all(owner) as (Omit<MyRepo, 'projects'> & { key: string })[];
-    return rows.map(({ key, ...r }) => ({ ...r, projects: this.projects(owner, key) }));
+      .prepare(`select name, main_branch as mainBranch, added_at as addedAt, jira_projects as projects from user_repos where owner = ? order by repo_key`)
+      .all(owner) as (Omit<MyRepo, 'projects'> & { projects: string })[];
+    return rows.map((r) => ({ ...r, projects: splitKeys(r.projects) }));
   }
 
   get(owner: string, repo: string): MyRepo | null {
@@ -24,12 +25,12 @@ export class MyRepos {
   }
 
   projects(owner: string, repo: string): string[] {
-    return (this.db.prepare(`select project from repo_projects where owner = ? and repo_key = ? order by project`).all(owner, keyOf(repo)) as { project: string }[]).map((r) => r.project);
+    const row = this.db.prepare(`select jira_projects as projects from user_repos where owner = ? and repo_key = ?`).get(owner, keyOf(repo)) as { projects: string } | undefined;
+    return splitKeys(row?.projects ?? '');
   }
 
   setProjects(owner: string, repo: string, projects: string[]) {
-    this.db.prepare(`delete from repo_projects where owner = ? and repo_key = ?`).run(owner, keyOf(repo));
-    for (const p of new Set(projects)) this.db.prepare(`insert into repo_projects (owner, repo_key, project) values (?, ?, ?)`).run(owner, keyOf(repo), p);
+    this.db.prepare(`update user_repos set jira_projects = ? where owner = ? and repo_key = ?`).run([...new Set(projects)].sort().join(','), owner, keyOf(repo));
   }
 
   has(owner: string, repo: string): boolean {
@@ -48,6 +49,5 @@ export class MyRepos {
 
   remove(owner: string, repo: string) {
     this.db.prepare(`delete from user_repos where owner = ? and repo_key = ?`).run(owner, keyOf(repo));
-    this.setProjects(owner, repo, []);
   }
 }

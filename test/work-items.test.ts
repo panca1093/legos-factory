@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager, type QueryFn, type StartRequest } from '../server/claude-runs.ts';
+import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../server/db.ts';
 import { planMoves, syncDue, syncWorkItem, type Facts } from '../server/jira-sync.ts';
 import { MyRepos } from '../server/my-repos.ts';
@@ -178,12 +179,9 @@ describe('jira sync', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('ON HOLD');
-    expect(body.events.map((e: any) => [e.type, e.detail])).toEqual([['skipped', 'In Progress → Code Review: status was ON HOLD']]);
+    expect(body.note).toMatchObject({ text: 'Skipped In Progress → Code Review: status was ON HOLD', at: expect.any(String) });
     expect(s.tools('jira_transition_issue')).toEqual([]);
     expect(s.tools('jira_get_transitions')).toEqual([]);
-    // the same skip again is not recorded twice
-    await s.post('/api/work-items/PROJ-1/sync');
-    expect((await s.item()).events).toHaveLength(1);
   });
 
   it('looks the transition id up by target status name and moves', async () => {
@@ -193,7 +191,7 @@ describe('jira sync', () => {
     expect(s.tools('jira_transition_issue').map((c) => c.args)).toEqual([{ issueKey: 'PROJ-1', transitionId: '31' }]);
     expect(s.tools('jira_get_transitions')[0].args).toEqual({ issueKey: 'PROJ-1' });
     expect(body.status).toBe('Code Review');
-    expect(body.events.map((e: any) => [e.type, e.detail])).toEqual([['transition', 'In Progress → Code Review']]);
+    expect(body.note).toBeNull();
   });
 
   it('refreshes PR states and chains moves, reading the status before each', async () => {
@@ -212,7 +210,7 @@ describe('jira sync', () => {
     await withItem(s, [{ prId: 12 }]);
     const body = await (await s.post('/api/work-items/PROJ-1/sync')).json();
     expect(s.tools('jira_transition_issue')).toEqual([]);
-    expect(body.events.map((e: any) => [e.type, e.detail])).toEqual([['error', 'no transition to Code Review from In Progress']]);
+    expect(body.note.text).toBe('Error: no transition to Code Review from In Progress');
   });
 
   it('comments each new factory link on the ticket exactly once', async () => {
@@ -226,7 +224,6 @@ describe('jira sync', () => {
     ]);
     const body = await s.item();
     expect(body.links.filter((l: any) => l.commented).map((l: any) => l.prId).sort()).toEqual([12, 9].sort());
-    expect(body.events.filter((e: any) => e.type === 'comment')).toHaveLength(2);
   });
 
   it('does not retry a comment that failed and records an error', async () => {
@@ -241,19 +238,33 @@ describe('jira sync', () => {
     await s.post('/api/work-items/PROJ-1/sync');
     const body = await s.item();
     expect(body.links[0].commented).toBe(true);
-    expect(body.events.some((e: any) => e.type === 'error' && /timed out/.test(e.detail))).toBe(true);
+    expect(body.note.text).toMatch(/^Error: .*timed out/);
     s.deps.workbench = orig;
     await s.post('/api/work-items/PROJ-1/sync');
     expect(s.tools('jira_add_comment')).toEqual([]);
   });
 
-  it('records failures as events instead of throwing', async () => {
+  it('notes failures instead of throwing', async () => {
     const s = setup({ status: 'In Progress' });
     await withItem(s, [{ prId: 77 }]);
     await expect(syncWorkItem(s.deps, 'local', 'PROJ-1')).resolves.toBeUndefined();
-    expect((await s.item()).events.some((e: any) => e.type === 'error' && /acme\/api #77/.test(e.detail))).toBe(true);
+    expect((await s.item()).note.text).toMatch(/^Error: acme\/api #77/);
     // no work item: nothing to do
     await expect(syncWorkItem(s.deps, 'local', 'PROJ-404')).resolves.toBeUndefined();
+  });
+
+  it('a clean sync clears a skip note but keeps a PR capture failure until a link lands', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') }, open: { 'acme/api': [] } });
+    await withItem(s, [{ prId: 12 }]);
+    await s.post('/api/work-items/PROJ-1/sync');
+    expect((await s.item()).note.text).toMatch(/^Skipped/);
+    s.jira.status = 'Code Review';
+    await s.post('/api/work-items/PROJ-1/sync');
+    expect((await s.item()).note).toBeNull();
+
+    s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: boom');
+    await s.post('/api/work-items/PROJ-1/sync');
+    expect((await s.item()).note.text).toMatch(/^Error: PR capture failed/);
   });
 });
 
@@ -344,7 +355,7 @@ describe('work-item API', () => {
     expect((await s.post('/api/work-items/PROJ-1', { repos: [] })).status).toBe(400);
     const ok = await s.post('/api/work-items/proj-1', { repos: ['ACME/api'] });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toMatchObject({ ticket: 'PROJ-1', repos: [{ name: 'acme/api' }], links: [], events: [], status: null });
+    expect(await ok.json()).toMatchObject({ ticket: 'PROJ-1', repos: [{ name: 'acme/api' }], links: [], note: null, status: null });
     await s.post('/api/work-items/PROJ-1', { repos: ['acme/web', 'acme/api'] });
     expect((await s.item()).repos.map((r: any) => r.name)).toEqual(['acme/api', 'acme/web']);
 
@@ -446,6 +457,7 @@ describe('PR capture', () => {
     await s.connectWorkbench();
     await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'build' })).json();
+    s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: earlier');
     s.hooks.onListPrs = () => existsSync(join(run.cwd, 'README.md'));
     if (branch) git(run.cwd, 'checkout', '-qb', branch);
     await s.runs.end(run.id);
@@ -459,6 +471,7 @@ describe('PR capture', () => {
     expect(s.tools('bitbucket_list_prs').map((c) => [c.args.state, c.cloneExists])).toEqual([['OPEN', true]]);
     const links = s.items.links('local', 'PROJ-1');
     expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', source: 'factory', branch: 'feat/PROJ-1', runId: run.id })]);
+    expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();
     await settle(() => s.tools('jira_add_comment').length === 1);
   });
 
@@ -469,5 +482,31 @@ describe('PR capture', () => {
     const none = await launch({ open: { 'acme/api': [pr(7, 'OPEN', 'other', 'feat/other')] } }, 'feat/PROJ-1');
     expect(none.s.tools('bitbucket_list_prs')).toHaveLength(1);
     expect(none.s.items.links('local', 'PROJ-1')).toEqual([]);
+  });
+});
+
+describe('factory.db upgrade', () => {
+  it('adds the new columns to existing tables and drops the old events and projects tables', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'lf-db-')), 'factory.db');
+    const old = new DatabaseSync(path);
+    old.exec(`
+      create table user_repos (owner text not null, repo_key text not null, name text not null, main_branch text, added_at text not null, primary key (owner, repo_key));
+      create table work_items (owner text not null, ticket text not null, created_at text not null, status text, done integer not null default 0, primary key (owner, ticket));
+      create table work_item_events (owner text, ticket text, at text, type text, detail text);
+      create table repo_projects (owner text, repo_key text, project text);
+      insert into user_repos values ('local', 'acme/api', 'acme/api', 'main', '2026-10-16');
+      insert into work_items (owner, ticket, created_at) values ('local', 'PROJ-1', '2026-10-16');`);
+    old.close();
+    const db = openDb(path);
+    const repos = new MyRepos(db);
+    expect(repos.list('local')).toEqual([expect.objectContaining({ name: 'acme/api', projects: [] })]);
+    repos.setProjects('local', 'acme/api', ['PROJ', 'OPS', 'PROJ']);
+    expect(repos.projects('local', 'ACME/api')).toEqual(['OPS', 'PROJ']);
+    const items = new WorkItems(db);
+    items.setNote('local', 'PROJ-1', 'Skipped x');
+    expect(items.get('local', 'PROJ-1')!.note).toEqual({ text: 'Skipped x', at: expect.any(String) });
+    const tables = (db.prepare(`select name from sqlite_master where type = 'table'`).all() as { name: string }[]).map((t) => t.name);
+    expect(tables).not.toContain('work_item_events');
+    expect(tables).not.toContain('repo_projects');
   });
 });

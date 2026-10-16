@@ -1,4 +1,4 @@
-import type { JiraFlow, LinkKind, Run, WorkItemEvent } from '../shared/types.ts';
+import type { JiraFlow, LinkKind, Run } from '../shared/types.ts';
 import { NO_WB, errMsg, type Deps } from './http.ts';
 import { gitBranch, loadSettings } from './policy.ts';
 import { parseRepo } from './workspace.ts';
@@ -42,16 +42,15 @@ export function syncWorkItem(deps: Deps, owner: string, ticket: string): Promise
   return run;
 }
 
+const CAPTURE_FAILED = 'Error: PR capture failed';
+
 async function syncOnce(deps: Deps, owner: string, ticket: string) {
   const { workItems } = deps;
   const item = workItems.get(owner, ticket);
   if (!item) return;
-  // a skip or error that is still the latest event isn't recorded again
-  const note = (type: WorkItemEvent['type'], detail: string) => {
-    const last = workItems.events(owner, ticket, 1)[0];
-    if ((type === 'skipped' || type === 'error') && last?.type === type && last.detail === detail) return;
-    workItems.addEvent(owner, ticket, type, detail);
-  };
+  // an error outranks a skip; a clean sync clears the note, except a PR capture failure, which only a new link fixes
+  let issue: string | null = null;
+  const note = (text: string) => void (issue?.startsWith('Error') || (issue = text));
   try {
     const wb = await deps.workbench(owner);
     if (!wb) throw new Error(NO_WB);
@@ -65,9 +64,8 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
         workItems.update(owner, ticket, l.repo, l.prId, { commented: true });
         await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
-        note('comment', `${kind} PR ${l.repo} #${l.prId}`);
       } catch (err) {
-        note('error', `${l.repo} #${l.prId}: ${errMsg(err)}`);
+        note(`Error: ${l.repo} #${l.prId}: ${errMsg(err)}`);
       }
     }
 
@@ -84,19 +82,19 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
       const t = (await client.jiraTransitions(token, ticket)).find((x) => same(x.toStatus, step.to));
       if (!t) {
         skipped = null;
-        note('error', `no transition to ${step.to} from ${status}`);
+        note(`Error: no transition to ${step.to} from ${status}`);
         break;
       }
       await client.jiraTransition(token, ticket, t.id);
-      note('transition', `${step.from} → ${step.to}`);
       status = await client.jiraStatus(token, ticket);
     }
-    if (skipped) note('skipped', `${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
+    if (skipped) note(`Skipped ${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
     const inFlow = [flow.todo, flow.inProgress, flow.codeReview].some((o) => same(status, o));
     workItems.setStatus(owner, ticket, status, status === null ? item.done : !inFlow);
   } catch (err) {
-    note('error', errMsg(err));
+    note(`Error: ${errMsg(err)}`);
   }
+  if (issue || !item.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(owner, ticket, issue);
 }
 
 // The periodic pass: work items still in the flow before Ready for QA, of owners with a connected workbench.
@@ -126,7 +124,8 @@ export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: strin
     const pr = (await wb.client.bitbucketPrs(wb.token, ref.workspace, ref.slug, 'OPEN')).find((p) => p.source === branch);
     if (!pr) return;
     deps.workItems.link(owner, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, source: 'factory', runId: run.id });
+    if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) deps.workItems.setNote(owner, ticket, null);
   } catch (err) {
-    deps.workItems.addEvent(owner, ticket, 'error', `PR capture in ${repo}: ${errMsg(err)}`);
+    deps.workItems.setNote(owner, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);
   }
 }

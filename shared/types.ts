@@ -202,12 +202,13 @@ export type TicketLink = {
   commented: boolean;
   updatedAt: string;
 };
-export type WorkItemEvent = { at: string; type: 'transition' | 'skipped' | 'comment' | 'error'; detail: string };
+// the latest skip or error of the Jira sync or PR capture; transitions live in Jira's own history
+export type WorkItemNote = { text: string; at: string };
 export type WorkItem = {
   ticket: string;
   repos: { name: string; addedAt: string }[];
   links: TicketLink[];
-  events: WorkItemEvent[];
+  note: WorkItemNote | null;
   // the Jira status last read
   status: string | null;
 };
