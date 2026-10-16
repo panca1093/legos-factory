@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { query as sdkQuery, type CanUseTool, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, StreamMessage, TimelineEvent } from '../shared/types.ts';
+import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, Stage, StreamMessage, TimelineEvent } from '../shared/types.ts';
 import { toEvents } from './claude-sessions.ts';
 
 export type QueryFn = typeof sdkQuery;
@@ -16,6 +16,7 @@ export type StartRequest = {
   resume?: string;
   model?: string;
   ticket?: string | null;
+  stage?: Stage | null;
   share?: ShareLevel;
   // extra MCP servers for this run only (the Settings connections, via the local proxy)
   mcp?: Record<string, { url: string; headers: Record<string, string> }>;
@@ -140,6 +141,7 @@ export class RunManager extends EventEmitter {
       kind: req.kind ?? 'chat',
       fromTask: false,
       ticket: req.ticket ?? null,
+      stage: req.stage ?? null,
       share: req.share ?? 'private',
       runtime: 'claude-code',
       sessionId: req.resume ?? null,

@@ -191,7 +191,7 @@ describe('workbench features', () => {
     expect(pushed).toHaveLength(0);
     expect(runCount()).toBe(1);
 
-    await post('/api/runs', { cwd: '/tmp', prompt: 'hi PROJ-7' });
+    await post('/api/runs', { cwd: '/tmp', prompt: 'hi PROJ-7', ticket: 'PROJ-7', stage: 'build' });
     await settle();
     expect(pushed.length).toBeGreaterThan(0);
     expect(pushed[0].auth).toMatch(/^Bearer h\./);

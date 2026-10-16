@@ -41,5 +41,6 @@ npm test
 - Binds to 127.0.0.1 only. `/api` rejects non-local `Host` and requires `x-legos: 1` on writes, since launching a run executes code.
 - Each live session is a `claude` process. Live runs are in memory; restarting the server marks the unfinished ones failed (their transcripts stay under Sessions and can be continued).
 - Cost is Claude Code's API-equivalent estimate, not an invoice.
-- Team sharing per folder (Private / Status / Full) and ticket detection live in `~/.legos-factory/settings.json` (`LEGOS_SETTINGS` overrides). Private unless a rule says otherwise; nothing is sent anywhere until the team hub exists.
+- Team sharing per folder (Private / Status / Full) and `jiraFlow` (the status names the Jira sync moves a ticket through, default To Do / In Progress / Code Review / Ready for QA) live in `~/.legos-factory/settings.json` (`LEGOS_SETTINGS` overrides). Private unless a rule says otherwise; nothing is sent anywhere until the team hub exists.
+- `LEGOS_SYNC_MS` sets how often work items are synced to Jira (default 120000 ms).
 - `CLAUDE_PROJECTS_DIR` overrides the transcripts dir; `LEGOS_API_PORT` the API port.

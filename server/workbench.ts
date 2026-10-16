@@ -414,6 +414,25 @@ export class Workbench {
     return String((typeof r === 'string' ? r : (r?.url ?? r?.cloneUrl ?? r?.clone_url)) ?? '');
   }
 
+  async jiraStatus(token: string, issueKey: string): Promise<string | null> {
+    const i = await this.execute(token, 'jira_get_issue', { issueKey });
+    return i?.status ?? null;
+  }
+
+  async jiraTransitions(token: string, issueKey: string): Promise<{ id: string; name: string; toStatus: string }[]> {
+    const r = await this.execute(token, 'jira_get_transitions', { issueKey });
+    return (Array.isArray(r) ? r : (r?.transitions ?? [])).map((t: any) => ({ id: String(t.id), name: String(t.name ?? ''), toStatus: String(t.toStatus ?? t.to?.name ?? '') }));
+  }
+
+  async jiraTransition(token: string, issueKey: string, transitionId: string): Promise<void> {
+    const r = await this.execute(token, 'jira_transition_issue', { issueKey, transitionId });
+    if (r?.success === false) throw new Error(`jira_transition_issue refused ${issueKey}`);
+  }
+
+  async jiraAddComment(token: string, issueKey: string, body: string): Promise<void> {
+    await this.execute(token, 'jira_add_comment', { issueKey, body });
+  }
+
   async jiraIssue(token: string, issueKey: string): Promise<JiraIssue> {
     // the raw description (ADF) keeps headings and lists that the tool's plain-text version flattens
     const i = await this.execute(token, 'jira_get_issue', { issueKey, fields: ['description'] });

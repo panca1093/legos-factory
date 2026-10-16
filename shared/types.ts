@@ -50,9 +50,14 @@ export type ShareLevel = 'private' | 'status' | 'full';
 
 export type Settings = {
   share: { default: ShareLevel; rules: { path: string; level: ShareLevel }[] };
-  // e.g. ["PROJ"]; empty = detect any KEY-123 shaped ticket
-  ticketKeys: string[];
+  // the Jira status names work items move through, in order
+  jiraFlow: JiraFlow;
 };
+
+export type JiraFlow = { todo: string; inProgress: string; codeReview: string; readyForQa: string };
+
+// design = write the spec and open a PR for it; build = implement it and open a PR
+export type Stage = 'design' | 'build';
 
 // chat = interactive discussion; task = one prompt, runs to completion, no follow-ups
 export type RunKind = 'chat' | 'task';
@@ -67,6 +72,8 @@ export type Run = {
   // a task converted to a chat via Discuss
   fromTask: boolean;
   ticket: string | null;
+  // design or build when started from a work item; null otherwise (fix-queue runs have a ticket but no stage)
+  stage: Stage | null;
   share: ShareLevel;
   runtime: 'claude-code';
   sessionId: string | null;
@@ -160,6 +167,7 @@ export type ActivityItem = {
   project: string;
   repo: string | null;
   ticket: string | null;
+  stage: Stage | null;
   share: ShareLevel;
   status: RunStatus;
   endedBy: Run['endedBy'];
@@ -173,6 +181,32 @@ export type ActivityItem = {
 };
 
 // What the team hub receives and shows: never cost, prompt body, paths or transcripts.
-export type TeamItem = Omit<ActivityItem, 'share' | 'estimatedCostUsd'>;
+export type TeamItem = Omit<ActivityItem, 'share' | 'estimatedCostUsd' | 'stage'>;
 
 export type TeamMember = { email: string; lastSeen: string; items: TeamItem[] };
+
+// A ticket plus the repos it touches, and the PRs that came out of it.
+export type LinkKind = 'spec' | 'impl';
+export type TicketLink = {
+  repo: string;
+  kind: LinkKind;
+  prId: number;
+  branch: string;
+  title: string;
+  // OPEN | MERGED | DECLINED | SUPERSEDED, as Bitbucket says
+  state: string;
+  runId: string | null;
+  // already announced on the Jira ticket
+  commented: boolean;
+  updatedAt: string;
+};
+// the latest skip or error of the Jira sync or PR capture; transitions live in Jira's own history
+export type WorkItemNote = { text: string; at: string };
+export type WorkItem = {
+  ticket: string;
+  repos: { name: string; addedAt: string }[];
+  links: TicketLink[];
+  note: WorkItemNote | null;
+  // the Jira status last read
+  status: string | null;
+};

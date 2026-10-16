@@ -142,6 +142,7 @@ describe('pull requests', () => {
     expect(res.status).toBe(201);
     const q = await res.json();
     expect(q).toMatchObject({ repo: 'acme/api', prId: 12, branch: 'feat/PROJ-7', status: 'preparing' });
+    expect(q.ticket ?? null).toBeNull();
     expect(q.items.map((i: any) => [i.commentId, i.status])).toEqual([[2, 'pending'], [1, 'pending']]);
     expect(q.items[1]).toMatchObject({ author: 'Bob', text: 'nice', path: 'a.go', line: 3 });
 
@@ -248,7 +249,7 @@ describe('my repos api', () => {
     expect(await added.json()).toMatchObject({ name: 'acme/api', mainBranch: 'main' });
     expect((await post('/api/my-repos', { repo: 'ACME/api' })).status).toBe(409);
     const { repos } = await (await req('/api/my-repos')).json();
-    expect(repos).toEqual([{ name: 'acme/api', mainBranch: 'main', addedAt: expect.any(String) }]);
+    expect(repos).toEqual([{ name: 'acme/api', mainBranch: 'main', addedAt: expect.any(String), projects: [] }]);
 
     const del = await req('/api/my-repos/acme/api', { method: 'DELETE', headers: { 'x-legos': '1' } });
     expect(del.status).toBe(204);

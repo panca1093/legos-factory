@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, Settings, ShareLevel, StreamMessage } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -42,7 +42,8 @@ export type JiraDev = {
   stale: boolean;
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
-export type MyRepo = { name: string; mainBranch: string | null; addedAt: string };
+export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
+export type { Stage, WorkItem };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -84,7 +85,6 @@ export const api = {
   session: (id: string) => call<SessionDetail>(`/api/sessions/${id}`),
   run: (id: string) => call<Run>(`/api/runs/${id}`),
   models: () => call<ModelOption[]>('/api/models'),
-  settings: () => call<Settings & { path: string; error: string | null }>('/api/settings'),
   jiraIssue: (key: string) => call<JiraIssue>(`/api/jira/issues/${key}`),
   findPrs: (ticket: string) => call<{ prs: PrRow[]; searched: string[] }>(`/api/prs?ticket=${ticket}`),
   pr: (repo: string, id: number) => call<{ pr: Pr; files: PrFile[]; comments: PrComment[] }>(`/api/prs/${repo}/${id}`),
@@ -103,8 +103,11 @@ export const api = {
   myRepos: () => call<{ repos: MyRepo[] }>('/api/my-repos'),
   addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
+  repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
+  workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
-  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; share?: ShareLevel }) =>
+  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),
   send: (id: string, text: string) => call<{ ok: true }>(`/api/runs/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }),
   setModel: (id: string, model: string) => call<{ ok: true }>(`/api/runs/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) }),

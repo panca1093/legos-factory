@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, useFetch, type Connection, type Integration, type MyRepo } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
 export function SettingsPage() {
-  const { data: s, error } = useFetch(api.settings, []);
   const [conns, setConns] = useState<Connection[] | null>(null);
   const [connError, setConnError] = useState<string | null>(null);
   const loadConns = () => api.connections().then((r) => (setConns(r.connections), setConnError(null), r.connections), (e) => (setConnError(e.message), null));
@@ -25,31 +24,12 @@ export function SettingsPage() {
           <div className="page-heading">
             <div>
               <h1>Settings</h1>
-              <p className="lead">Servers your chats and tasks can reach, the repos you work on, and how tickets are detected.</p>
+              <p className="lead">Servers your chats and tasks can reach, and the repos you work on.</p>
             </div>
           </div>
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           <Repositories />
-          {error && <p className="error">{error}</p>}
-          {s && (
-            <>
-              <div className="sectionbar">
-                <h2>Ticket detection</h2>
-              </div>
-              <div className="section-list">
-                <div className="row">
-                  <div className="copy">
-                    <b>{s.ticketKeys.length ? s.ticketKeys.join(', ') : 'Any KEY-123 pattern'}</b>
-                    <span>Detected from the prompt, then the git branch. You can always type one when starting a chat or task.</span>
-                  </div>
-                </div>
-              </div>
-              <p className="footnote">
-                Set <code>ticketKeys</code> (e.g. <code>["PROJ"]</code>) in <span className="mono">{s.path}</span> to only match your projects.
-              </p>
-            </>
-          )}
         </div>
       </div>
     </Frame>
@@ -116,6 +96,19 @@ function Repositories() {
               <div className="copy">
                 <b className="mono">{r.name}</b>
                 <span>{r.mainBranch ? `main branch ${r.mainBranch}` : 'no main branch reported'}</span>
+                <label className="project-keys">
+                  <span>Jira projects</span>
+                  <input
+                    className="input sm mono"
+                    defaultValue={r.projects.join(', ')}
+                    placeholder="e.g. PROJ, OPS — pre-selects this repo for their tickets"
+                    onBlur={(e) => {
+                      const keys = e.target.value.split(/[\s,]+/).filter(Boolean);
+                      if (keys.join() !== r.projects.join()) void act(() => api.repoProjects(r.name, keys));
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                  />
+                </label>
               </div>
               <div className="actions">
                 {removing === r.name ? (
@@ -360,6 +353,8 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
   const [tab, setTab] = useState<'all' | 'connected' | 'available'>('all');
   const [q, setQ] = useState('');
   const [pending, setPending] = useState<string | null>(null);
+  const [open, setOpen] = useState(() => storage('lf:wb-apps') !== 'hidden');
+  const toggle = () => (storage('lf:wb-apps', open ? 'hidden' : 'shown'), setOpen(!open));
 
   const load = () => api.integrations().then((r) => (setList(r.integrations), setError(null)), (e) => setError(e.message));
   useEffect(() => {
@@ -402,54 +397,68 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
     <>
       <div className="sectionbar">
         <h2>Workbench apps</h2>
-        {workbenchUrl && (
-          <a className="text-action" href={workbenchUrl} target="_blank" rel="noreferrer">
-            Open workbench →
-          </a>
-        )}
-      </div>
-      <div className="tool-bar">
-        <div className="segmented" role="tablist">
-          {(
-            [
-              ['all', 'All', all.length],
-              ['connected', 'Connected', connected.length],
-              ['available', 'Available', all.length - connected.length],
-            ] as const
-          ).map(([k, label, n]) => (
-            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
-              {label} <span className="tab-count">{n}</span>
-            </button>
-          ))}
+        <div className="sectionbar-actions">
+          {workbenchUrl && (
+            <a className="text-action" href={workbenchUrl} target="_blank" rel="noreferrer">
+              Open workbench →
+            </a>
+          )}
+          <button className="text-action" aria-expanded={open} onClick={toggle}>
+            {open ? 'Hide' : 'Show'}
+          </button>
         </div>
-        <input className="input" placeholder="Search apps" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {error && <p className="error">{error}</p>}
-      {!list && !error ? (
-        <div className="empty">Asking workbench…</div>
-      ) : (
-        <div className="app-grid">
-          {shown.map((i) => (
-            <div key={i.name} className="app-card">
-              <span className={`app-icon ${i.connected ? 'on' : ''}`}>{appName(i.name).charAt(0)}</span>
-              <div className="copy">
-                <b>{appName(i.name)}</b>
-                <span>v{i.version ?? '?'}</span>
-              </div>
-              {i.connected ? (
-                <span className="status-pill tone-good">Connected</span>
-              ) : pending === i.name ? (
-                <span className="status-pill tone-watch">Finish in workbench…</span>
-              ) : (
-                <button className="btn sm" onClick={() => connect(i.name)}>
-                  Connect
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+      {!open && list && (
+        <p className="footnote">
+          {connected.length} of {all.length} apps connected.
+        </p>
       )}
-      <p className="footnote">Connected apps are available to every chat and task as workbench tools, using your own access.</p>
+      {open && (
+        <>
+          <div className="tool-bar">
+            <div className="segmented" role="tablist">
+              {(
+                [
+                  ['all', 'All', all.length],
+                  ['connected', 'Connected', connected.length],
+                  ['available', 'Available', all.length - connected.length],
+                ] as const
+              ).map(([k, label, n]) => (
+                <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
+                  {label} <span className="tab-count">{n}</span>
+                </button>
+              ))}
+            </div>
+            <input className="input" placeholder="Search apps" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          {error && <p className="error">{error}</p>}
+          {!list && !error ? (
+            <div className="empty">Asking workbench…</div>
+          ) : (
+            <div className="app-grid">
+              {shown.map((i) => (
+                <div key={i.name} className="app-card">
+                  <span className={`app-icon ${i.connected ? 'on' : ''}`}>{appName(i.name).charAt(0)}</span>
+                  <div className="copy">
+                    <b>{appName(i.name)}</b>
+                    <span>v{i.version ?? '?'}</span>
+                  </div>
+                  {i.connected ? (
+                    <span className="status-pill tone-good">Connected</span>
+                  ) : pending === i.name ? (
+                    <span className="status-pill tone-watch">Finish in workbench…</span>
+                  ) : (
+                    <button className="btn sm" onClick={() => connect(i.name)}>
+                      Connect
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="footnote">Connected apps are available to every chat and task as workbench tools, using your own access.</p>
+        </>
+      )}
     </>
   );
 }

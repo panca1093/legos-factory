@@ -619,7 +619,7 @@ export function LaunchDialog({
   kind: RunKind;
   projects: string[];
   resume?: { sessionId: string; cwd: string; recentlyActive: boolean };
-  defaults?: { cwd?: string; prompt?: string; ticket?: string };
+  defaults?: { cwd?: string; prompt?: string };
   onClose: () => void;
 }) {
   const [cwd, setCwd] = useState(resume?.cwd ?? defaults?.cwd ?? storage('lf:cwd') ?? '');
@@ -633,8 +633,6 @@ export function LaunchDialog({
   const [prompt, setPrompt] = useState(defaults?.prompt ?? '');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [model, setModel] = useState(storage('lf:model') ?? 'default');
-  // from a ticket card; otherwise the server finds it in the prompt or branch
-  const ticket = defaults?.ticket;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -646,7 +644,7 @@ export function LaunchDialog({
     setErr(null);
     try {
       const where = source === 'repo' ? { repo, branch: branch.trim() || undefined } : { cwd };
-      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model, ticket });
+      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model });
       if (source === 'folder') storage('lf:cwd', cwd);
       storage('lf:source', source);
       storage('lf:model', model);

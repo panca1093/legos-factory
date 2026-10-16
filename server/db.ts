@@ -31,7 +31,35 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create index if not exists runs_owner on runs (owner, last_event_at);
     create table if not exists user_repos (
       owner text not null, repo_key text not null, name text not null, main_branch text,
-      added_at text not null, primary key (owner, repo_key));
+      added_at text not null, jira_projects text not null default '', primary key (owner, repo_key));
+    create table if not exists work_items (
+      owner text not null, ticket text not null, created_at text not null,
+      status text, done integer not null default 0, note text, note_at text, primary key (owner, ticket));
+    create table if not exists work_item_repos (
+      owner text not null, ticket text not null, repo_key text not null, name text not null,
+      added_at text not null, primary key (owner, ticket, repo_key));
+    create table if not exists ticket_links (
+      owner text not null, ticket text not null, repo_key text not null, kind text not null,
+      pr_id integer not null, branch text not null, title text not null, state text not null,
+      run_id text, commented integer not null default 0, updated_at text not null,
+      primary key (owner, ticket, repo_key, pr_id));
+    drop table if exists work_item_events;
+    drop table if exists repo_projects;
   `);
+  // tables made before these columns existed
+  addColumn(db, 'user_repos', 'jira_projects', `text not null default ''`);
+  addColumn(db, 'work_items', 'note', 'text');
+  addColumn(db, 'work_items', 'note_at', 'text');
+  dropColumn(db, 'ticket_links', 'source');
   return db;
+}
+
+function addColumn(db: DatabaseSync, table: string, column: string, type: string) {
+  const cols = db.prepare(`pragma table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) db.exec(`alter table ${table} add column ${column} ${type}`);
+}
+
+function dropColumn(db: DatabaseSync, table: string, column: string) {
+  const cols = db.prepare(`pragma table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) db.exec(`alter table ${table} drop column ${column}`);
 }

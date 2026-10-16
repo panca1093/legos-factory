@@ -13,7 +13,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'lf-act-'));
 function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
   const now = new Date().toISOString();
   return {
-    id: 'r1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
+    id: 'r1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', stage: null, share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
     cwd: '/work/acme/payments-api', prompt: 'Fix the thing\nwith details', permissionMode: 'default', status: 'running',
     requestedModel: 'default', model: 'claude-opus-5-5', startedAt: now, lastEventAt: now, endedAt: null, endedBy: null, turns: 1,
     error: null, estimatedCostUsd: 0.42, result: null, ...over,
@@ -50,6 +50,14 @@ describe('ActivityLog', () => {
     expect(log.sessionIds('bob', 10)).toEqual(['s-b']);
     expect(log.ownsSession('alice', 's-a')).toBe(true);
     expect(log.ownsSession('alice', 's-b')).toBe(false);
+  });
+
+  it('gives a session the ticket its runs were started with, never one guessed from text', async () => {
+    const log = new ActivityLog(openDb(':memory:'));
+    await log.record(run({ id: 'a1', sessionId: 's-a', ticket: null, prompt: 'fix PROJ-9' }), 'alice');
+    await log.record(run({ id: 'a2', sessionId: 's-b', ticket: 'PROJ-2' }), 'alice');
+    await log.record(run({ id: 'b1', sessionId: 's-b', ticket: 'PROJ-3' }), 'bob');
+    expect(log.sessionTickets('alice')).toEqual(new Map([['s-b', 'PROJ-2']]));
   });
 
   it('team items never carry cost or share level', () => {

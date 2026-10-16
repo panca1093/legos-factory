@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { Settings, ShareLevel } from '../shared/types.ts';
+import type { JiraFlow, Settings, ShareLevel } from '../shared/types.ts';
 
 const run = promisify(execFile);
 
@@ -11,7 +11,8 @@ export function settingsPath(): string {
   return process.env.LEGOS_SETTINGS ?? join(homedir(), '.legos-factory', 'settings.json');
 }
 
-const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, ticketKeys: [] };
+const FLOW: JiraFlow = { todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' };
+const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, jiraFlow: FLOW };
 const LEVELS: ShareLevel[] = ['private', 'status', 'full'];
 
 const expand = (p: string) => resolve(p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
@@ -32,7 +33,7 @@ export async function loadSettings(): Promise<Settings & { error: string | null 
         .filter((r: any) => typeof r?.path === 'string' && LEVELS.includes(r?.level))
         .map((r: any) => ({ path: expand(r.path), level: r.level })),
     },
-    ticketKeys: Array.isArray(raw?.ticketKeys) ? raw.ticketKeys.filter((k: unknown) => typeof k === 'string' && /^[A-Z][A-Z0-9]+$/.test(k)) : [],
+    jiraFlow: Object.fromEntries(Object.entries(FLOW).map(([k, d]) => [k, typeof raw?.jiraFlow?.[k] === 'string' && raw.jiraFlow[k].trim() ? raw.jiraFlow[k].trim() : d])) as JiraFlow,
     error: null,
   };
 }
@@ -46,18 +47,6 @@ export function shareFor(cwd: string | null, s: Settings): ShareLevel {
     if ((dir === r.path || dir.startsWith(r.path + sep)) && (!best || r.path.length > best.len)) best = { len: r.path.length, level: r.level };
   }
   return best?.level ?? s.share.default;
-}
-
-// Words shaped like ticket keys that aren't tickets.
-const NOT_TICKETS = new Set(['UTF', 'ISO', 'SHA', 'RFC', 'GPT', 'HTTP', 'TLS', 'SSL', 'ES', 'AES', 'RSA', 'CVE', 'PR', 'MR']);
-
-export function detectTicket(text: string | null | undefined, keys: string[]): string | null {
-  if (!text) return null;
-  const re = keys.length ? new RegExp(`\\b(${keys.join('|')})-(\\d+)\\b`, 'i') : /\b([A-Z][A-Z0-9]{1,9})-(\d+)\b/;
-  const m = text.match(re);
-  if (!m) return null;
-  const key = m[1].toUpperCase();
-  return !keys.length && NOT_TICKETS.has(key) ? null : `${key}-${m[2]}`;
 }
 
 export async function gitBranch(cwd: string): Promise<string | null> {

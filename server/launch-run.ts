@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
-import type { PermissionMode, Run, ShareLevel } from '../shared/types.ts';
-import { detectTicket, gitBranch, loadSettings, shareFor } from './policy.ts';
+import type { PermissionMode, Run, ShareLevel, Stage } from '../shared/types.ts';
+import { syncWorkItem } from './jira-sync.ts';
+import { loadSettings, shareFor } from './policy.ts';
 import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
 import { BRANCH_RE, HttpError, TICKET_RE, domain, gitToken, optText, requireMyRepo, text, type Deps } from './http.ts';
 
@@ -26,7 +27,16 @@ export const launchSchema = z.object({
   resume: z.string().min(1).optional().catch(undefined),
   kind: z.enum(['chat', 'task']).catch('chat'),
   share: z.enum(SHARES).optional().catch(undefined),
+  stage: z.enum(['design', 'build']).optional().catch(undefined),
 });
+
+// The target repo owns its conventions; the factory only says what the stage should produce.
+const STAGE_GUIDE: Record<Stage, (ticket: string) => string> = {
+  design: (t) =>
+    `Before anything else, read this repo's own conventions: CLAUDE.md, AGENTS.md, CONTRIBUTING and its docs folder. Write the spec for ${t} where this repo keeps specs, then open a pull request for it. Put ${t} in the branch name and in the PR title, following the repo's title format; a spec PR title carries no deployment tag.`,
+  build: (t) =>
+    `Before anything else, read this repo's own conventions: CLAUDE.md, AGENTS.md, CONTRIBUTING and its docs folder. Implement ${t}, verify it, then open a pull request. Put ${t} in the branch name and in the PR title, following the repo's title format.`,
+};
 
 export type LaunchRequest = z.output<typeof launchSchema>;
 
@@ -36,6 +46,8 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const { prompt, branch, permissionMode, resume, model, kind } = req;
   if (resume && !activity.ownsSession(uid, resume)) throw new HttpError(404, 'session not found');
   if (resume && runs.activeRunBySession().has(resume)) throw new HttpError(409, 'session already has an active run');
+  if (req.ticket && !req.stage) throw new HttpError(400, 'a ticket run needs a stage: design or build');
+  const stage = req.ticket ? req.stage! : null;
   const settings = await loadSettings();
 
   // A repo run works in a fresh clone; continuing one re-clones into the same path.
@@ -45,7 +57,8 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     const repo = parseRepo(req.repo);
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
     requireMyRepo(deps, uid, req.repo);
-    const key = req.ticket || detectTicket(prompt, settings.ticketKeys) || `run-${randomBytes(4).toString('hex')}`;
+    if (stage && !deps.workItems.hasRepo(uid, req.ticket, req.repo)) throw new HttpError(409, `add ${req.repo} to ${req.ticket}'s work item first`, { needWorkItem: true });
+    const key = req.ticket || `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
@@ -66,8 +79,10 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   }
   const started = (run: Run) => (clone && deps.clones.set(run.id, clone.path), run);
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
-  const ticket = req.ticket || detectTicket(prompt, settings.ticketKeys) || detectTicket(await gitBranch(cwd), settings.ticketKeys);
+  const ticket = req.ticket || null;
   const share = req.share ?? shareFor(cwd, settings);
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
-  return started(deps.startRun({ owner: uid, repo, kind, cwd, prompt, permissionMode, resume, model, ticket, share }, connected));
+  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt, permissionMode, resume, model, ticket, stage, share }, connected));
+  if (stage && deps.workItems.get(uid, req.ticket)) void syncWorkItem(deps, uid, req.ticket);
+  return run;
 }

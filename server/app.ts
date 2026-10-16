@@ -6,6 +6,7 @@ import { ActivityLog, toTeamItem } from './activity.ts';
 import type { RunManager, StartRequest } from './claude-runs.ts';
 import { Connections, type Pending } from './connections.ts';
 import { openDb } from './db.ts';
+import { capturePr, syncWorkItem } from './jira-sync.ts';
 import { MyRepos } from './my-repos.ts';
 import { NO_WB, gitToken, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
 import { FixQueues } from './pr-fixes.ts';
@@ -15,7 +16,9 @@ import { jiraRoutes } from './routes/jira.ts';
 import { myReposRoutes } from './routes/my-repos.ts';
 import { prsRoutes } from './routes/prs.ts';
 import { runsRoutes } from './routes/runs.ts';
+import { workItemsRoutes } from './routes/work-items.ts';
 import { Workbench } from './workbench.ts';
+import { WorkItems } from './work-items.ts';
 import { createWorkspace, managedWorkspace, parseRepo, removeWorkspace, workspacePath, workspacesDir } from './workspace.ts';
 
 export type { AppOptions } from './http.ts';
@@ -24,8 +27,7 @@ export { nameFromEmail, type ReviewRequest } from './routes/prs.ts';
 // whoever runs everything when sign-in is off (LEGOS_AUTH=off)
 const LOCAL_UID = 'local';
 
-export function createApp(runs: RunManager, opts: AppOptions = {}) {
-  const deps = buildDeps(runs, opts);
+export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildDeps(runs, opts)) {
   const { users } = deps;
   const app = new Hono<Env>();
 
@@ -45,15 +47,17 @@ export function createApp(runs: RunManager, opts: AppOptions = {}) {
   app.route('/', prsRoutes(deps));
   app.route('/', jiraRoutes(deps));
   app.route('/', myReposRoutes(deps));
+  app.route('/', workItemsRoutes(deps));
   app.onError(onError);
   return app;
 }
 
-function buildDeps(runs: RunManager, opts: AppOptions): Deps {
+export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   const users = opts.users ?? null;
   const db = opts.db ?? openDb(':memory:');
   const activity = new ActivityLog(db);
   const myRepos = new MyRepos(db);
+  const workItems = new WorkItems(db);
   const http = opts.fetch ?? fetch;
   const selfUrl = opts.selfUrl ?? 'http://localhost:4317';
   const callbackUrl = `${selfUrl}/auth/callback`;
@@ -109,7 +113,14 @@ function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     const clone = m.run.endedAt ? clones.get(m.run.id) : undefined;
     if (clone) {
       clones.delete(m.run.id);
-      if (!busyIn(clone)) void removeWorkspace(wsRoot, clone).catch((err) => console.warn('workspace cleanup failed:', err.message));
+      const { run } = m;
+      // the PR is found from the clone's branch, so capture it before the clone goes
+      void capturePr(deps, run, clone)
+        .then(() => {
+          if (run.ticket && run.stage) void syncWorkItem(deps, run.owner, run.ticket);
+          if (!busyIn(clone)) return removeWorkspace(wsRoot, clone);
+        })
+        .catch((err) => console.warn('workspace cleanup failed:', err.message));
     }
     void activity
       .record(m.run, m.run.owner)
@@ -146,6 +157,6 @@ function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, opts, users, db, activity, myRepos, http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, clones, busyIn, ownsRun };
+  const deps: Deps = { runs, opts, users, db, activity, myRepos, workItems, syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, clones, busyIn, ownsRun };
   return deps;
 }
