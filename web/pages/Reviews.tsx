@@ -111,6 +111,11 @@ export function Reviews() {
               ) · {ago(data.at, now)}.
             </p>
           )}
+          {data && data.failed.length > 0 && (
+            <p className="footnote">
+              Couldn't read {data.failed.length} PR{data.failed.length === 1 ? '' : 's'} ({data.failed.join(', ')}); they may be missing above.
+            </p>
+          )}
         </div>
       </div>
     </Frame>

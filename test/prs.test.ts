@@ -17,7 +17,7 @@ const PRS: Record<string, any[]> = {
   'acme/web:OPEN': [{ id: 4, title: 'PROJ-7 web part', state: 'OPEN', author: 'Ada', source: 'ui/x', destination: 'main', updated_on: '2026-10-01' }],
 };
 
-function setup(opts: { bitbucketWorkspace?: string; whoami?: object; repos?: string[] } = {}) {
+function setup(opts: { bitbucketWorkspace?: string; whoami?: object; repos?: string[]; failComments?: number } = {}) {
   const calls: { tool: string; args: any }[] = [];
   const srv = fakeServers({
     whoami: opts.whoami ?? { id: 'u1', email: 'bob@acme.test', name: 'Bob Stone' },
@@ -35,6 +35,7 @@ function setup(opts: { bitbucketWorkspace?: string; whoami?: object; repos?: str
         return { id: 12, title: 'feat: PROJ-7 add export', description: 'adds **export**', state: 'OPEN', author: 'Ada', source: 'feat/PROJ-7', destination: 'main', reviewers: [{ display_name: 'Bob', approved: true }], comment_count: 1, task_count: 0, url: 'https://forge/pr/12' };
       if (tool === 'bitbucket_get_pr_diff')
         return args.diffstat ? { files: [{ status: 'modified', old: 'a.go', new: 'a.go', lines_added: 2, lines_removed: 1 }], hasMore: false } : { diff: 'diff --git a/a.go b/a.go\n+x\n' };
+      if (tool === 'bitbucket_list_pr_comments' && args.prId === opts.failComments) throw new Error('response cut off');
       if (tool === 'bitbucket_list_pr_comments' && args.prId === 13) return { comments: [{ id: 5, author: 'Bob', text: 'ping @Bob Stone', created_on: '2026-10-03' }], hasMore: false };
       if (tool === 'bitbucket_list_pr_comments' && args.prId === 9) return { comments: [{ id: 6, author: 'Ada', text: 'thoughts, @bob stone?', created_on: '2026-10-03' }], hasMore: false };
       if (tool === 'bitbucket_list_pr_comments')
@@ -156,6 +157,16 @@ describe('pull requests', () => {
     expect(now.error).toMatch(/could not clone acme\/api@feat\/PROJ-7/);
     expect((await post(`/api/fixes/${q.id}/items/1/approve`)).status).toBe(409);
     expect((await post('/api/fixes/nope/cancel')).status).toBe(404);
+  });
+
+  it('skips a PR it cannot read instead of failing the whole list', async () => {
+    const { req, connectWorkbench } = setup({ failComments: 12 });
+    await connectWorkbench();
+    const res = await req('/api/reviews');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.items.map((p: any) => `${p.repo}#${p.id}`)).toEqual(['acme/api#13', 'acme/web#4']);
+    expect(body.failed).toEqual(['acme/api#12']);
   });
 
   it('lists open PRs where you are a reviewer or mentioned, not your own', async () => {

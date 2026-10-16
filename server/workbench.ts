@@ -200,6 +200,22 @@ export function salvageDiff(raw: string): string | null {
   }
 }
 
+// A comment list whose JSON envelope was cut: the comments that arrived whole.
+export function salvageComments(raw: string): unknown[] | null {
+  const prefix = '{"results":[{"result":{"comments":[';
+  if (!raw.startsWith(prefix)) return null;
+  const body = raw.slice(prefix.length);
+  const cut = body.lastIndexOf('},{"id":');
+  if (cut < 0) return [];
+  try {
+    return JSON.parse(`[${body.slice(0, cut + 1)}]`);
+  } catch {
+    return null;
+  }
+}
+
+const BUSY = new Set([502, 503, 504]);
+
 export class Workbench {
   // MCP session per token; tokens rotate hourly so this stays small
   private sessions = new Map<string, string>();
@@ -207,9 +223,18 @@ export class Workbench {
   constructor(
     private mcpUrl: string,
     private http: typeof fetch = fetch,
+    private retryDelayMs = 500,
   ) {}
 
   private async post(token: string, body: object, session: string | null) {
+    for (let attempt = 0; ; attempt++) {
+      const out = await this.postOnce(token, body, session);
+      if (!BUSY.has(out.res.status) || attempt === 2) return out;
+      await new Promise((r) => setTimeout(r, this.retryDelayMs * (attempt + 1)));
+    }
+  }
+
+  private async postOnce(token: string, body: object, session: string | null) {
     const headers: Record<string, string> = {
       authorization: `Bearer ${token}`,
       'content-type': 'application/json',
@@ -265,9 +290,14 @@ export class Workbench {
     }
   }
 
-  // Runs one integration tool through execute_tools.
-  async execute(token: string, tool: string, args: object): Promise<any> {
+  // Runs one integration tool through execute_tools; `salvage` rescues an answer workbench cut off at ~60k chars.
+  async execute(token: string, tool: string, args: object, salvage?: (raw: string) => unknown): Promise<any> {
     const out = await this.call(token, 'execute_tools', { executions: [{ tool, args }] });
+    if (typeof out === 'string') {
+      const rescued = salvage?.(out);
+      if (rescued) return rescued;
+      throw new Error(`${tool} answer was too large and got cut off by workbench`);
+    }
     const first = out?.results?.[0];
     if (!first) throw new Error(`${tool} returned nothing`);
     // e.g. { error: 'NOT_CONNECTED', message: 'github not connected. Use connect(...)' }
@@ -386,7 +416,10 @@ export class Workbench {
   }
 
   async bitbucketPrComments(token: string, workspace: string, slug: string, id: number): Promise<PrComment[]> {
-    const r = await this.execute(token, 'bitbucket_list_pr_comments', { workspace, repoSlug: slug, prId: id, pagelen: 100 });
+    const r = await this.execute(token, 'bitbucket_list_pr_comments', { workspace, repoSlug: slug, prId: id, pagelen: 100 }, (raw) => {
+      const comments = salvageComments(raw);
+      return comments && { comments };
+    });
     return (r?.comments ?? []).map((c: any) => ({
       id: Number(c.id),
       author: c.author ?? null,

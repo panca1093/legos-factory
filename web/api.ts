@@ -97,7 +97,7 @@ export const api = {
     call<FixQueue>(`/api/fixes/${queue}/items/${commentId}/${action}`, { method: 'POST', body: JSON.stringify({ note }) }),
   cancelFixes: (queue: string) => call<FixQueue>(`/api/fixes/${queue}/cancel`, { method: 'POST' }),
   reviews: (refresh = false) =>
-    call<{ me: string; matchedById: boolean; items: ReviewRequest[]; searched: string[]; scanned: number; at: string }>(
+    call<{ me: string; matchedById: boolean; items: ReviewRequest[]; failed: string[]; searched: string[]; scanned: number; at: string }>(
       `/api/reviews?as=${encodeURIComponent(storage('lf:bb-name') ?? '')}${refresh ? '&refresh=1' : ''}`,
     ),
   myRepos: () => call<{ repos: MyRepo[] }>('/api/my-repos'),
