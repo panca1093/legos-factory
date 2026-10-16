@@ -420,6 +420,86 @@ describe('work-item API', () => {
   });
 });
 
+describe('link a found PR', () => {
+  const found = pr(668, 'OPEN', 'feat: PROJ-1 export', 'feat/export');
+  const linkIt = (s: ReturnType<typeof setup>, body: object = { repo: 'acme/api', prId: 668, kind: 'impl' }, ticket = 'PROJ-1') => s.post(`/api/work-items/${ticket}/links`, body);
+  const ready = async (o: Opts = {}) => {
+    const s = setup({ prs: { 'acme/api#668': found, 'acme/api#5': pr(5, 'OPEN', 'unrelated', 'feat/other'), 'acme/web#9': pr(9, 'OPEN', 'feat: PROJ-1 web', 'feat/web') }, ...o });
+    await s.connectWorkbench();
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    return s;
+  };
+
+  it('links a PR whose title has the key, as commented, and never announces it on Jira', async () => {
+    const s = await ready({ status: 'ON HOLD' });
+    const res = await linkIt(s);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ ticket: 'PROJ-1', links: [{ repo: 'acme/api', prId: 668, kind: 'impl', state: 'OPEN', title: 'feat: PROJ-1 export', branch: 'feat/export', runId: null, commented: true }] });
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    expect(s.tools('jira_add_comment')).toEqual([]);
+  });
+
+  it('links by source branch alone', async () => {
+    const s = await ready({ prs: { 'acme/api#7': pr(7, 'MERGED', 'export', 'feat/proj-1-export') } });
+    expect((await linkIt(s, { repo: 'acme/api', prId: 7, kind: 'spec' })).status).toBe(200);
+    expect((await s.item()).links[0]).toMatchObject({ prId: 7, kind: 'spec', state: 'MERGED' });
+  });
+
+  it('re-linking with the other kind corrects it and keeps commented', async () => {
+    const s = await ready();
+    await linkIt(s);
+    const again = await (await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'spec' })).json();
+    expect(again.links).toEqual([expect.objectContaining({ prId: 668, kind: 'spec', commented: true })]);
+    s.items.update('local', 'PROJ-1', 'acme/api', 668, { commented: false });
+    const third = await (await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' })).json();
+    expect(third.links).toEqual([expect.objectContaining({ kind: 'impl', commented: false })]);
+  });
+
+  it('a linked impl PR drives In Progress to Code Review on the next sync', async () => {
+    const s = await ready({ status: 'In Progress' });
+    await linkIt(s);
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    expect(s.tools('jira_transition_issue').map((c) => c.args.transitionId)).toEqual(['31']);
+    expect(s.tools('jira_add_comment')).toEqual([]);
+  });
+
+  it('refuses what cannot be linked', async () => {
+    const s = await ready();
+    expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' }, 'nope')).status).toBe(400);
+    expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'both' })).status).toBe(400);
+    expect((await linkIt(s, { repo: 'acme/api', prId: 0, kind: 'impl' })).status).toBe(400);
+    expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' }, 'PROJ-404')).status).toBe(404);
+    const outside = await linkIt(s, { repo: 'acme/legacy', prId: 1, kind: 'impl' });
+    expect(outside.status).toBe(403);
+    expect(await outside.json()).toMatchObject({ needRepo: true });
+    const notInItem = await linkIt(s, { repo: 'acme/web', prId: 9, kind: 'impl' });
+    expect(notInItem.status).toBe(409);
+    expect(await notInItem.json()).toMatchObject({ needWorkItem: true, error: expect.stringMatching(/add acme\/web to PROJ-1/) });
+    const unrelated = await linkIt(s, { repo: 'acme/api', prId: 5, kind: 'impl' });
+    expect(unrelated.status).toBe(400);
+    expect((await unrelated.json()).error).toBe('that PR does not mention PROJ-1');
+    expect((await s.item()).links).toEqual([]);
+  });
+
+  it('needs a workbench, and reports a missing PR as an upstream failure', async () => {
+    const s = setup({ prs: {} });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    expect((await linkIt(s)).status).toBe(409);
+    await s.connectWorkbench();
+    expect((await linkIt(s)).status).toBe(502);
+  });
+
+  it('keeps owners apart', async () => {
+    const s = await ready();
+    s.items.create('u2', 'PROJ-2');
+    s.db.prepare(`insert into user_repos (owner, repo_key, name, main_branch, added_at) values ('u2', 'acme/api', 'acme/api', 'main', 'x')`).run();
+    s.items.addRepo('u2', 'PROJ-2', 'acme/api');
+    expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' }, 'PROJ-2')).status).toBe(404);
+    expect(s.items.links('u2', 'PROJ-2')).toEqual([]);
+  });
+});
+
 describe('ticket runs', () => {
   it('need a stage and a repo in the work item', async () => {
     const s = setup({ gitUrl: forge() });

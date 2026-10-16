@@ -784,5 +784,8 @@ a.list-item:hover, .jira-row:hover, .row.link:hover { background: var(--hover); 
 .work-item { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .work-item h3 { margin: 0; font-size: 14px; }
 .work-item-repo { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.work-item-repo > .found-pr { flex-basis: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.found-pr .ellipsis { flex: 1; min-width: 0; }
+.found-pr .btn { white-space: nowrap; }
 .work-item-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .work-item-actions > span { display: inline-flex; gap: 6px; align-items: center; }
