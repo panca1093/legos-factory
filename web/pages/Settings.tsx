@@ -373,6 +373,8 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
   const [tab, setTab] = useState<'all' | 'connected' | 'available'>('all');
   const [q, setQ] = useState('');
   const [pending, setPending] = useState<string | null>(null);
+  const [open, setOpen] = useState(() => storage('lf:wb-apps') !== 'hidden');
+  const toggle = () => (storage('lf:wb-apps', open ? 'hidden' : 'shown'), setOpen(!open));
 
   const load = () => api.integrations().then((r) => (setList(r.integrations), setError(null)), (e) => setError(e.message));
   useEffect(() => {
@@ -415,54 +417,68 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
     <>
       <div className="sectionbar">
         <h2>Workbench apps</h2>
-        {workbenchUrl && (
-          <a className="text-action" href={workbenchUrl} target="_blank" rel="noreferrer">
-            Open workbench →
-          </a>
-        )}
-      </div>
-      <div className="tool-bar">
-        <div className="segmented" role="tablist">
-          {(
-            [
-              ['all', 'All', all.length],
-              ['connected', 'Connected', connected.length],
-              ['available', 'Available', all.length - connected.length],
-            ] as const
-          ).map(([k, label, n]) => (
-            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
-              {label} <span className="tab-count">{n}</span>
-            </button>
-          ))}
+        <div className="sectionbar-actions">
+          {workbenchUrl && (
+            <a className="text-action" href={workbenchUrl} target="_blank" rel="noreferrer">
+              Open workbench →
+            </a>
+          )}
+          <button className="text-action" aria-expanded={open} onClick={toggle}>
+            {open ? 'Hide' : 'Show'}
+          </button>
         </div>
-        <input className="input" placeholder="Search apps" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      {error && <p className="error">{error}</p>}
-      {!list && !error ? (
-        <div className="empty">Asking workbench…</div>
-      ) : (
-        <div className="app-grid">
-          {shown.map((i) => (
-            <div key={i.name} className="app-card">
-              <span className={`app-icon ${i.connected ? 'on' : ''}`}>{appName(i.name).charAt(0)}</span>
-              <div className="copy">
-                <b>{appName(i.name)}</b>
-                <span>v{i.version ?? '?'}</span>
-              </div>
-              {i.connected ? (
-                <span className="status-pill tone-good">Connected</span>
-              ) : pending === i.name ? (
-                <span className="status-pill tone-watch">Finish in workbench…</span>
-              ) : (
-                <button className="btn sm" onClick={() => connect(i.name)}>
-                  Connect
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+      {!open && list && (
+        <p className="footnote">
+          {connected.length} of {all.length} apps connected.
+        </p>
       )}
-      <p className="footnote">Connected apps are available to every chat and task as workbench tools, using your own access.</p>
+      {open && (
+        <>
+          <div className="tool-bar">
+            <div className="segmented" role="tablist">
+              {(
+                [
+                  ['all', 'All', all.length],
+                  ['connected', 'Connected', connected.length],
+                  ['available', 'Available', all.length - connected.length],
+                ] as const
+              ).map(([k, label, n]) => (
+                <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
+                  {label} <span className="tab-count">{n}</span>
+                </button>
+              ))}
+            </div>
+            <input className="input" placeholder="Search apps" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          {error && <p className="error">{error}</p>}
+          {!list && !error ? (
+            <div className="empty">Asking workbench…</div>
+          ) : (
+            <div className="app-grid">
+              {shown.map((i) => (
+                <div key={i.name} className="app-card">
+                  <span className={`app-icon ${i.connected ? 'on' : ''}`}>{appName(i.name).charAt(0)}</span>
+                  <div className="copy">
+                    <b>{appName(i.name)}</b>
+                    <span>v{i.version ?? '?'}</span>
+                  </div>
+                  {i.connected ? (
+                    <span className="status-pill tone-good">Connected</span>
+                  ) : pending === i.name ? (
+                    <span className="status-pill tone-watch">Finish in workbench…</span>
+                  ) : (
+                    <button className="btn sm" onClick={() => connect(i.name)}>
+                      Connect
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="footnote">Connected apps are available to every chat and task as workbench tools, using your own access.</p>
+        </>
+      )}
     </>
   );
 }
