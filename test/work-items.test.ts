@@ -255,18 +255,40 @@ describe('jira sync', () => {
     await expect(syncWorkItem(s.deps, 'local', 'PROJ-404')).resolves.toBeUndefined();
   });
 
-  it('a clean sync clears a skip note but keeps a PR capture failure until a link lands', async () => {
-    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') }, open: { 'acme/api': [] } });
+  it('a clean sync clears a skip note', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note.text).toMatch(/^Skipped/);
     s.jira.status = 'Code Review';
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note).toBeNull();
+  });
 
-    s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: boom');
+  it('a PR capture failure outranks skips and errors until a link lands', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
+    await withItem(s, [{ prId: 12 }, { prId: 77 }]);
+    const failure = 'Error: PR capture failed in acme/api: boom';
+    s.items.setNote('local', 'PROJ-1', failure);
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
-    expect((await s.item()).note.text).toMatch(/^Error: PR capture failed/);
+    expect((await s.item()).note.text).toBe(failure);
+  });
+
+  it('a capture failure written while a sync is running survives it', async () => {
+    const s = setup({ status: 'Code Review', prs: { 'acme/api#12': pr(12, 'OPEN') } });
+    await withItem(s, [{ prId: 12 }]);
+    const failure = 'Error: PR capture failed in acme/api: boom';
+    const orig = s.deps.workbench;
+    s.deps.workbench = async (o: string) => {
+      const wb = await orig(o);
+      if (wb) {
+        const get = wb.client.bitbucketPr.bind(wb.client);
+        wb.client.bitbucketPr = async (...a: Parameters<typeof get>) => (s.items.setNote('local', 'PROJ-1', failure), get(...a));
+      }
+      return wb;
+    };
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    expect((await s.item()).note.text).toBe(failure);
   });
 });
 
@@ -281,24 +303,36 @@ describe('periodic sync', () => {
     expect(s.tools('jira_get_issue').map((c) => c.args.issueKey)).toEqual(['PROJ-2']);
   });
 
-  it('stops polling items outside the flow but still syncs them on demand, and resumes when back in the flow', async () => {
-    for (const status of ['Done', 'ON HOLD']) {
-      const s = setup({ status });
-      await s.connectWorkbench();
-      await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+  it('keeps polling on ON HOLD or Done with an open impl PR, and picks up a later merge', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
+    await s.connectWorkbench();
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    s.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 12, branch: 'feat/PROJ-1-12', title: 't', state: 'OPEN', runId: null });
+    for (const status of ['ON HOLD', 'Done']) {
+      s.jira.status = status;
       await syncDue(s.deps);
-      expect(s.tools('jira_get_issue')).toHaveLength(1);
-      expect(s.items.get('local', 'PROJ-1')).toMatchObject({ status, done: true });
-      await syncDue(s.deps);
-      expect(s.tools('jira_get_issue')).toHaveLength(1);
-      await syncWorkItem(s.deps, 'local', 'PROJ-1');
-      expect(s.tools('jira_get_issue')).toHaveLength(2);
-      s.jira.status = 'In Progress';
-      await syncWorkItem(s.deps, 'local', 'PROJ-1');
-      expect(s.items.get('local', 'PROJ-1')).toMatchObject({ done: false });
-      await syncDue(s.deps);
-      expect(s.tools('jira_get_issue')).toHaveLength(4);
+      expect(s.items.get('local', 'PROJ-1')).toMatchObject({ status, done: false });
     }
+    expect(s.tools('jira_get_issue')).toHaveLength(2);
+
+    const merged = setup({ status: 'Code Review', prs: { 'acme/api#12': pr(12, 'MERGED') } });
+    await merged.connectWorkbench();
+    await merged.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    merged.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 12, branch: 'feat/PROJ-1-12', title: 't', state: 'OPEN', runId: null });
+    await syncDue(merged.deps);
+    expect(merged.tools('jira_transition_issue').map((c) => c.args.transitionId)).toEqual(['41']);
+    expect(merged.items.get('local', 'PROJ-1')).toMatchObject({ status: 'Ready for QA', done: true });
+  });
+
+  it('stops polling a Done ticket whose impl PRs are all merged', async () => {
+    const s = setup({ status: 'Done', prs: { 'acme/api#12': pr(12, 'MERGED') } });
+    await s.connectWorkbench();
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    s.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 12, branch: 'feat/PROJ-1-12', title: 't', state: 'OPEN', runId: null });
+    await syncDue(s.deps);
+    expect(s.items.get('local', 'PROJ-1')).toMatchObject({ status: 'Done', done: true });
+    await syncDue(s.deps);
+    expect(s.tools('jira_get_issue')).toHaveLength(1);
   });
 
   it('never syncs one item twice at once', async () => {
@@ -442,6 +476,18 @@ describe('PR capture', () => {
     expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', branch: 'feat/PROJ-1', runId: run.id })]);
     expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();
     await settle(() => s.tools('jira_add_comment').length === 1);
+  });
+
+  it("a link in one repo leaves another repo's capture failure alone", async () => {
+    const open = { 'acme/api': [pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1')] };
+    const { s } = await launch({ open }, 'feat/PROJ-1');
+    s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/web: later');
+    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'again', ticket: 'PROJ-1', stage: 'build' })).json();
+    git(run.cwd, 'checkout', '-qb', 'feat/PROJ-1');
+    await s.runs.end(run.id);
+    await settle(() => !existsSync(run.cwd));
+    await settle(() => s.tools('bitbucket_list_prs').length === 2);
+    expect(s.items.get('local', 'PROJ-1')!.note?.text).toBe('Error: PR capture failed in acme/web: later');
   });
 
   it('stores nothing on the base branch or without an open PR', async () => {

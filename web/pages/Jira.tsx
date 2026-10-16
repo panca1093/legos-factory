@@ -351,6 +351,12 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
   const [detail, setDetail] = useState<JiraRow | null>(null);
   const [working, setWorking] = useState<JiraRow | null>(null);
   const workItems = useFetch(api.workItems, []);
+  useEffect(() => {
+    const refresh = () => document.visibilityState === 'visible' && workItems.reload();
+    const t = setInterval(refresh, 30000);
+    window.addEventListener('focus', refresh);
+    return () => (clearInterval(t), window.removeEventListener('focus', refresh));
+  }, []);
   const itemOf = (key: string) => workItems.data?.items.find((w) => w.ticket === key) ?? null;
   // a ticket's PR lookup: in progress, or what came back when it wasn't exactly one PR
   const [prFind, setPrFind] = useState<{ key: string; prs?: PrRow[]; searched?: string[]; error?: string } | null>(null);
@@ -384,7 +390,7 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
     void load();
   }, [filter]);
 
-  // A brief is a conversation, not work on the ticket: no stage, and the ticket is only detected from the prompt.
+  // A brief is a conversation, not work on the ticket: no stage and no work item.
   const start = (row: JiraRow, kind: RunKind) => (kind === 'task' ? setWorking(row) : onNew(kind, { prompt: briefPrompt(row) }));
 
   const runsFor = (key: string) => [...live.runs.values()].filter((r) => r.ticket === key);

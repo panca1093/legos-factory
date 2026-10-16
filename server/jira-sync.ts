@@ -9,16 +9,17 @@ export type Step = { from: string; to: string };
 
 const same = (a: string | null, b: string) => (a ?? '').trim().toLowerCase() === b.trim().toLowerCase();
 
+const everyRepo = (f: Facts, states: string[]) =>
+  f.repos.length > 0 && f.repos.every((repo) => f.links.some((l) => l.kind === 'impl' && same(l.repo, repo) && states.includes(l.state)));
+
 // The forward moves the facts allow from status, in order. A step whose "from" doesn't match, with the status
 // not already at or past its target, stops the walk: that one is skipped (someone moved the ticket elsewhere).
 export function planMoves(flow: JiraFlow, status: string | null, f: Facts): { moves: Step[]; skipped: Step | null } {
   const rank = (s: string | null) => [flow.todo, flow.inProgress, flow.codeReview, flow.readyForQa].findIndex((o) => same(s, o));
-  const everyRepo = (states: string[]) =>
-    f.repos.length > 0 && f.repos.every((repo) => f.links.some((l) => l.kind === 'impl' && same(l.repo, repo) && states.includes(l.state)));
   const steps = [
     f.started && { from: flow.todo, to: flow.inProgress },
-    everyRepo(['OPEN', 'MERGED']) && { from: flow.inProgress, to: flow.codeReview },
-    everyRepo(['MERGED']) && { from: flow.codeReview, to: flow.readyForQa },
+    everyRepo(f, ['OPEN', 'MERGED']) && { from: flow.inProgress, to: flow.codeReview },
+    everyRepo(f, ['MERGED']) && { from: flow.codeReview, to: flow.readyForQa },
   ].filter((s): s is Step => !!s);
   const moves: Step[] = [];
   let at = status;
@@ -48,7 +49,7 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
   const { workItems } = deps;
   const item = workItems.get(owner, ticket);
   if (!item) return;
-  // an error outranks a skip; a clean sync clears the note, except a PR capture failure, which only a new link fixes
+  // an error outranks a skip; a clean sync clears the note, but a PR capture failure outranks both until its repo gets a link
   let issue: string | null = null;
   const note = (text: string) => void (issue?.startsWith('Error') || (issue = text));
   try {
@@ -89,15 +90,16 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
       status = await client.jiraStatus(token, ticket);
     }
     if (skipped) note(`Skipped ${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
-    const inFlow = [flow.todo, flow.inProgress, flow.codeReview].some((o) => same(status, o));
-    workItems.setStatus(owner, ticket, status, status === null ? item.done : !inFlow);
+    const done = same(status, flow.readyForQa) || everyRepo({ ...facts, links: workItems.links(owner, ticket) }, ['MERGED']);
+    workItems.setStatus(owner, ticket, status, status === null ? item.done : done);
   } catch (err) {
     note(`Error: ${errMsg(err)}`);
   }
-  if (issue || !item.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(owner, ticket, issue);
+  // re-read: a capture may have failed while this sync ran
+  if (!workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(owner, ticket, issue);
 }
 
-// The periodic pass: work items still in the flow before Ready for QA, of owners with a connected workbench.
+// The periodic pass: work items not yet at Ready for QA or fully merged, of owners with a connected workbench.
 export async function syncDue(deps: Deps): Promise<void> {
   const due = deps.workItems.pending().filter((i) => !deps.syncs.has(syncKey(i.owner, i.ticket)));
   const connected = new Map<string, boolean>();
@@ -124,7 +126,7 @@ export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: strin
     const pr = (await wb.client.bitbucketPrs(wb.token, ref.workspace, ref.slug, 'OPEN')).find((p) => p.source === branch);
     if (!pr) return;
     deps.workItems.link(owner, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, runId: run.id });
-    if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) deps.workItems.setNote(owner, ticket, null);
+    if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(`${CAPTURE_FAILED} in ${repo}:`)) deps.workItems.setNote(owner, ticket, null);
   } catch (err) {
     deps.workItems.setNote(owner, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);
   }

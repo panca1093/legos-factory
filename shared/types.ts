@@ -72,7 +72,7 @@ export type Run = {
   // a task converted to a chat via Discuss
   fromTask: boolean;
   ticket: string | null;
-  // set exactly when the run works on a ticket
+  // design or build when started from a work item; null otherwise (fix-queue runs have a ticket but no stage)
   stage: Stage | null;
   share: ShareLevel;
   runtime: 'claude-code';
