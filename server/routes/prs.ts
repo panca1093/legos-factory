@@ -163,21 +163,24 @@ async function reviewRequests(wb: WorkbenchClient, repos: RepoRef[], as: string)
   const isMe = (r: { name: string; uuid: string | null }) => (uuid && r.uuid ? r.uuid === uuid : same(r.name));
   const bareUuid = uuid?.replace(/[{}]/g, '');
   const mention = new RegExp(`@\\{?${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')}`, 'i');
-  const open = (await Promise.all(repos.map((r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50))))
+  const open = (await pool(repos, 6, (r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50)))
     .flat()
     .filter((p) => !same(p.author))
     .sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''))
     .slice(0, REVIEW_SCAN);
+  const failed: string[] = [];
   const rows = await pool(open, 6, async (p): Promise<ReviewRequest | null> => {
     const [ws, slug] = p.repo.split('/');
-    const [pr, comments] = await Promise.all([wb.client.bitbucketPr(wb.token, ws, slug, p.id), wb.client.bitbucketPrComments(wb.token, ws, slug, p.id)]);
+    const read = await Promise.all([wb.client.bitbucketPr(wb.token, ws, slug, p.id), wb.client.bitbucketPrComments(wb.token, ws, slug, p.id)]).catch(() => null);
+    if (!read) return (failed.push(`${p.repo}#${p.id}`), null);
+    const [pr, comments] = read;
     const mine = pr.reviewers.find(isMe);
     const why: ReviewRequest['why'] = [];
     if (mine) why.push('reviewer');
     if (comments.some((x) => !same(x.author) && (mention.test(x.text) || (!!bareUuid && x.text.includes(bareUuid))))) why.push('mentioned');
     return why.length ? { ...p, reviewers: pr.reviewers, approvedByMe: mine?.approved === true, why, comments: comments.length, url: pr.url } : null;
   });
-  return { me: name, matchedById: !!uuid, items: rows.filter((r) => r !== null), searched: repos.map((r) => `${r.workspace}/${r.slug}`), scanned: open.length, at: new Date().toISOString() };
+  return { me: name, matchedById: !!uuid, items: rows.filter((r) => r !== null), failed, searched: repos.map((r) => `${r.workspace}/${r.slug}`), scanned: open.length, at: new Date().toISOString() };
 }
 
 // workbench's whoami has no display name; "jane.doe+x@acme.com" -> "Jane Doe", which is usually the Bitbucket name

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adfToMarkdown, parseJiraDev, salvageDiff, Workbench } from '../server/workbench.ts';
+import { adfToMarkdown, parseJiraDev, salvageComments, salvageDiff, Workbench } from '../server/workbench.ts';
 
 // Shapes as Jira returns the Development field (values trimmed to what the parser reads)
 const MERGED_DEV =
@@ -160,5 +160,44 @@ describe('Workbench client', () => {
     const { wb } = fake();
     await expect(wb.execute('tok', 'github_list_prs', {})).rejects.toThrow('github not connected');
     expect(await wb.connect('tok', 'github')).toEqual({ url: 'https://wb.test/connect/c1', connectionId: 'c1' });
+  });
+});
+
+// One tool reply per call: plain text (what workbench sends back) or an HTTP status.
+function scripted(replies: (string | number)[]) {
+  const http = (async (_u: any, init: any) => {
+    const msg = JSON.parse(init.body);
+    if (msg.method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }), { headers: { 'mcp-session-id': 's1' } });
+    if (msg.method === 'notifications/initialized') return new Response('', { status: 202 });
+    const r = replies.shift()!;
+    if (typeof r === 'number') return new Response('unavailable', { status: r });
+    return Response.json({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: r } ] } });
+  }) as typeof fetch;
+  return new Workbench('https://wb.test/mcp', http, 0);
+}
+
+describe('cut-off comment lists', () => {
+  const c = (id: number) => ({ id, author: 'Ada', text: `long {"id":1} text ${id}`, created_on: '2026-10-01' });
+  const full = JSON.stringify({ results: [{ result: { comments: [c(1), c(2), c(3)], hasMore: true } }] });
+  const cut = full.slice(0, full.indexOf('"id":3') + 12) + '\n…[truncated: 103866 chars, limit 60000.]';
+
+  it('keeps the whole comments before the cut, and gives up on anything else', () => {
+    expect(salvageComments(cut)?.map((x: any) => x.id)).toEqual([1, 2]);
+    expect(salvageComments('{"error":"x"}')).toBeNull();
+    expect(salvageComments('{"results":[{"result":{"comments":[{"id":1,"te')).toEqual([]);
+  });
+
+  it('returns the salvaged comments of a PR whose list was cut', async () => {
+    const wb = scripted([cut]);
+    expect((await wb.bitbucketPrComments('tok', 'acme', 'api', 1)).map((x) => x.id)).toEqual([1, 2]);
+  });
+});
+
+describe('busy workbench', () => {
+  const ok = JSON.stringify({ integrations: [] });
+  it('retries a 502, 503 or 504 twice, then gives up', async () => {
+    expect(await scripted([503, 502, ok]).integrations('tok')).toEqual([]);
+    await expect(scripted([503, 503, 504, ok]).integrations('tok')).rejects.toThrow(/HTTP 504/);
+    await expect(scripted([500, ok]).integrations('tok')).rejects.toThrow(/HTTP 500/);
   });
 });
