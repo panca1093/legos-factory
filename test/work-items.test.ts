@@ -99,7 +99,7 @@ function setup(o: Opts = {}) {
   const send = (method: string) => (p: string, body: unknown = {}) => req(p, { method, body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } });
   const post = send('POST');
   const put = send('PUT');
-  const del = (p: string) => req(p, { method: 'DELETE', headers: { 'x-legos': '1' } });
+  const patch = send('PATCH');
   const connectWorkbench = async (owner = 'local') => {
     if (owner !== 'local') throw new Error('only local');
     await post('/api/connections', { name: 'workbench', kind: 'workbench', url: WB, auth: 'oauth' });
@@ -108,9 +108,9 @@ function setup(o: Opts = {}) {
     await req(`/auth/callback?code=abc&state=${authorize.searchParams.get('state')}`);
   };
   const items = new WorkItems(db);
-  const item = async (ticket = 'PROJ-1') => (await req(`/api/work-items/${ticket}`)).json();
+  const item = async (ticket = 'PROJ-1') => ((await (await req('/api/work-items')).json()).items as any[]).find((i) => i.ticket === ticket);
   const tools = (name: string) => calls.filter((c) => c.tool === name);
-  return { jira, calls, tools, db, deps, runs, starts, req, post, put, del, connectWorkbench, items, item, myRepos, hooks, max: () => maxInFlight };
+  return { jira, calls, tools, db, deps, runs, starts, req, post, put, patch, connectWorkbench, items, item, myRepos, hooks, max: () => maxInFlight };
 }
 
 const settle = async (cond: () => boolean) => {
@@ -165,19 +165,18 @@ describe('status rules', () => {
 });
 
 describe('jira sync', () => {
-  const withItem = async (s: ReturnType<typeof setup>, links: { repo?: string; kind?: 'spec' | 'impl'; prId: number; source?: 'factory' | 'manual'; state?: string }[] = []) => {
+  const withItem = async (s: ReturnType<typeof setup>, links: { repo?: string; kind?: 'spec' | 'impl'; prId: number; state?: string }[] = []) => {
     await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     for (const l of links)
-      s.items.link('local', 'PROJ-1', { repo: l.repo ?? 'acme/api', kind: l.kind ?? 'impl', prId: l.prId, branch: `feat/PROJ-1-${l.prId}`, title: 't', state: l.state ?? 'OPEN', source: l.source ?? 'manual', runId: null });
+      s.items.link('local', 'PROJ-1', { repo: l.repo ?? 'acme/api', kind: l.kind ?? 'impl', prId: l.prId, branch: `feat/PROJ-1-${l.prId}`, title: 't', state: l.state ?? 'OPEN', runId: null });
   };
 
   it('skips without a transition call when the status is not the expected one', async () => {
     const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
-    const res = await s.post('/api/work-items/PROJ-1/sync');
-    expect(res.status).toBe(200);
-    const body = await res.json();
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    const body = await s.item();
     expect(body.status).toBe('ON HOLD');
     expect(body.note).toMatchObject({ text: 'Skipped In Progress → Code Review: status was ON HOLD', at: expect.any(String) });
     expect(s.tools('jira_transition_issue')).toEqual([]);
@@ -187,7 +186,8 @@ describe('jira sync', () => {
   it('looks the transition id up by target status name and moves', async () => {
     const s = setup({ status: 'In Progress', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
-    const body = await (await s.post('/api/work-items/PROJ-1/sync')).json();
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    const body = await s.item();
     expect(s.tools('jira_transition_issue').map((c) => c.args)).toEqual([{ issueKey: 'PROJ-1', transitionId: '31' }]);
     expect(s.tools('jira_get_transitions')[0].args).toEqual({ issueKey: 'PROJ-1' });
     expect(body.status).toBe('Code Review');
@@ -197,10 +197,11 @@ describe('jira sync', () => {
   it('refreshes PR states and chains moves, reading the status before each', async () => {
     const s = setup({ status: 'In Progress', prs: { 'acme/api#12': pr(12, 'MERGED') } });
     await withItem(s, [{ prId: 12, state: 'OPEN' }]);
-    const body = await (await s.post('/api/work-items/PROJ-1/sync')).json();
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    const body = await s.item();
     expect(body.links[0]).toMatchObject({ prId: 12, state: 'MERGED', title: 'feat: PROJ-1 part 12' });
     expect(s.tools('jira_transition_issue').map((c) => c.args.transitionId)).toEqual(['31', '41']);
-    const order = s.calls.map((c) => c.tool).filter((t) => t.startsWith('jira_'));
+    const order = s.calls.map((c) => c.tool).filter((t) => t.startsWith('jira_') && t !== 'jira_add_comment');
     expect(order).toEqual(['jira_get_issue', 'jira_get_transitions', 'jira_transition_issue', 'jira_get_issue', 'jira_get_transitions', 'jira_transition_issue', 'jira_get_issue']);
     expect(body.status).toBe('Ready for QA');
   });
@@ -208,16 +209,17 @@ describe('jira sync', () => {
   it('records an error when no transition leads to the target status', async () => {
     const s = setup({ status: 'In Progress', transitions: TRANSITIONS.filter((t) => t.toStatus !== 'Code Review'), prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
-    const body = await (await s.post('/api/work-items/PROJ-1/sync')).json();
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    const body = await s.item();
     expect(s.tools('jira_transition_issue')).toEqual([]);
     expect(body.note.text).toBe('Error: no transition to Code Review from In Progress');
   });
 
   it('comments each new factory link on the ticket exactly once', async () => {
-    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN'), 'acme/api#9': pr(9, 'MERGED', 'docs: PROJ-1 spec'), 'acme/api#5': pr(5, 'OPEN') } });
-    await withItem(s, [{ prId: 12, source: 'factory' }, { prId: 9, kind: 'spec', source: 'factory' }, { prId: 5 }]);
-    await s.post('/api/work-items/PROJ-1/sync');
-    await s.post('/api/work-items/PROJ-1/sync');
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN'), 'acme/api#9': pr(9, 'MERGED', 'docs: PROJ-1 spec') } });
+    await withItem(s, [{ prId: 12 }, { prId: 9, kind: 'spec' }]);
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect(s.tools('jira_add_comment').map((c) => c.args).sort((a, b) => a.body.localeCompare(b.body))).toEqual([
       { issueKey: 'PROJ-1', body: 'Implementation PR for acme/api: feat: PROJ-1 part 12 — https://forge/pr/12' },
       { issueKey: 'PROJ-1', body: 'Spec PR for acme/api: docs: PROJ-1 spec — https://forge/pr/9' },
@@ -228,19 +230,19 @@ describe('jira sync', () => {
 
   it('does not retry a comment that failed and records an error', async () => {
     const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
-    await withItem(s, [{ prId: 12, source: 'factory' }]);
+    await withItem(s, [{ prId: 12 }]);
     const orig = s.deps.workbench;
     s.deps.workbench = async (o: string) => {
       const wb = await orig(o);
       if (wb) wb.client.jiraAddComment = async () => Promise.reject(new Error('timed out'));
       return wb;
     };
-    await s.post('/api/work-items/PROJ-1/sync');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     const body = await s.item();
     expect(body.links[0].commented).toBe(true);
     expect(body.note.text).toMatch(/^Error: .*timed out/);
     s.deps.workbench = orig;
-    await s.post('/api/work-items/PROJ-1/sync');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect(s.tools('jira_add_comment')).toEqual([]);
   });
 
@@ -256,14 +258,14 @@ describe('jira sync', () => {
   it('a clean sync clears a skip note but keeps a PR capture failure until a link lands', async () => {
     const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') }, open: { 'acme/api': [] } });
     await withItem(s, [{ prId: 12 }]);
-    await s.post('/api/work-items/PROJ-1/sync');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note.text).toMatch(/^Skipped/);
     s.jira.status = 'Code Review';
-    await s.post('/api/work-items/PROJ-1/sync');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note).toBeNull();
 
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: boom');
-    await s.post('/api/work-items/PROJ-1/sync');
+    await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note.text).toMatch(/^Error: PR capture failed/);
   });
 });
@@ -272,7 +274,7 @@ describe('periodic sync', () => {
   it('skips items already at Ready for QA and owners without a workbench', async () => {
     const s = setup({ status: 'To Do' });
     await s.connectWorkbench();
-    for (const t of ['PROJ-1', 'PROJ-2']) await s.post(`/api/work-items/${t}`, { repos: ['acme/api'] });
+    for (const t of ['PROJ-1', 'PROJ-2']) await s.put(`/api/work-items/${t}`, { repos: ['acme/api'] });
     s.items.setStatus('local', 'PROJ-1', 'Ready for QA', true);
     s.items.create('u2', 'PROJ-3');
     await syncDue(s.deps);
@@ -283,16 +285,16 @@ describe('periodic sync', () => {
     for (const status of ['Done', 'ON HOLD']) {
       const s = setup({ status });
       await s.connectWorkbench();
-      await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+      await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
       await syncDue(s.deps);
       expect(s.tools('jira_get_issue')).toHaveLength(1);
       expect(s.items.get('local', 'PROJ-1')).toMatchObject({ status, done: true });
       await syncDue(s.deps);
       expect(s.tools('jira_get_issue')).toHaveLength(1);
-      await s.post('/api/work-items/PROJ-1/sync');
+      await syncWorkItem(s.deps, 'local', 'PROJ-1');
       expect(s.tools('jira_get_issue')).toHaveLength(2);
       s.jira.status = 'In Progress';
-      await s.post('/api/work-items/PROJ-1/sync');
+      await syncWorkItem(s.deps, 'local', 'PROJ-1');
       expect(s.items.get('local', 'PROJ-1')).toMatchObject({ done: false });
       await syncDue(s.deps);
       expect(s.tools('jira_get_issue')).toHaveLength(4);
@@ -302,42 +304,30 @@ describe('periodic sync', () => {
   it('never syncs one item twice at once', async () => {
     const s = setup({ status: 'To Do', delay: 30 });
     await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     await Promise.all([syncWorkItem(s.deps, 'local', 'PROJ-1'), syncWorkItem(s.deps, 'local', 'PROJ-1'), syncDue(s.deps)]);
     expect(s.max()).toBe(1);
     expect(s.tools('jira_get_issue').length).toBeGreaterThanOrEqual(1);
   });
 });
 
-describe('link source', () => {
-  const base = { repo: 'acme/api', prId: 12, branch: 'b', title: 't', state: 'OPEN', runId: null };
+describe('ticket links', () => {
+  const base = { repo: 'acme/api', prId: 12, branch: 'b', title: 't', state: 'OPEN', runId: 'r1' };
 
-  it('a factory capture upgrades a manual link and takes its run, then comments once', async () => {
-    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
-    await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
-    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'manual' });
-    s.items.link('local', 'PROJ-1', { ...base, kind: 'spec', source: 'factory', runId: 'r1' });
-    expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'spec', source: 'factory', runId: 'r1', commented: false })]);
-    await s.post('/api/work-items/PROJ-1/sync');
-    await s.post('/api/work-items/PROJ-1/sync');
-    expect(s.tools('jira_add_comment')).toHaveLength(1);
-  });
-
-  it('a manual re-link keeps the kind and source of a factory link', () => {
+  it('re-linking a PR updates it in place', () => {
     const s = setup();
     s.items.create('local', 'PROJ-1');
     s.items.addRepo('local', 'PROJ-1', 'acme/api');
-    s.items.link('local', 'PROJ-1', { ...base, kind: 'spec', source: 'factory', runId: 'r1' });
-    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'manual', title: 'new' });
-    expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'spec', source: 'factory', runId: 'r1', title: 'new' })]);
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'spec' });
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', title: 'new', runId: 'r2' });
+    expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'impl', runId: 'r2', title: 'new', commented: false })]);
   });
 
   it('a linked PR gives its ticket to fix queues; an unlinked one gives none', () => {
     const s = setup();
     s.items.create('local', 'PROJ-1');
     s.items.addRepo('local', 'PROJ-1', 'acme/api');
-    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'factory', runId: 'r1' });
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl' });
     expect(s.items.ticketForPr('local', 'ACME/api', 12)).toBe('PROJ-1');
     expect(s.items.ticketForPr('local', 'acme/api', 13)).toBeNull();
     expect(s.items.ticketForPr('other', 'acme/api', 12)).toBeNull();
@@ -345,75 +335,54 @@ describe('link source', () => {
 });
 
 describe('work-item API', () => {
-  it('creates a work item from my repos only and keeps owners apart', async () => {
+  it('sets the repo list from my repos only and keeps owners apart', async () => {
     const s = setup();
-    expect((await s.req('/api/work-items/nope')).status).toBe(400);
+    expect((await s.put('/api/work-items/nope', { repos: ['acme/api'] })).status).toBe(400);
     expect((await s.req('/api/work-items/PROJ-1')).status).toBe(404);
-    const bad = await s.post('/api/work-items/PROJ-1', { repos: ['acme/api', 'acme/legacy'] });
+    const bad = await s.put('/api/work-items/PROJ-1', { repos: ['acme/api', 'acme/legacy'] });
     expect(bad.status).toBe(403);
     expect(await bad.json()).toMatchObject({ needRepo: true });
-    expect((await s.post('/api/work-items/PROJ-1', { repos: [] })).status).toBe(400);
-    const ok = await s.post('/api/work-items/proj-1', { repos: ['ACME/api'] });
+    expect(await s.item()).toBeUndefined();
+    expect((await s.put('/api/work-items/PROJ-1', { repos: [] })).status).toBe(400);
+    expect((await s.put('/api/work-items/PROJ-1', { repos: 'acme/api' })).status).toBe(400);
+    const ok = await s.put('/api/work-items/proj-1', { repos: ['ACME/api'] });
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({ ticket: 'PROJ-1', repos: [{ name: 'acme/api' }], links: [], note: null, status: null });
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/web', 'acme/api'] });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/web', 'acme/api', 'acme/api'] });
     expect((await s.item()).repos.map((r: any) => r.name)).toEqual(['acme/api', 'acme/web']);
 
     s.items.create('u2', 'PROJ-9');
     s.items.addRepo('u2', 'PROJ-1', 'acme/other');
-    s.items.link('u2', 'PROJ-1', { repo: 'acme/other', kind: 'impl', prId: 3, branch: 'b', title: 't', state: 'OPEN', source: 'manual', runId: null });
-    expect((await s.req('/api/work-items/PROJ-9')).status).toBe(404);
+    s.items.link('u2', 'PROJ-1', { repo: 'acme/other', kind: 'impl', prId: 3, branch: 'b', title: 't', state: 'OPEN', runId: null });
+    expect(await s.item('PROJ-9')).toBeUndefined();
     expect(await s.item()).toMatchObject({ links: [], repos: [{ name: 'acme/api' }, { name: 'acme/web' }] });
     expect((await (await s.req('/api/work-items')).json()).items.map((i: any) => i.ticket)).toEqual(['PROJ-1']);
   });
 
-  it('removes a repo only while it has no links', async () => {
+  it('drops a repo from the list only while it has no links', async () => {
     const s = setup();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api', 'acme/web'] });
-    s.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 12, branch: 'b', title: 't', state: 'OPEN', source: 'factory', runId: 'r1' });
-    expect((await s.del('/api/work-items/PROJ-1/repos/acme/api')).status).toBe(409);
-    expect((await s.del('/api/work-items/PROJ-1/repos/acme/web')).status).toBe(204);
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api', 'acme/web'] });
+    s.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 12, branch: 'b', title: 't', state: 'OPEN', runId: 'r1' });
+    const refused = await s.put('/api/work-items/PROJ-1', { repos: ['acme/web'] });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatch(/acme\/api already has PRs linked to PROJ-1/);
+    expect((await s.item()).repos.map((r: any) => r.name)).toEqual(['acme/api', 'acme/web']);
+    expect((await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] })).status).toBe(200);
     expect((await s.item()).repos.map((r: any) => r.name)).toEqual(['acme/api']);
-  });
-
-  it('links an existing PR by hand only when it carries the key, and unlinks manual links only', async () => {
-    const s = setup({ prs: { 'acme/api#12': pr(12, 'OPEN'), 'acme/api#13': pr(13, 'OPEN', 'fix: PROJ-10 other', 'fix/PROJ-10'), 'acme/api#14': pr(14, 'OPEN', 'misc', 'feature/proj-1-misc') } });
-    await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
-    expect((await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/api', prId: 12, kind: 'other' })).status).toBe(400);
-    expect((await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/legacy', prId: 12, kind: 'impl' })).status).toBe(403);
-    const notInItem = await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/web', prId: 12, kind: 'impl' });
-    expect(notInItem.status).toBe(409);
-    expect(await notInItem.json()).toMatchObject({ needWorkItem: true });
-    expect((await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/api', prId: 13, kind: 'impl' })).status).toBe(400);
-    expect((await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/api', prId: 99, kind: 'impl' })).status).toBe(502);
-    const ok = await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/api', prId: 12, kind: 'impl' });
-    expect(ok.status).toBe(201);
-    expect((await ok.json()).links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', source: 'manual', state: 'OPEN', branch: 'feat/PROJ-1-12' })]);
-    expect((await s.post('/api/work-items/PROJ-1/links', { repo: 'acme/api', prId: 14, kind: 'spec' })).status).toBe(201);
-
-    s.items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 20, branch: 'b', title: 't', state: 'OPEN', source: 'factory', runId: 'r1' });
-    expect((await s.del('/api/work-items/PROJ-1/links/acme/api/20')).status).toBe(409);
-    expect((await s.del('/api/work-items/PROJ-1/links/acme/api/404')).status).toBe(404);
-    expect((await s.del('/api/work-items/PROJ-1/links/acme/api/12')).status).toBe(204);
-    expect((await s.item()).links.map((l: any) => l.prId).sort()).toEqual([14, 20]);
-  });
-
-  it('needs a workbench to sync now', async () => {
-    const s = setup();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
-    expect((await s.post('/api/work-items/PROJ-1/sync')).status).toBe(409);
-    expect((await s.post('/api/work-items/PROJ-2/sync')).status).toBe(404);
+    expect((await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] })).status).toBe(200);
+    expect((await s.item()).links).toHaveLength(1);
   });
 
   it('maps Jira projects to my repos', async () => {
     const s = setup();
-    expect(await (await s.req('/api/my-repos/acme/api/projects')).json()).toEqual({ projects: [] });
-    expect((await s.put('/api/my-repos/acme/api/projects', { projects: ['proj', 'OPS', 'PROJ'] })).status).toBe(200);
-    expect(await (await s.req('/api/my-repos/acme/api/projects')).json()).toEqual({ projects: ['OPS', 'PROJ'] });
-    expect((await s.put('/api/my-repos/acme/api/projects', { projects: ['not a key'] })).status).toBe(400);
-    expect((await s.req('/api/my-repos/acme/legacy/projects')).status).toBe(403);
+    const ok = await s.patch('/api/my-repos/acme/api', { projects: ['proj', 'OPS', 'PROJ'] });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ name: 'acme/api', projects: ['OPS', 'PROJ'] });
+    expect((await s.patch('/api/my-repos/acme/api', { projects: ['not a key'] })).status).toBe(400);
+    expect((await s.patch('/api/my-repos/acme/api', { projects: Array.from({ length: 21 }, (_, i) => `P${i}X`) })).status).toBe(400);
+    expect((await s.patch('/api/my-repos/acme/legacy', { projects: ['PROJ'] })).status).toBe(403);
     expect((await (await s.req('/api/my-repos')).json()).repos.find((r: any) => r.name === 'acme/api').projects).toEqual(['OPS', 'PROJ']);
+    expect((await (await s.patch('/api/my-repos/acme/api', { projects: [] })).json()).projects).toEqual([]);
   });
 });
 
@@ -436,7 +405,7 @@ describe('ticket runs', () => {
   it('carry the stage and its guidance, and move the ticket to In Progress', async () => {
     const s = setup({ gitUrl: forge() });
     await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     const res = await s.post('/api/runs', { repo: 'acme/api', prompt: 'Work on PROJ-1', ticket: 'PROJ-1', stage: 'design', kind: 'task' });
     expect(res.status).toBe(201);
     const run = await res.json();
@@ -455,7 +424,7 @@ describe('PR capture', () => {
   const launch = async (o: Opts, branch: string | null) => {
     const s = setup({ gitUrl: forge(), ...o });
     await s.connectWorkbench();
-    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'build' })).json();
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: earlier');
     s.hooks.onListPrs = () => existsSync(join(run.cwd, 'README.md'));
@@ -470,7 +439,7 @@ describe('PR capture', () => {
     const { s, run } = await launch({ open, prs: { 'acme/api#12': pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1') } }, 'feat/PROJ-1');
     expect(s.tools('bitbucket_list_prs').map((c) => [c.args.state, c.cloneExists])).toEqual([['OPEN', true]]);
     const links = s.items.links('local', 'PROJ-1');
-    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', source: 'factory', branch: 'feat/PROJ-1', runId: run.id })]);
+    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', branch: 'feat/PROJ-1', runId: run.id })]);
     expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();
     await settle(() => s.tools('jira_add_comment').length === 1);
   });
@@ -486,7 +455,7 @@ describe('PR capture', () => {
 });
 
 describe('factory.db upgrade', () => {
-  it('adds the new columns to existing tables and drops the old events and projects tables', () => {
+  it('adds the new columns to existing tables, drops the old events, projects tables and link source column', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'lf-db-')), 'factory.db');
     const old = new DatabaseSync(path);
     old.exec(`
@@ -494,6 +463,12 @@ describe('factory.db upgrade', () => {
       create table work_items (owner text not null, ticket text not null, created_at text not null, status text, done integer not null default 0, primary key (owner, ticket));
       create table work_item_events (owner text, ticket text, at text, type text, detail text);
       create table repo_projects (owner text, repo_key text, project text);
+      create table ticket_links (
+        owner text not null, ticket text not null, repo_key text not null, kind text not null,
+        pr_id integer not null, branch text not null, title text not null, state text not null,
+        source text not null, run_id text, commented integer not null default 0, updated_at text not null,
+        primary key (owner, ticket, repo_key, pr_id));
+      insert into ticket_links values ('local', 'PROJ-1', 'acme/api', 'impl', 12, 'b', 't', 'OPEN', 'factory', 'r1', 1, '2026-10-16');
       insert into user_repos values ('local', 'acme/api', 'acme/api', 'main', '2026-10-16');
       insert into work_items (owner, ticket, created_at) values ('local', 'PROJ-1', '2026-10-16');`);
     old.close();
@@ -501,8 +476,12 @@ describe('factory.db upgrade', () => {
     const repos = new MyRepos(db);
     expect(repos.list('local')).toEqual([expect.objectContaining({ name: 'acme/api', projects: [] })]);
     repos.setProjects('local', 'acme/api', ['PROJ', 'OPS', 'PROJ']);
-    expect(repos.projects('local', 'ACME/api')).toEqual(['OPS', 'PROJ']);
+    expect(repos.get('local', 'ACME/api')!.projects).toEqual(['OPS', 'PROJ']);
     const items = new WorkItems(db);
+    items.addRepo('local', 'PROJ-1', 'acme/api');
+    expect((db.prepare(`pragma table_info(ticket_links)`).all() as { name: string }[]).map((c) => c.name)).not.toContain('source');
+    expect(items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ prId: 12, runId: 'r1', commented: true })]);
+    items.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'spec', prId: 13, branch: 'b', title: 't', state: 'OPEN', runId: null });
     items.setNote('local', 'PROJ-1', 'Skipped x');
     expect(items.get('local', 'PROJ-1')!.note).toEqual({ text: 'Skipped x', at: expect.any(String) });
     const tables = (db.prepare(`select name from sqlite_master where type = 'table'`).all() as { name: string }[]).map((t) => t.name);

@@ -60,7 +60,7 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
       try {
         const pr = await client.bitbucketPr(token, repo.workspace, repo.slug, l.prId);
         workItems.update(owner, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
-        if (l.source !== 'factory' || l.commented) continue;
+        if (l.commented) continue;
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
         workItems.update(owner, ticket, l.repo, l.prId, { commented: true });
         await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
@@ -123,7 +123,7 @@ export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: strin
     const ref = parseRepo(repo)!;
     const pr = (await wb.client.bitbucketPrs(wb.token, ref.workspace, ref.slug, 'OPEN')).find((p) => p.source === branch);
     if (!pr) return;
-    deps.workItems.link(owner, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, source: 'factory', runId: run.id });
+    deps.workItems.link(owner, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, runId: run.id });
     if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) deps.workItems.setNote(owner, ticket, null);
   } catch (err) {
     deps.workItems.setNote(owner, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);

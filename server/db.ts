@@ -41,7 +41,7 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create table if not exists ticket_links (
       owner text not null, ticket text not null, repo_key text not null, kind text not null,
       pr_id integer not null, branch text not null, title text not null, state text not null,
-      source text not null, run_id text, commented integer not null default 0, updated_at text not null,
+      run_id text, commented integer not null default 0, updated_at text not null,
       primary key (owner, ticket, repo_key, pr_id));
     drop table if exists work_item_events;
     drop table if exists repo_projects;
@@ -50,10 +50,16 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
   addColumn(db, 'user_repos', 'jira_projects', `text not null default ''`);
   addColumn(db, 'work_items', 'note', 'text');
   addColumn(db, 'work_items', 'note_at', 'text');
+  dropColumn(db, 'ticket_links', 'source');
   return db;
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, type: string) {
   const cols = db.prepare(`pragma table_info(${table})`).all() as { name: string }[];
   if (!cols.some((c) => c.name === column)) db.exec(`alter table ${table} add column ${column} ${type}`);
+}
+
+function dropColumn(db: DatabaseSync, table: string, column: string) {
+  const cols = db.prepare(`pragma table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) db.exec(`alter table ${table} drop column ${column}`);
 }

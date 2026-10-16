@@ -24,18 +24,13 @@ export function myReposRoutes(deps: Deps) {
     return c.json(await domain(addRepo(deps, uid, wb, repo)), 201);
   });
 
-  routes.get('/api/my-repos/:ws/:slug/projects', (c) => {
+  routes.patch('/api/my-repos/:ws/:slug', async (c) => {
+    const uid = c.get('uid');
     const repo = `${c.req.param('ws')}/${c.req.param('slug')}`;
-    requireMyRepo(deps, c.get('uid'), repo);
-    return c.json({ projects: myRepos.projects(c.get('uid'), repo) });
-  });
-
-  routes.put('/api/my-repos/:ws/:slug/projects', async (c) => {
-    const repo = `${c.req.param('ws')}/${c.req.param('slug')}`;
-    requireMyRepo(deps, c.get('uid'), repo);
+    requireMyRepo(deps, uid, repo);
     const { projects } = parse(projectsSchema, await readBody(c));
-    myRepos.setProjects(c.get('uid'), repo, projects);
-    return c.json({ projects: myRepos.projects(c.get('uid'), repo) });
+    myRepos.setProjects(uid, repo, projects);
+    return c.json(myRepos.get(uid, repo));
   });
 
   routes.delete('/api/my-repos/:ws/:slug', (c) => {

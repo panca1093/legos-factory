@@ -41,7 +41,6 @@ create table if not exists ticket_links (
   kind text not null,             -- 'spec' | 'impl'
   pr_id integer not null, branch text not null, title text not null,
   state text not null,            -- OPEN | MERGED | DECLINED | SUPERSEDED
-  source text not null,           -- 'factory' | 'manual'
   run_id text, commented integer not null default 0, updated_at text not null,
   primary key (owner, ticket, repo_key, pr_id));
 -- plus user_repos.jira_projects: comma-separated Jira project keys mapped to that repo
@@ -57,25 +56,22 @@ server/work-items.ts: a WorkItems class in the style of ActivityLog/MyRepos. Rul
 ## Jira sync (server/jira-sync.ts)
 syncWorkItem(deps, owner, ticket):
 1. Refresh each linked PR's state with bitbucket_get_pr.
-2. For each new factory link with commented = 0, post one jira_add_comment line `<Spec|Implementation> PR for <repo>: <title> — <url>`, then set commented = 1 (no remote-link tool in workbench, so the comment is how the link reaches Jira).
+2. Every link is factory-made. For each link with commented = 0, post one jira_add_comment line `<Spec|Implementation> PR for <repo>: <title> — <url>`, then set commented = 1 (no remote-link tool in workbench, so the comment is how the link reaches Jira).
 3. Read the current status with jira_get_issue; apply the status rules with compare-and-swap.
 4. Keep the latest skip or error in work_items.note (an error outranks a skip). A clean sync clears it, except a PR capture failure, which a new factory link clears.
-When it runs: right after a run with a ticket starts (In Progress move); right after PR capture at run end; on a "Sync now" button; every LEGOS_SYNC_MS (default 120 s) for work items not yet at readyForQa and only for owners with a connected workbench. At most one sync at a time per work item. Errors are noted on the work item and never thrown into the run.
+When it runs: right after a run with a ticket starts (In Progress move); right after PR capture at run end; every LEGOS_SYNC_MS (default 120 s) for work items not yet at readyForQa and only for owners with a connected workbench. At most one sync at a time per work item. Errors are noted on the work item and never thrown into the run.
 
 ## API
-- GET /api/work-items/:ticket → { ticket, repos, links, note, status } (status = last Jira status read).
-- POST /api/work-items/:ticket { repos: string[] } → create the work item or add repos; every repo must be in My repos (403 needRepo otherwise).
-- DELETE /api/work-items/:ticket/repos/:ws/:slug → remove a repo; 409 if that repo already has links.
-- POST /api/work-items/:ticket/links { repo, prId, kind } → link an existing PR by hand (source 'manual'); checks the PR exists and its title or branch contains the key.
-- DELETE /api/work-items/:ticket/links/:ws/:slug/:prId → unlink, manual links only.
-- POST /api/work-items/:ticket/sync → sync now, returns the work item.
-- GET/PUT /api/my-repos/:ws/:slug/projects → read/set Jira project keys mapped to a repo.
-- GET /api/prs?ticket= unchanged as a fallback search; the UI marks these results "found by search" with a Link action.
+- GET /api/work-items → { items: WorkItem[] }, each { ticket, repos, links, note, status } (status = last Jira status read), for the caller only. The only read: the ticket modal and the Jira cards both use it and pick their item by ticket.
+- PUT /api/work-items/:ticket { repos: string[] } → set the work item's repo list (creates the item if missing) and return it. Every repo must be in My repos (403 needRepo otherwise). Dropping a repo that already has links → 409. Keeping or adding is idempotent. An empty list on a missing item → 400.
+- PATCH /api/my-repos/:ws/:slug { projects: string[] } → set the Jira project keys mapped to a repo (uppercased, deduped, sorted, at most 20; 400 on a bad key, 403 if the repo is not in My repos) and return the MyRepo. GET /api/my-repos already includes `projects`.
+- GET /api/prs?ticket= is unchanged: a search by key, used only to display PR chips ("found by search"). PRs are never linked by hand; every link comes from a factory run.
 
 ## Web
 - Jira tab "Work on this" opens a work-item dialog: my repos as checkboxes (repos mapped to the ticket's project pre-checked), a stage picker (Design / Build). On start: create/update the work item, then launch one run per selected repo (the existing run queue limits concurrency).
-- Ticket modal gains a Work item panel: one row per repo with spec and impl PR chips (state-coloured, linking to the factory PR page); "Add repo", "Link PR", "Sync now"; last Jira status and the latest note (e.g. "Skipped In Progress → Code Review: status was ON HOLD").
-- Jira cards take PR chips from ticket_links when a work item exists; otherwise today's chips. Jira's Development field stays a secondary hint.
+- Ticket modal gains a Work item panel: one row per repo with spec and impl PR chips (state-coloured, linking to the factory PR page); "Add repo" and "remove" (a repo without PRs); last Jira status and the latest note (e.g. "Skipped In Progress → Code Review: status was ON HOLD"). No Link PR or Sync now: sync runs by itself.
+- The dialog and the modal both write with the single PUT, sending the full desired repo list, then refresh GET /api/work-items.
+- Jira cards take PR chips from GET /api/work-items when a work item exists; otherwise today's chips. Jira's Development field stays a secondary hint.
 - Settings → Repositories: each repo gets an editable list of Jira project keys.
 
 ## Tests (fail before, pass after)
@@ -84,7 +80,8 @@ When it runs: right after a run with a ticket starts (In Progress move); right a
 - Comments: each new factory link commented exactly once.
 - PR capture: run ending on a feature branch with an OPEN PR stores a link of the run's stage kind; base branch or no PR stores nothing; capture happens before the clone is deleted.
 - Launch: ticket run whose repo isn't in the work item → 409 needWorkItem; ticket run without stage → 400.
-- Work-item API: owner isolation, My repos check, removal refused when links exist, manual-link validation.
+- Work-item API: PUT sets the list (owner isolation, My repos check, 400 on an empty list for a new item, 409 when dropping a repo that has links, idempotent); PATCH my-repos projects (normalisation, 400, 403).
+- DB upgrade: an old ticket_links with a `source` column loses it and keeps its rows.
 - Periodic sync: skips items at/past readyForQa and owners without workbench; never runs twice at once for one item.
 - All Jira/Bitbucket calls via a fake workbench; no network.
 - npm test, npm run typecheck, npm run build all green.

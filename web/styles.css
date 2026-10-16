@@ -777,8 +777,6 @@ a.list-item:hover, .jira-row:hover, .row.link:hover { background: var(--hover); 
 .name-box { display: grid; gap: 10px; max-width: 520px; }
 
 /* work items */
-.link-chip { display: inline-flex; align-items: center; gap: 2px; }
-.link-chip .text-action { padding: 0 4px; }
 .check-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .project-keys { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }

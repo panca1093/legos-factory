@@ -24,11 +24,6 @@ export class MyRepos {
     return this.list(owner).find((r) => keyOf(r.name) === keyOf(repo)) ?? null;
   }
 
-  projects(owner: string, repo: string): string[] {
-    const row = this.db.prepare(`select jira_projects as projects from user_repos where owner = ? and repo_key = ?`).get(owner, keyOf(repo)) as { projects: string } | undefined;
-    return splitKeys(row?.projects ?? '');
-  }
-
   setProjects(owner: string, repo: string, projects: string[]) {
     this.db.prepare(`update user_repos set jira_projects = ? where owner = ? and repo_key = ?`).run([...new Set(projects)].sort().join(','), owner, keyOf(repo));
   }

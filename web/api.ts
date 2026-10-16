@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, LinkKind, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -43,7 +43,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
-export type { LinkKind, Stage, WorkItem };
+export type { Stage, WorkItem };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -103,14 +103,9 @@ export const api = {
   myRepos: () => call<{ repos: MyRepo[] }>('/api/my-repos'),
   addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
-  repoProjects: (repo: string, projects: string[]) => call<{ projects: string[] }>(`/api/my-repos/${repo}/projects`, { method: 'PUT', body: JSON.stringify({ projects }) }),
+  repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
-  workItem: (ticket: string) => call<WorkItem>(`/api/work-items/${ticket}`),
-  addWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'POST', body: JSON.stringify({ repos }) }),
-  removeWorkItemRepo: (ticket: string, repo: string) => call<unknown>(`/api/work-items/${ticket}/repos/${repo}`, { method: 'DELETE' }),
-  linkPr: (ticket: string, repo: string, prId: number, kind: LinkKind) => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
-  unlinkPr: (ticket: string, repo: string, prId: number) => call<unknown>(`/api/work-items/${ticket}/links/${repo}/${prId}`, { method: 'DELETE' }),
-  syncWorkItem: (ticket: string) => call<WorkItem>(`/api/work-items/${ticket}/sync`, { method: 'POST' }),
+  setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),

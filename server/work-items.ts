@@ -6,7 +6,7 @@ const now = () => new Date().toISOString();
 
 type LinkRow = Omit<TicketLink, 'commented' | 'updatedAt'>;
 
-const LINK_COLS = `name as repo, l.kind, l.pr_id as prId, l.branch, l.title, l.state, l.source, l.run_id as runId, l.commented, l.updated_at as updatedAt`;
+const LINK_COLS = `name as repo, l.kind, l.pr_id as prId, l.branch, l.title, l.state, l.run_id as runId, l.commented, l.updated_at as updatedAt`;
 
 // Per owner: a ticket, the repos it touches, the PRs linked to it and what the Jira sync did.
 export class WorkItems {
@@ -71,14 +71,10 @@ export class WorkItems {
   link(owner: string, ticket: string, l: LinkRow) {
     this.db
       .prepare(
-        `insert into ticket_links (owner, ticket, repo_key, kind, pr_id, branch, title, state, source, run_id, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         on conflict do update set
-           kind = case when ticket_links.source = 'factory' and excluded.source <> 'factory' then ticket_links.kind else excluded.kind end,
-           source = case when excluded.source = 'factory' then 'factory' else ticket_links.source end,
-           run_id = case when excluded.source = 'factory' then excluded.run_id else ticket_links.run_id end,
-           branch = excluded.branch, title = excluded.title, state = excluded.state, updated_at = excluded.updated_at`,
+        `insert into ticket_links (owner, ticket, repo_key, kind, pr_id, branch, title, state, run_id, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict do update set kind = excluded.kind, run_id = excluded.run_id, branch = excluded.branch, title = excluded.title, state = excluded.state, updated_at = excluded.updated_at`,
       )
-      .run(owner, ticket, keyOf(l.repo), l.kind, l.prId, l.branch, l.title, l.state, l.source, l.runId, now());
+      .run(owner, ticket, keyOf(l.repo), l.kind, l.prId, l.branch, l.title, l.state, l.runId, now());
   }
 
   update(owner: string, ticket: string, repo: string, prId: number, set: { state?: string; title?: string; commented?: boolean }) {
@@ -93,9 +89,5 @@ export class WorkItems {
   ticketForPr(owner: string, repo: string, prId: number): string | null {
     const row = this.db.prepare(`select ticket from ticket_links where owner = ? and repo_key = ? and pr_id = ? limit 1`).get(owner, keyOf(repo), prId) as { ticket: string } | undefined;
     return row?.ticket ?? null;
-  }
-
-  unlink(owner: string, ticket: string, repo: string, prId: number) {
-    this.db.prepare(`delete from ticket_links where owner = ? and ticket = ? and repo_key = ? and pr_id = ?`).run(owner, ticket, keyOf(repo), prId);
   }
 }

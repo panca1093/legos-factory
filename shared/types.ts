@@ -195,8 +195,6 @@ export type TicketLink = {
   title: string;
   // OPEN | MERGED | DECLINED | SUPERSEDED, as Bitbucket says
   state: string;
-  // factory = captured from a run; manual = linked by hand
-  source: 'factory' | 'manual';
   runId: string | null;
   // already announced on the Jira ticket
   commented: boolean;

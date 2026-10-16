@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RunKind } from '../../shared/types.ts';
-import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type LinkKind, type PrRow, type Stage, type WorkItem } from '../api.ts';
+import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type PrRow, type Stage, type WorkItem } from '../api.ts';
 import { Empty, Markdown, TicketChip, go } from '../components.tsx';
 import { Icon } from '../icons.tsx';
 import { ALIVE, PR_TONE, type Live, type LaunchReq } from '../chrome.tsx';
@@ -44,20 +44,13 @@ function DevChips({ dev, withPr }: { dev: JiraDev | null; withPr: boolean }) {
 }
 
 // The ticket's PRs as the factory recorded them, per repo.
-function LinkChips({ item, onUnlink }: { item: WorkItem; onUnlink?: (repo: string, prId: number) => void }) {
+function LinkChips({ item }: { item: WorkItem }) {
   return (
     <>
       {item.links.map((l) => (
-        <span key={`${l.repo}#${l.prId}`} className="link-chip">
-          <a className={`dev-chip tone-${PR_TONE[l.state] ?? 'off'}`} href={`#/prs/${l.repo}/${l.prId}`} title={`${l.repo} #${l.prId}: ${l.title}`}>
-            {l.kind} {l.repo.split('/')[1]} #{l.prId} {l.state.toLowerCase()}
-          </a>
-          {onUnlink && l.source === 'manual' && (
-            <button type="button" className="text-action" aria-label={`Unlink ${l.repo} #${l.prId}`} onClick={() => onUnlink(l.repo, l.prId)}>
-              ×
-            </button>
-          )}
-        </span>
+        <a key={`${l.repo}#${l.prId}`} className={`dev-chip tone-${PR_TONE[l.state] ?? 'off'}`} href={`#/prs/${l.repo}/${l.prId}`} title={`${l.repo} #${l.prId}: ${l.title}`}>
+          {l.kind} {l.repo.split('/')[1]} #{l.prId} {l.state.toLowerCase()}
+        </a>
       ))}
     </>
   );
@@ -147,7 +140,7 @@ function TicketModal({ row, item, onClose, onStart, onPr, onItem }: { row: JiraR
             ))}
           </div>
         )}
-        <WorkItemPanel ticket={row.key} onChange={onItem} />
+        <WorkItemPanel ticket={row.key} item={item} onChange={onItem} />
         <div className="ticket-desc">
           {error ? <p className="error">{error}</p> : !data ? <Empty>Loading ticket…</Empty> : data.description ? (
             <div className="ticket-desc-text">
@@ -201,7 +194,7 @@ function WorkDialog({ row, item, onClose }: { row: JiraRow; item: WorkItem | nul
     setBusy(true);
     setErr(null);
     try {
-      await api.addWorkItemRepos(row.key, repos);
+      await api.setWorkItemRepos(row.key, [...new Set([...(item?.repos.map((r) => r.name) ?? []), ...repos])]);
       const runs = [];
       for (const repo of repos) runs.push(await api.start({ kind: 'task', repo, prompt, permissionMode: 'default', ticket: row.key, stage }));
       onClose();
@@ -270,41 +263,30 @@ function WorkDialog({ row, item, onClose }: { row: JiraRow; item: WorkItem | nul
 }
 
 // The ticket's work item: repos, their spec and implementation PRs, and what the Jira sync did.
-function WorkItemPanel({ ticket, onChange }: { ticket: string; onChange: () => void }) {
+function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkItem | null; onChange: () => void }) {
   const now = useNow(60000);
   const { data: mine } = useFetch(api.myRepos, []);
-  const [item, setItem] = useState<WorkItem | null | undefined>(undefined);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [addRepo, setAddRepo] = useState('');
-  const [link, setLink] = useState<{ repo: string; prId: string; kind: LinkKind } | null>(null);
-  const load = () => api.workItem(ticket).then(setItem, (e) => (e.status === 404 ? setItem(null) : setErr(e.message)));
-  useEffect(() => void load(), [ticket]);
-  const act = async (f: () => Promise<unknown>) => {
+  const setRepos = async (repos: string[]) => {
     setErr(null);
     setBusy(true);
     try {
-      const r = await f();
-      if (r && typeof r === 'object' && 'links' in r) setItem(r as WorkItem);
-      else await load();
+      await api.setWorkItemRepos(ticket, repos);
       onChange();
+      setAddRepo('');
     } catch (e: any) {
       setErr(e.message);
     }
     setBusy(false);
   };
-  if (item === undefined) return err ? <p className="error">{err}</p> : null;
-  const inItem = new Set(item?.repos.map((r) => r.name.toLowerCase()));
-  const addable = (mine?.repos ?? []).filter((r) => !inItem.has(r.name.toLowerCase()));
+  const names = item?.repos.map((r) => r.name) ?? [];
+  const addable = (mine?.repos ?? []).filter((r) => !names.some((n) => n.toLowerCase() === r.name.toLowerCase()));
   return (
     <section className="work-item">
       <div className="sectionbar">
         <h3>Work item</h3>
-        {item && (
-          <button className="text-action" disabled={busy} onClick={() => act(() => api.syncWorkItem(ticket))}>
-            {busy ? 'Syncing…' : 'Sync now'}
-          </button>
-        )}
       </div>
       {!item ? (
         <p className="muted">No work item yet — “Work on this” starts one, or add a repo.</p>
@@ -316,11 +298,11 @@ function WorkItemPanel({ ticket, onChange }: { ticket: string; onChange: () => v
               <div key={r.name} className="work-item-repo">
                 <span className="mono">{r.name}</span>
                 {links.length ? (
-                  <LinkChips item={{ ...item, links }} onUnlink={(repo, id) => act(() => api.unlinkPr(ticket, repo, id))} />
+                  <LinkChips item={{ ...item, links }} />
                 ) : (
                   <>
                     <span className="muted">no PR yet</span>
-                    <button type="button" className="text-action" disabled={busy} onClick={() => act(() => api.removeWorkItemRepo(ticket, r.name))}>
+                    <button type="button" className="text-action" disabled={busy} onClick={() => setRepos(names.filter((n) => n !== r.name))}>
                       remove
                     </button>
                   </>
@@ -338,8 +320,8 @@ function WorkItemPanel({ ticket, onChange }: { ticket: string; onChange: () => v
           )}
         </>
       )}
-      <div className="work-item-actions">
-        {addable.length > 0 && (
+      {addable.length > 0 && (
+        <div className="work-item-actions">
           <span>
             <select className="input sm mono" value={addRepo} onChange={(e) => setAddRepo(e.target.value)}>
               <option value="">Add repo…</option>
@@ -349,37 +331,12 @@ function WorkItemPanel({ ticket, onChange }: { ticket: string; onChange: () => v
                 </option>
               ))}
             </select>
-            <button className="btn sm" disabled={!addRepo || busy} onClick={() => act(() => api.addWorkItemRepos(ticket, [addRepo])).then(() => setAddRepo(''))}>
+            <button className="btn sm" disabled={!addRepo || busy} onClick={() => setRepos([...names, addRepo])}>
               Add repo
             </button>
           </span>
-        )}
-        {item && item.repos.length > 0 && !link && (
-          <button className="btn sm ghost" onClick={() => setLink({ repo: item.repos[0].name, prId: '', kind: 'impl' })}>
-            Link PR
-          </button>
-        )}
-        {item && link && (
-          <span>
-            <select className="input sm mono" value={link.repo} onChange={(e) => setLink({ ...link, repo: e.target.value })}>
-              {item.repos.map((r) => (
-                <option key={r.name}>{r.name}</option>
-              ))}
-            </select>
-            <input className="input sm mono" placeholder="PR #" inputMode="numeric" value={link.prId} onChange={(e) => setLink({ ...link, prId: e.target.value.replace(/\D/g, '') })} />
-            <select className="input sm" value={link.kind} onChange={(e) => setLink({ ...link, kind: e.target.value as LinkKind })}>
-              <option value="spec">spec</option>
-              <option value="impl">impl</option>
-            </select>
-            <button className="btn sm" disabled={!link.prId || busy} onClick={() => act(() => api.linkPr(ticket, link.repo, Number(link.prId), link.kind)).then(() => setLink(null))}>
-              Link
-            </button>
-            <button className="btn sm ghost" onClick={() => setLink(null)}>
-              Cancel
-            </button>
-          </span>
-        )}
-      </div>
+        </div>
+      )}
       {err && <p className="error">{err}</p>}
     </section>
   );
@@ -395,16 +352,6 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
   const [working, setWorking] = useState<JiraRow | null>(null);
   const workItems = useFetch(api.workItems, []);
   const itemOf = (key: string) => workItems.data?.items.find((w) => w.ticket === key) ?? null;
-  const linkFound = async (key: string, p: PrRow, kind: LinkKind) => {
-    try {
-      await api.addWorkItemRepos(key, [p.repo]);
-      await api.linkPr(key, p.repo, p.id, kind);
-      setPrFind(null);
-      workItems.reload();
-    } catch (e: any) {
-      setPrFind((f) => f && { ...f, error: e.message });
-    }
-  };
   // a ticket's PR lookup: in progress, or what came back when it wasn't exactly one PR
   const [prFind, setPrFind] = useState<{ key: string; prs?: PrRow[]; searched?: string[]; error?: string } | null>(null);
   const openPr = async (key: string) => {
@@ -506,19 +453,11 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
                         <>
                           <span className="muted">Found by search (key in branch or title):</span>
                           {prFind.prs!.map((p) => (
-                            <span key={`${p.repo}#${p.id}`} className="pr-find-row">
-                              <a className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
-                                <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
-                                <span className="mono">{p.repo} #{p.id}</span>
-                                <span className="ellipsis">{p.title}</span>
-                              </a>
-                              <button type="button" className="text-action" onClick={() => linkFound(i.key, p, 'spec')}>
-                                link as spec
-                              </button>
-                              <button type="button" className="text-action" onClick={() => linkFound(i.key, p, 'impl')}>
-                                link as impl
-                              </button>
-                            </span>
+                            <a key={`${p.repo}#${p.id}`} className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
+                              <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                              <span className="mono">{p.repo} #{p.id}</span>
+                              <span className="ellipsis">{p.title}</span>
+                            </a>
                           ))}
                         </>
                       )}
