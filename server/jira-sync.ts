@@ -63,8 +63,8 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
         workItems.update(owner, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
         if (l.source !== 'factory' || l.commented) continue;
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
-        await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
         workItems.update(owner, ticket, l.repo, l.prId, { commented: true });
+        await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
         note('comment', `${kind} PR ${l.repo} #${l.prId}`);
       } catch (err) {
         note('error', `${l.repo} #${l.prId}: ${errMsg(err)}`);
@@ -92,13 +92,14 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
       status = await client.jiraStatus(token, ticket);
     }
     if (skipped) note('skipped', `${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
-    workItems.setStatus(owner, ticket, status, item.done || same(status, flow.readyForQa));
+    const inFlow = [flow.todo, flow.inProgress, flow.codeReview].some((o) => same(status, o));
+    workItems.setStatus(owner, ticket, status, status === null ? item.done : !inFlow);
   } catch (err) {
     note('error', errMsg(err));
   }
 }
 
-// The periodic pass: work items not yet at Ready for QA, of owners with a connected workbench.
+// The periodic pass: work items still in the flow before Ready for QA, of owners with a connected workbench.
 export async function syncDue(deps: Deps): Promise<void> {
   const due = deps.workItems.pending().filter((i) => !deps.syncs.has(syncKey(i.owner, i.ticket)));
   const connected = new Map<string, boolean>();

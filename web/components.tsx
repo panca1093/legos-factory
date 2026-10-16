@@ -1,7 +1,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, Stage, TimelineEvent, Usage } from '../shared/types.ts';
+import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
 import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme } from './api.ts';
 import { Icon } from './icons.tsx';
 
@@ -619,7 +619,7 @@ export function LaunchDialog({
   kind: RunKind;
   projects: string[];
   resume?: { sessionId: string; cwd: string; recentlyActive: boolean };
-  defaults?: { cwd?: string; prompt?: string; ticket?: string };
+  defaults?: { cwd?: string; prompt?: string };
   onClose: () => void;
 }) {
   const [cwd, setCwd] = useState(resume?.cwd ?? defaults?.cwd ?? storage('lf:cwd') ?? '');
@@ -633,9 +633,6 @@ export function LaunchDialog({
   const [prompt, setPrompt] = useState(defaults?.prompt ?? '');
   const [mode, setMode] = useState<PermissionMode>('default');
   const [model, setModel] = useState(storage('lf:model') ?? 'default');
-  // given: the run works on the ticket and needs a stage; otherwise the server finds the ticket in the prompt or branch
-  const ticket = defaults?.ticket;
-  const [stage, setStage] = useState<Stage>('build');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -647,8 +644,7 @@ export function LaunchDialog({
     setErr(null);
     try {
       const where = source === 'repo' ? { repo, branch: branch.trim() || undefined } : { cwd };
-      if (ticket && source === 'repo') await api.addWorkItemRepos(ticket, [repo]);
-      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model, ticket, stage: ticket ? stage : undefined });
+      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model });
       if (source === 'folder') storage('lf:cwd', cwd);
       storage('lf:source', source);
       storage('lf:model', model);
@@ -736,18 +732,6 @@ export function LaunchDialog({
             placeholder={kind === 'task' ? 'Describe the job and what “done” looks like' : 'What do you want to discuss?'}
           />
         </label>
-        {ticket && (
-          <div className="field">
-            <span>Stage for {ticket}</span>
-            <div className="segmented" role="tablist" aria-label="Stage">
-              {(['design', 'build'] as const).map((s) => (
-                <button key={s} role="tab" aria-selected={stage === s} className={stage === s ? 'active' : ''} onClick={() => setStage(s)}>
-                  {s === 'design' ? 'Design' : 'Build'}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
         <div className="field-row">
           <label className="field">
             <span>Model</span>

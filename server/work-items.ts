@@ -66,7 +66,11 @@ export class WorkItems {
     this.db
       .prepare(
         `insert into ticket_links (owner, ticket, repo_key, kind, pr_id, branch, title, state, source, run_id, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         on conflict do update set kind = excluded.kind, branch = excluded.branch, title = excluded.title, state = excluded.state, updated_at = excluded.updated_at`,
+         on conflict do update set
+           kind = case when ticket_links.source = 'factory' and excluded.source <> 'factory' then ticket_links.kind else excluded.kind end,
+           source = case when excluded.source = 'factory' then 'factory' else ticket_links.source end,
+           run_id = case when excluded.source = 'factory' then excluded.run_id else ticket_links.run_id end,
+           branch = excluded.branch, title = excluded.title, state = excluded.state, updated_at = excluded.updated_at`,
       )
       .run(owner, ticket, keyOf(l.repo), l.kind, l.prId, l.branch, l.title, l.state, l.source, l.runId, now());
   }

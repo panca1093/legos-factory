@@ -229,6 +229,24 @@ describe('jira sync', () => {
     expect(body.events.filter((e: any) => e.type === 'comment')).toHaveLength(2);
   });
 
+  it('does not retry a comment that failed and records an error', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
+    await withItem(s, [{ prId: 12, source: 'factory' }]);
+    const orig = s.deps.workbench;
+    s.deps.workbench = async (o: string) => {
+      const wb = await orig(o);
+      if (wb) wb.client.jiraAddComment = async () => Promise.reject(new Error('timed out'));
+      return wb;
+    };
+    await s.post('/api/work-items/PROJ-1/sync');
+    const body = await s.item();
+    expect(body.links[0].commented).toBe(true);
+    expect(body.events.some((e: any) => e.type === 'error' && /timed out/.test(e.detail))).toBe(true);
+    s.deps.workbench = orig;
+    await s.post('/api/work-items/PROJ-1/sync');
+    expect(s.tools('jira_add_comment')).toEqual([]);
+  });
+
   it('records failures as events instead of throwing', async () => {
     const s = setup({ status: 'In Progress' });
     await withItem(s, [{ prId: 77 }]);
@@ -250,6 +268,26 @@ describe('periodic sync', () => {
     expect(s.tools('jira_get_issue').map((c) => c.args.issueKey)).toEqual(['PROJ-2']);
   });
 
+  it('stops polling items outside the flow but still syncs them on demand, and resumes when back in the flow', async () => {
+    for (const status of ['Done', 'ON HOLD']) {
+      const s = setup({ status });
+      await s.connectWorkbench();
+      await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+      await syncDue(s.deps);
+      expect(s.tools('jira_get_issue')).toHaveLength(1);
+      expect(s.items.get('local', 'PROJ-1')).toMatchObject({ status, done: true });
+      await syncDue(s.deps);
+      expect(s.tools('jira_get_issue')).toHaveLength(1);
+      await s.post('/api/work-items/PROJ-1/sync');
+      expect(s.tools('jira_get_issue')).toHaveLength(2);
+      s.jira.status = 'In Progress';
+      await s.post('/api/work-items/PROJ-1/sync');
+      expect(s.items.get('local', 'PROJ-1')).toMatchObject({ done: false });
+      await syncDue(s.deps);
+      expect(s.tools('jira_get_issue')).toHaveLength(4);
+    }
+  });
+
   it('never syncs one item twice at once', async () => {
     const s = setup({ status: 'To Do', delay: 30 });
     await s.connectWorkbench();
@@ -257,6 +295,31 @@ describe('periodic sync', () => {
     await Promise.all([syncWorkItem(s.deps, 'local', 'PROJ-1'), syncWorkItem(s.deps, 'local', 'PROJ-1'), syncDue(s.deps)]);
     expect(s.max()).toBe(1);
     expect(s.tools('jira_get_issue').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('link source', () => {
+  const base = { repo: 'acme/api', prId: 12, branch: 'b', title: 't', state: 'OPEN', runId: null };
+
+  it('a factory capture upgrades a manual link and takes its run, then comments once', async () => {
+    const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
+    await s.connectWorkbench();
+    await s.post('/api/work-items/PROJ-1', { repos: ['acme/api'] });
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'manual' });
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'spec', source: 'factory', runId: 'r1' });
+    expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'spec', source: 'factory', runId: 'r1', commented: false })]);
+    await s.post('/api/work-items/PROJ-1/sync');
+    await s.post('/api/work-items/PROJ-1/sync');
+    expect(s.tools('jira_add_comment')).toHaveLength(1);
+  });
+
+  it('a manual re-link keeps the kind and source of a factory link', () => {
+    const s = setup();
+    s.items.create('local', 'PROJ-1');
+    s.items.addRepo('local', 'PROJ-1', 'acme/api');
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'spec', source: 'factory', runId: 'r1' });
+    s.items.link('local', 'PROJ-1', { ...base, kind: 'impl', source: 'manual', title: 'new' });
+    expect(s.items.links('local', 'PROJ-1')).toEqual([expect.objectContaining({ kind: 'spec', source: 'factory', runId: 'r1', title: 'new' })]);
   });
 });
 

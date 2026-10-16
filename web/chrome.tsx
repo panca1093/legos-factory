@@ -10,7 +10,7 @@ export const ORDER: Run['status'][] = ['awaiting_decision', 'running', 'starting
 
 export type Live = ReturnType<typeof useLive>;
 export type ResumeReq = { sessionId: string; cwd: string; recentlyActive: boolean };
-export type LaunchReq = { kind: RunKind; resume?: ResumeReq; defaults?: { cwd?: string; prompt?: string; ticket?: string } };
+export type LaunchReq = { kind: RunKind; resume?: ResumeReq; defaults?: { cwd?: string; prompt?: string } };
 
 // Topbar controls shared by every page frame.
 export const Chrome = createContext<{ conn: Conn; openRail: () => void; inspector: boolean; toggleInspector: () => void; review: (decisionId: string) => void; me: Me }>(null!);
