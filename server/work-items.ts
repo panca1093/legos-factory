@@ -68,13 +68,14 @@ export class WorkItems {
     return rows.map((r) => ({ ...r, commented: !!r.commented }));
   }
 
-  link(owner: string, ticket: string, l: LinkRow) {
+  // commented = true marks a PR linked by hand: it is never announced on Jira. Re-linking keeps the stored flag.
+  link(owner: string, ticket: string, l: LinkRow, commented = false) {
     this.db
       .prepare(
-        `insert into ticket_links (owner, ticket, repo_key, kind, pr_id, branch, title, state, run_id, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `insert into ticket_links (owner, ticket, repo_key, kind, pr_id, branch, title, state, run_id, updated_at, commented) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict do update set kind = excluded.kind, run_id = excluded.run_id, branch = excluded.branch, title = excluded.title, state = excluded.state, updated_at = excluded.updated_at`,
       )
-      .run(owner, ticket, keyOf(l.repo), l.kind, l.prId, l.branch, l.title, l.state, l.runId, now());
+      .run(owner, ticket, keyOf(l.repo), l.kind, l.prId, l.branch, l.title, l.state, l.runId, now(), Number(commented));
   }
 
   update(owner: string, ticket: string, repo: string, prId: number, set: { state?: string; title?: string; commented?: boolean }) {

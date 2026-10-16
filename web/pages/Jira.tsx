@@ -373,6 +373,15 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
     }
   };
 
+  const linkPr = async (key: string, p: PrRow, kind: 'spec' | 'impl') => {
+    try {
+      await api.linkPr(key, p.repo, p.id, kind);
+      workItems.reload();
+    } catch (e: any) {
+      setPrFind((f) => (f ? { ...f, error: e.message } : f));
+    }
+  };
+
   const load = async (more = false) => {
     setError(null);
     if (!more) setRows(null);
@@ -458,13 +467,30 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
                       ) : (
                         <>
                           <span className="muted">Found by search (key in branch or title):</span>
-                          {prFind.prs!.map((p) => (
-                            <a key={`${p.repo}#${p.id}`} className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
-                              <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
-                              <span className="mono">{p.repo} #{p.id}</span>
-                              <span className="ellipsis">{p.title}</span>
-                            </a>
-                          ))}
+                          {prFind.prs!.map((p) => {
+                            const inItem = item?.repos.some((r) => r.name.toLowerCase() === p.repo.toLowerCase());
+                            const isLinked = item?.links.some((l) => l.repo.toLowerCase() === p.repo.toLowerCase() && l.prId === p.id);
+                            return (
+                              <div key={`${p.repo}#${p.id}`} className="pr-find-row">
+                                <a className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
+                                  <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                                  <span className="mono">{p.repo} #{p.id}</span>
+                                  <span className="ellipsis">{p.title}</span>
+                                </a>
+                                {isLinked ? (
+                                  <span className="muted">linked</span>
+                                ) : inItem ? (
+                                  (['impl', 'spec'] as const).map((kind) => (
+                                    <button key={kind} type="button" className="text-action" onClick={() => linkPr(i.key, p, kind)}>
+                                      Link as {kind}
+                                    </button>
+                                  ))
+                                ) : item ? (
+                                  <span className="muted">add {p.repo} to link it</span>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </>
                       )}
                       <button type="button" className="text-action" onClick={() => setPrFind(null)}>
