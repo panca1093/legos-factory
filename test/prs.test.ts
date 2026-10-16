@@ -204,6 +204,10 @@ describe('pull requests', () => {
     expect(guessed.items.map((p: any) => p.id)).toEqual([4]);
     const set = await (await req('/api/reviews?as=Somebody%20Else')).json();
     expect(set).toMatchObject({ me: 'Somebody Else', items: [] });
+    // an email typed as the name means the person it belongs to
+    const byEmail = await (await req('/api/reviews?as=bob.stone%40acme.test&refresh=1')).json();
+    expect(byEmail.me).toBe('Bob Stone');
+    expect(byEmail.items.map((p: any) => p.id)).toEqual([4]);
 
     const anon = setup({ whoami: { id: 'u1', email: '42@acme.test' }, repos: ['acme/web'] });
     await anon.connectWorkbench();

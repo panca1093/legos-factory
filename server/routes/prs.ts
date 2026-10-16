@@ -155,7 +155,7 @@ export function prsRoutes(deps: Deps) {
 // resolves to one (looked up in the first repo's workspace), else by display name.
 async function reviewRequests(wb: WorkbenchClient, repos: RepoRef[], as: string) {
   const me = as ? null : await wb.client.whoami(wb.token);
-  const name = as || (me?.name ?? '').trim() || nameFromEmail(me?.email);
+  const name = (as.includes('@') ? nameFromEmail(as) : as) || (me?.name ?? '').trim() || nameFromEmail(me?.email);
   if (!name) throw new HttpError(400, 'set your Bitbucket name to match review requests', { needName: true });
   const norm = (x: string | null) => (x ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
   const same = (a: string | null) => norm(a) === norm(name);
