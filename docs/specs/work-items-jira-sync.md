@@ -56,17 +56,19 @@ server/work-items.ts: a WorkItems class in the style of ActivityLog/MyRepos. Rul
 ## Jira sync (server/jira-sync.ts)
 syncWorkItem(deps, owner, ticket):
 1. Refresh each linked PR's state with bitbucket_get_pr.
-2. Every link is factory-made. For each link with commented = 0, post one jira_add_comment line `<Spec|Implementation> PR for <repo>: <title> — <url>`, then set commented = 1 before the call, so a failed comment is never retried: at most once (no remote-link tool in workbench, so the comment is how the link reaches Jira).
+2. For each link with commented = 0, post one jira_add_comment line `<Spec|Implementation> PR for <repo>: <title> — <url>`, then set commented = 1 before the call, so a failed comment is never retried: at most once (no remote-link tool in workbench, so the comment is how the link reaches Jira).
 3. Read the current status with jira_get_issue; apply the status rules with compare-and-swap.
 4. Keep the latest skip or error in work_items.note (an error outranks a skip). A clean sync clears it. A PR capture failure (`Error: PR capture failed in <repo>: ...`) outranks every skip and error and is never overwritten by a sync, including one already running when it was written (the note is re-read right before the write); only a new factory link for that same repo clears it.
 5. Polling stop: `done` becomes true only when the Jira status is Ready for QA (`jiraFlow.readyForQa`) or every repo of the work item has a MERGED impl PR. Any other status (ON HOLD, QA, Done, Rejected, unknown names) keeps polling; a null status keeps the previous value. On-demand syncs run regardless of `done`.
 When it runs: right after a run with a ticket starts (In Progress move); right after PR capture at run end; every LEGOS_SYNC_MS (default 120 s) for work items with `done = 0` and only for owners with a connected workbench. At most one sync at a time per work item. Errors are noted on the work item and never thrown into the run.
 
 ## API
+Four endpoints, plus the search.
 - GET /api/work-items → { items: WorkItem[] }, each { ticket, repos, links, note, status } (status = last Jira status read), for the caller only. The only read: the ticket modal and the Jira cards both use it and pick their item by ticket.
 - PUT /api/work-items/:ticket { repos: string[] } → set the work item's repo list (creates the item if missing) and return it. Every repo must be in My repos (403 needRepo otherwise). Dropping a repo that already has links → 409. Keeping or adding is idempotent. An empty list on a missing item → 400.
 - PATCH /api/my-repos/:ws/:slug { projects: string[] } → set the Jira project keys mapped to a repo (uppercased, deduped, sorted, at most 20; 400 on a bad key, 403 if the repo is not in My repos) and return the MyRepo. GET /api/my-repos already includes `projects`.
-- GET /api/prs?ticket= is unchanged: a search by key, used only to display PR chips ("found by search"). PRs are never linked by hand; every link comes from a factory run.
+- POST /api/work-items/:ticket/links { repo, prId, kind: 'spec' | 'impl' } → link a PR that already exists (made before the factory or outside it) and return the work item. 404 when the caller has no such work item; 403 needRepo when the repo is not in My repos; 409 { needWorkItem: true } when the repo is not in this work item ("add <repo> to <KEY> first"); 409 without a workbench; 502 when the forge fails. The PR is read through the caller's workbench and its title or source branch must contain the ticket key, word-bounded like the search (else 400 "that PR does not mention <KEY>"). Branch, title and state come from the fetched PR, run_id is null, and `commented` is set: a PR linked by hand is never announced on Jira. Linking the same PR again updates kind, title and state and keeps `commented`; that is how a wrong kind is corrected. The next sync counts the link in the status rules like any other.
+- GET /api/prs?ticket= is unchanged: a search by key, used to display PR chips ("found by search") and to pick PRs to link. A link comes either from a factory run or from the endpoint above.
 
 ## Web
 - The Jira page refreshes the work-items list every 30 s while visible and on window focus.
@@ -74,12 +76,14 @@ When it runs: right after a run with a ticket starts (In Progress move); right a
 - Ticket modal gains a Work item panel: one row per repo with spec and impl PR chips (state-coloured, linking to the factory PR page); "Add repo" and "remove" (a repo without PRs); last Jira status and the latest note (e.g. "Skipped In Progress → Code Review: status was ON HOLD"). No Link PR or Sync now: sync runs by itself.
 - The dialog and the modal both write with the single PUT, sending the full desired repo list, then refresh GET /api/work-items.
 - Jira cards take PR chips from GET /api/work-items when a work item exists; otherwise today's chips. Jira's Development field stays a secondary hint.
+- A "found by search" PR on a Jira card whose repo is in the work item shows "Link as impl" and "Link as spec" (one click, then the work-items list reloads); an already linked PR shows "linked"; a PR from a repo outside the work item stays a plain link with the hint "add <repo> to link it".
 - Settings → Repositories: each repo gets an editable list of Jira project keys.
 
 ## Tests (fail before, pass after)
 - Status rules (pure function): all table rows; chained inProgress → readyForQa; declined impl PR holds back; repo without impl PR holds back; spec PRs never count.
 - Compare-and-swap: status differs from expected → no transition call + skip note; transition id looked up by target name; missing transition → error note.
-- Comments: each new factory link commented at most once (a failed comment is not retried).
+- Comments: each new factory link commented at most once (a failed comment is not retried); a hand-linked PR is never commented.
+- Link a found PR: links by key in title or branch with commented set; re-link changes kind and keeps commented; 404 / 403 / 409 / 400 rules; owner isolation; a linked impl PR drives Code Review on sync.
 - Notes: a capture failure survives skips, errors and a sync running while it is written; a link in repo B does not clear repo A's failure, a link in A does.
 - PR capture: run ending on a feature branch with an OPEN PR stores a link of the run's stage kind; base branch or no PR stores nothing; capture happens before the clone is deleted.
 - Launch: ticket run whose repo isn't in the work item → 409 needWorkItem; ticket run without stage → 400.

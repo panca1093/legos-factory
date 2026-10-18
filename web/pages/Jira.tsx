@@ -282,6 +282,22 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
     setBusy(false);
   };
   const names = item?.repos.map((r) => r.name) ?? [];
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const unlinked = item?.repos.filter((r) => !item.links.some((l) => same(l.repo, r.name))).map((r) => r.name).join() ?? '';
+  // PRs that already mention the ticket, offered for the repos that have none linked yet
+  const found = useFetch(() => (unlinked ? api.findPrs(ticket) : Promise.resolve(null)), [ticket, unlinked]);
+  const suggested = (repo: string) => (found.data?.prs ?? []).filter((p) => same(p.repo, repo));
+  const link = async (p: PrRow, kind: 'spec' | 'impl') => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.linkPr(ticket, p.repo, p.id, kind);
+      onChange();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
   const addable = (mine?.repos ?? []).filter((r) => !names.some((n) => n.toLowerCase() === r.name.toLowerCase()));
   return (
     <section className="work-item">
@@ -301,10 +317,26 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
                   <LinkChips item={{ ...item, links }} />
                 ) : (
                   <>
-                    <span className="muted">no PR yet</span>
+                    <span className="muted">{suggested(r.name).length ? 'PR found, not linked yet' : 'no PR yet'}</span>
                     <button type="button" className="text-action" disabled={busy} onClick={() => setRepos(names.filter((n) => n !== r.name))}>
                       remove
                     </button>
+                    {suggested(r.name).map((p) => (
+                      <div key={p.id} className="found-pr">
+                        <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                        <span className="mono">#{p.id}</span>
+                        <span className="ellipsis" title={p.title}>{p.title}</span>
+                        <a className="btn sm ghost" href={`#/prs/${p.repo}/${p.id}`}>
+                          Open
+                        </a>
+                        <button type="button" className="btn sm primary" disabled={busy} onClick={() => link(p, 'impl')}>
+                          Link as impl
+                        </button>
+                        <button type="button" className="btn sm" disabled={busy} onClick={() => link(p, 'spec')}>
+                          Link as spec
+                        </button>
+                      </div>
+                    ))}
                   </>
                 )}
               </div>
@@ -370,6 +402,15 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
       } else setPrFind({ key, ...r });
     } catch (e: any) {
       setPrFind({ key, error: e.message });
+    }
+  };
+
+  const linkPr = async (key: string, p: PrRow, kind: 'spec' | 'impl') => {
+    try {
+      await api.linkPr(key, p.repo, p.id, kind);
+      workItems.reload();
+    } catch (e: any) {
+      setPrFind((f) => (f ? { ...f, error: e.message } : f));
     }
   };
 
@@ -458,13 +499,30 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
                       ) : (
                         <>
                           <span className="muted">Found by search (key in branch or title):</span>
-                          {prFind.prs!.map((p) => (
-                            <a key={`${p.repo}#${p.id}`} className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
-                              <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
-                              <span className="mono">{p.repo} #{p.id}</span>
-                              <span className="ellipsis">{p.title}</span>
-                            </a>
-                          ))}
+                          {prFind.prs!.map((p) => {
+                            const inItem = item?.repos.some((r) => r.name.toLowerCase() === p.repo.toLowerCase());
+                            const isLinked = item?.links.some((l) => l.repo.toLowerCase() === p.repo.toLowerCase() && l.prId === p.id);
+                            return (
+                              <div key={`${p.repo}#${p.id}`} className="pr-find-row">
+                                <a className="pr-find-row" href={`#/prs/${p.repo}/${p.id}`}>
+                                  <span className={`dev-chip tone-${PR_TONE[p.state] ?? 'off'}`}>{p.state.toLowerCase()}</span>
+                                  <span className="mono">{p.repo} #{p.id}</span>
+                                  <span className="ellipsis">{p.title}</span>
+                                </a>
+                                {isLinked ? (
+                                  <span className="muted">linked</span>
+                                ) : inItem ? (
+                                  (['impl', 'spec'] as const).map((kind) => (
+                                    <button key={kind} type="button" className="text-action" onClick={() => linkPr(i.key, p, kind)}>
+                                      Link as {kind}
+                                    </button>
+                                  ))
+                                ) : item ? (
+                                  <span className="muted">add {p.repo} to link it</span>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </>
                       )}
                       <button type="button" className="text-action" onClick={() => setPrFind(null)}>

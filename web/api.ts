@@ -105,6 +105,7 @@ export const api = {
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  linkPr: (ticket: string, repo: string, prId: number, kind: 'spec' | 'impl') => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
   setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; share?: ShareLevel }) =>
