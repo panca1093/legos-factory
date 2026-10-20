@@ -9,7 +9,7 @@ const ROLES: Role[] = ['owner', 'member', 'viewer'];
 export const isRole = (r: unknown): r is Role => ROLES.includes(r as Role);
 
 // Workspace settings and credentials are for owners; members run work; viewers only read.
-const OWNER_ONLY = [/^\/api\/connections(\/|$)/, /^\/api\/my-repos(\/|$)/, /^\/api\/workbench\/connect$/];
+const OWNER_ONLY = [/^\/api\/connections(\/|$)/, /^\/api\/my-repos(\/|$)/, /^\/api\/workbench\/connect$/, /^\/api\/runners(\/|$)/];
 const ANY_ROLE = /^\/api\/workspaces(\/|$)/;
 
 export function allowed(role: Role, method: string, path: string): boolean {

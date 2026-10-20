@@ -34,6 +34,8 @@ export type Connection = {
 };
 export type NewConnection = Pick<Connection, 'name' | 'kind' | 'url' | 'auth'> & { headers?: Record<string, string> };
 
+export type Runner = { id: string; name: string; createdAt: string; lastSeenAt: string | null; online: boolean };
+
 export type Integration = { name: string; version: string | null; connected: boolean };
 export type JiraDev = {
   prs: { count: number; state: string | null; open: boolean } | null;
@@ -70,6 +72,9 @@ export const api = {
   members: (id: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`),
   setMember: (id: string, user: string, role: Role) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`, { method: 'PUT', body: JSON.stringify({ user, role }) }),
   removeMember: (id: string, userId: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members/${userId}`, { method: 'DELETE' }),
+  runners: () => call<{ runners: Runner[] }>('/api/runners'),
+  addRunner: (name: string) => call<Runner & { token: string }>('/api/runners', { method: 'POST', body: JSON.stringify({ name }) }),
+  removeRunner: (id: string) => call<{ ok: true }>(`/api/runners/${id}`, { method: 'DELETE' }),
   myActivity: (days: number) => call<{ items: ActivityItem[] }>(`/api/activity/me?days=${days}`),
   team: (days: number) => call<{ configured: boolean; me?: string; members?: TeamMember[] }>(`/api/team?days=${days}`),
   integrations: () => call<{ integrations: Integration[] }>('/api/workbench/integrations'),

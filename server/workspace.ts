@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readdirSync, rmSync } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
@@ -100,6 +101,24 @@ async function configure(path: string, workspace: string, author: Author) {
 export async function removeWorkspace(root: string, path: string) {
   if (!managedWorkspace(root, path)) return;
   await rm(path, { recursive: true, force: true });
+}
+
+// At startup: delete the clones no resumable run is going to use.
+export function sweepWorkspaces(root: string, keep: Set<string>) {
+  const list = (dir: string) => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  for (const a of list(root))
+    for (const b of list(join(root, a)))
+      for (const c of list(join(root, a, b)))
+        for (const d of list(join(root, a, b, c))) {
+          const path = join(root, a, b, c, d);
+          if (!keep.has(path)) rmSync(path, { recursive: true, force: true });
+        }
 }
 
 export const exists = (path: string) => stat(path).then(() => true, () => false);

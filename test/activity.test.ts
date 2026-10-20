@@ -33,10 +33,16 @@ describe('ActivityLog', () => {
     expect(items[0]).toMatchObject({ runId: 'r1', status: 'completed', title: 'Fix the thing', project: 'payments-api', estimatedCostUsd: 0.42 });
   });
 
-  it('marks runs that were still going as failed after a restart', async () => {
+  it('marks runs that were still going as failed after a restart, unless a job can resume them', async () => {
     const path = join(tmp(), 'factory.db');
-    await new ActivityLog(openDb(path)).record(run({ status: 'idle' }), 'u1');
-    expect((await new ActivityLog(openDb(path)).list('u1', 0))[0].status).toBe('failed');
+    const first = new ActivityLog(openDb(path));
+    await first.record(run({ id: 'gone', status: 'idle' }), 'u1');
+    await first.record(run({ id: 'queued', status: 'running' }), 'u1');
+    await first.record(run({ id: 'done', status: 'completed' }), 'u1');
+    const second = new ActivityLog(openDb(path));
+    second.failOrphans(new Set(['queued']));
+    const status = Object.fromEntries((await second.list('u1', 0)).map((i) => [i.runId, i.status]));
+    expect(status).toEqual({ gone: 'failed', queued: 'running', done: 'completed' });
   });
 
   it('keeps each owner to their own runs and sessions', async () => {

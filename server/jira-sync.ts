@@ -1,6 +1,6 @@
 import type { JiraFlow, LinkKind, Run } from '../shared/types.ts';
 import { NO_WB, errMsg, type Deps } from './http.ts';
-import { gitBranch, loadSettings } from './policy.ts';
+import { loadSettings } from './policy.ts';
 import { parseRepo } from './workspace.ts';
 
 // What the factory knows about a work item: whether work started, its repos and their PRs.
@@ -114,11 +114,10 @@ export function startSyncLoop(deps: Deps, ms: number) {
 }
 
 // At the end of a design or build run: the open PR of the branch it left the clone on becomes a link.
-export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: string): Promise<void> {
+export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, branch: string | null): Promise<void> {
   const { workspaceId, ticket, stage, repo } = run;
   if (!ticket || !stage || !repo || !deps.workItems.hasRepo(workspaceId, ticket, repo)) return;
   try {
-    const branch = await gitBranch(cwd);
     if (!branch || branch === (deps.myRepos.get(workspaceId, repo)?.mainBranch ?? 'main')) return;
     const wb = await deps.workbench(workspaceId);
     if (!wb) throw new Error(NO_WB);

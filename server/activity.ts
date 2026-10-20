@@ -34,12 +34,7 @@ export function toTeamItem(i: ActivityItem): TeamItem {
 export class ActivityLog {
   private lastSig = new Map<string, string>();
 
-  constructor(private db: DatabaseSync) {
-    // runs live in memory: whatever was still going when the server stopped is gone
-    db.prepare(
-      `update runs set item = json_set(item, '$.status', 'failed') where json_extract(item, '$.status') in ('queued', 'starting', 'running', 'awaiting_decision', 'idle')`,
-    ).run();
-  }
+  constructor(private db: DatabaseSync) {}
 
   // Returns the item when it was written (a real change), else null.
   async record(run: Omit<Run, 'events'>, workspaceId: string): Promise<ActivityItem | null> {
@@ -54,6 +49,20 @@ export class ActivityLog {
       )
       .run(item.runId, workspaceId, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt);
     return item;
+  }
+
+  get(runId: string): ActivityItem | null {
+    const row = this.db.prepare(`select item from runs where run_id = ?`).get(runId) as { item: string } | undefined;
+    return row ? JSON.parse(row.item) : null;
+  }
+
+  // After a restart: runs still going whose job is gone cannot continue, so they end as failed.
+  failOrphans(openRunIds: Set<string>) {
+    const rows = this.db
+      .prepare(`select run_id from runs where json_extract(item, '$.status') in ('queued', 'starting', 'running', 'awaiting_decision', 'idle')`)
+      .all() as { run_id: string }[];
+    const fail = this.db.prepare(`update runs set item = json_set(item, '$.status', 'failed') where run_id = ?`);
+    for (const r of rows) if (!openRunIds.has(r.run_id)) fail.run(r.run_id);
   }
 
   async list(workspaceId: string, sinceMs: number): Promise<ActivityItem[]> {

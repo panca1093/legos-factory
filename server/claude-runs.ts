@@ -7,6 +7,8 @@ import { toEvents } from './claude-sessions.ts';
 export type QueryFn = typeof sdkQuery;
 
 export type StartRequest = {
+  // set by the control plane so the run keeps its id across a requeue
+  id?: string;
   workspaceId?: string;
   owner?: string;
   repo?: string | null;
@@ -70,9 +72,42 @@ type Waiting = { decision: PendingDecision; resolve: (r: PermissionResult) => vo
 
 export const ALIVE: Run['status'][] = ['queued', 'starting', 'running', 'awaiting_decision', 'idle'];
 const WORKING: Run['status'][] = ['starting', 'running', 'awaiting_decision'];
-const MAX_EVENTS = 2000;
+export const MAX_EVENTS = 2000;
 const END_GRACE_MS = 10_000;
 const READ_ONLY: CanUseTool = async () => ({ behavior: 'deny', message: 'This run is read-only: describe the change instead of making it.' });
+
+export function newRun(req: StartRequest): Run {
+  const now = new Date().toISOString();
+  return {
+    id: req.id ?? randomUUID(),
+    workspaceId: req.workspaceId ?? 'local',
+    owner: req.owner ?? 'local',
+    repo: req.repo ?? null,
+    kind: req.kind ?? 'chat',
+    fromTask: false,
+    ticket: req.ticket ?? null,
+    stage: req.stage ?? null,
+    share: req.share ?? 'private',
+    runtime: 'claude-code',
+    sessionId: req.resume ?? null,
+    resumedFrom: req.resume ?? null,
+    cwd: req.cwd,
+    prompt: req.prompt,
+    permissionMode: req.permissionMode ?? 'default',
+    status: 'queued',
+    requestedModel: req.model || 'default',
+    model: null,
+    startedAt: now,
+    lastEventAt: now,
+    endedAt: null,
+    endedBy: null,
+    turns: 0,
+    error: null,
+    estimatedCostUsd: null,
+    result: null,
+    events: [],
+  };
+}
 
 export class RunManager extends EventEmitter {
   private live = new Map<string, Live>();
@@ -88,6 +123,11 @@ export class RunManager extends EventEmitter {
     private maxLive = Number(process.env.LEGOS_MAX_RUNS ?? 3),
   ) {
     super();
+  }
+
+  // how many runs it takes at once
+  get capacity(): number {
+    return this.maxLive;
   }
 
   private emitMsg(m: StreamMessage) {
@@ -134,36 +174,7 @@ export class RunManager extends EventEmitter {
   }
 
   start(req: StartRequest): Run {
-    const now = new Date().toISOString();
-    const run: Run = {
-      id: randomUUID(),
-      workspaceId: req.workspaceId ?? 'local',
-      owner: req.owner ?? 'local',
-      repo: req.repo ?? null,
-      kind: req.kind ?? 'chat',
-      fromTask: false,
-      ticket: req.ticket ?? null,
-      stage: req.stage ?? null,
-      share: req.share ?? 'private',
-      runtime: 'claude-code',
-      sessionId: req.resume ?? null,
-      resumedFrom: req.resume ?? null,
-      cwd: req.cwd,
-      prompt: req.prompt,
-      permissionMode: req.permissionMode ?? 'default',
-      status: 'queued',
-      requestedModel: req.model || 'default',
-      model: null,
-      startedAt: now,
-      lastEventAt: now,
-      endedAt: null,
-      endedBy: null,
-      turns: 0,
-      error: null,
-      estimatedCostUsd: null,
-      result: null,
-      events: [],
-    };
+    const run = newRun(req);
     if (this.liveCount() >= this.maxLive) {
       this.queued.set(run.id, { run, req });
       this.publish(run);

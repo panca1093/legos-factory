@@ -29,6 +29,14 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create table if not exists workspace_members (
       workspace_id text not null, user_id text not null, role text not null, primary key (workspace_id, user_id));
     create index if not exists workspace_members_user on workspace_members (user_id);
+    create table if not exists jobs (
+      run_id text primary key, workspace_id text not null, priority integer not null default 0, state text not null,
+      request text not null, local integer not null default 0, runner_id text, lease_until integer,
+      attempts integer not null default 0, queued_at text not null);
+    create index if not exists jobs_queue on jobs (state, priority desc, queued_at);
+    create table if not exists runners (
+      id text primary key, workspace_id text not null, name text not null, token_hash text not null unique,
+      created_at text not null, last_seen_at text);
     create table if not exists connections (
       workspace_id text not null, name text not null, data text not null, primary key (workspace_id, name));
     create table if not exists runs (

@@ -100,6 +100,7 @@ export function prsRoutes(deps: Deps) {
 
   routes.post('/api/prs/:ws/:slug/:id/fixes', async (c) => {
     const ref = myPr(c);
+    if (!deps.embedded) throw new HttpError(409, 'Ask factory works in a checkout on this machine: it needs the runner inside this app');
     const { commentIds } = parse(fixesSchema, await readBody(c));
     const wb = await requireWorkbench(deps, c.get('ws'));
     const queue = await upstream(

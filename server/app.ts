@@ -1,27 +1,31 @@
-import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
-import type { StreamMessage } from '../shared/types.ts';
+import type { Run, StreamMessage } from '../shared/types.ts';
 import { ActivityLog, toTeamItem } from './activity.ts';
-import type { RunManager, StartRequest } from './claude-runs.ts';
+import type { RunManager } from './claude-runs.ts';
 import { Connections, type Pending } from './connections.ts';
 import { openDb } from './db.ts';
+import { Dispatcher, EMBEDDED } from './dispatcher.ts';
 import { capturePr, syncWorkItem } from './jira-sync.ts';
 import { MyRepos } from './my-repos.ts';
-import { NO_WB, gitToken, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
+import { HttpError, NO_WB, gitToken, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
 import { FixQueues } from './pr-fixes.ts';
+import { RunnerRegistry } from './runner-auth.ts';
+import { Runner, localTransport } from './runner.ts';
+import { Runs } from './runs.ts';
 import { authRoutes, SID_COOKIE } from './routes/auth.ts';
 import { connectionsRoutes } from './routes/connections.ts';
 import { jiraRoutes } from './routes/jira.ts';
 import { myReposRoutes } from './routes/my-repos.ts';
 import { prsRoutes } from './routes/prs.ts';
+import { runnerRoutes } from './routes/runner.ts';
 import { runsRoutes } from './routes/runs.ts';
 import { workItemsRoutes } from './routes/work-items.ts';
 import { workspacesRoutes } from './routes/workspaces.ts';
 import { Workspaces, allowed } from './tenancy.ts';
 import { Workbench } from './workbench.ts';
 import { WorkItems } from './work-items.ts';
-import { createWorkspace, managedWorkspace, parseRepo, removeWorkspace, workspacePath, workspacesDir } from './workspace.ts';
+import { createWorkspace, managedWorkspace, parseRepo, removeWorkspace, sweepWorkspaces, workspacePath, workspacesDir } from './workspace.ts';
 
 export type { AppOptions } from './http.ts';
 export { nameFromEmail, type ReviewRequest } from './routes/prs.ts';
@@ -29,13 +33,13 @@ export { nameFromEmail, type ReviewRequest } from './routes/prs.ts';
 // whoever runs everything when sign-in is off (LEGOS_AUTH=off), in their own personal workspace
 const LOCAL_UID = 'local';
 
-export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildDeps(runs, opts)) {
+export function createApp(manager: RunManager, opts: AppOptions = {}, deps = buildDeps(manager, opts)) {
   const { users } = deps;
   const app = new Hono<Env>();
 
   // Launching a run is code execution: block DNS rebinding (Host) and cross-site POSTs (custom header forces CORS preflight).
   app.use('/api/*', async (c, next) => {
-    if (!localOnly(c.req.header('host'))) return c.json({ error: 'forbidden host' }, 403);
+    if (!deps.hostOk(c.req.header('host'))) return c.json({ error: 'forbidden host' }, 403);
     if (c.req.method !== 'GET' && c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
     const user = users?.verify(getCookie(c, SID_COOKIE)) ?? null;
     if (users && !user) return c.json({ error: 'sign in required' }, 401);
@@ -57,11 +61,12 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
   app.route('/', myReposRoutes(deps));
   app.route('/', workItemsRoutes(deps));
   app.route('/', workspacesRoutes(deps));
+  app.route('/', runnerRoutes(deps));
   app.onError(onError);
   return app;
 }
 
-export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
+export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   const users = opts.users ?? null;
   const db = opts.db ?? openDb(':memory:');
   const workspaces = new Workspaces(db);
@@ -79,8 +84,21 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   };
   const grants = new Map<string, string>();
   const wsRoot = opts.workspaces ?? workspacesDir();
-  const clones = new Map<string, string>();
-  const busyIn = (path: string) => [...runs.activeRunBySession().values(), ...clones.keys()].some((id) => runs.get(id)?.cwd === path && !runs.get(id)?.endedAt);
+  const embedded = opts.embeddedRunner !== false;
+  const runs = new Runs(new Dispatcher(db, { leaseMs: opts.leaseMs ?? 60_000, maxAttempts: opts.maxAttempts ?? 3 }), {
+    selfUrl,
+    publicUrl: opts.publicUrl,
+    grants,
+    lookup: (runId) => activity.get(runId),
+    models: embedded ? () => manager.models() : undefined,
+    embedded,
+  });
+  const publicHost = opts.publicUrl ? new URL(opts.publicUrl).host.toLowerCase() : null;
+  const hostOk = (host: string | undefined) => localOnly(host) || (!!publicHost && host?.toLowerCase() === publicHost);
+  const busyIn = (path: string) => {
+    const snap = runs.snapshot();
+    return snap.type === 'snapshot' && snap.runs.some((r) => r.cwd === path && !r.endedAt);
+  };
   const clients = new Map<string, Workbench>();
   const workbench = async (workspaceId: string): Promise<WorkbenchClient | null> => {
     const wb = await connsFor(workspaceId).workbench();
@@ -89,17 +107,17 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     return { client: clients.get(wb.url)!, token: wb.token };
   };
   const ownsRun = (workspaceId: string, runId: string) => runs.get(runId)?.workspaceId === workspaceId;
-  const startRun = (req: StartRequest, mcpNames: string[] = []) => {
-    const repoRun = !!req.repo && !!managedWorkspace(wsRoot, req.cwd);
-    if (!repoRun && !mcpNames.length) return runs.start(req);
-    const secret = randomBytes(24).toString('base64url');
-    const mcp = mcpNames.length ? Object.fromEntries(mcpNames.map((name) => [name, { url: `${selfUrl}/mcp/${name}`, headers: { 'x-legos-run': secret } }])) : undefined;
-    const run = runs.start({ ...req, mcp, ...(repoRun && { env: { LEGOS_RUN_SECRET: secret, LEGOS_URL: selfUrl } }) });
-    grants.set(secret, run.id);
-    return run;
+  const startRun: Deps['startRun'] = (req, mcpNames = []) => {
+    const gitHelper = !!req.repo && (!!req.clone || !!managedWorkspace(wsRoot, req.cwd));
+    try {
+      return runs.start({ ...req, mcpNames, gitHelper });
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      throw status ? new HttpError(status, (err as Error).message) : err;
+    }
   };
   const fixes = new FixQueues(runs, {
-    start: startRun,
+    start: (r) => startRun({ ...r, recoverable: false }),
     prepare: async (q) => {
       const repo = parseRepo(q.repo)!;
       const path = workspacePath(wsRoot, q.workspaceId, repo, `pr-${q.prId}`);
@@ -119,19 +137,6 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   });
   runs.on('message', (m: StreamMessage) => {
     if (m.type !== 'run') return;
-    if (m.run.endedAt) for (const [k, runId] of grants) if (runId === m.run.id) grants.delete(k);
-    const clone = m.run.endedAt ? clones.get(m.run.id) : undefined;
-    if (clone) {
-      clones.delete(m.run.id);
-      const { run } = m;
-      // the PR is found from the clone's branch, so capture it before the clone goes
-      void capturePr(deps, run, clone)
-        .then(() => {
-          if (run.ticket && run.stage) void syncWorkItem(deps, run.workspaceId, run.ticket);
-          if (!busyIn(clone)) return removeWorkspace(wsRoot, clone);
-        })
-        .catch((err) => console.warn('workspace cleanup failed:', err.message));
-    }
     void activity
       .record(m.run, m.run.workspaceId)
       .then(async (item) => {
@@ -146,6 +151,15 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
         if (!res.ok) console.warn(`hub rejected status update (HTTP ${res.status})`);
       })
       .catch((err) => console.warn('activity update failed:', err.message));
+  });
+
+  // the runner read the branch of a throwaway clone before deleting it, so the PR it left can be found
+  runs.on('finished', (run: Run, branch: string | null) => {
+    void capturePr(deps, run, branch)
+      .then(() => {
+        if (run.repo && run.ticket && run.stage) void syncWorkItem(deps, run.workspaceId, run.ticket);
+      })
+      .catch((err) => console.warn('PR capture failed:', err.message));
   });
 
   // listing a big workspace takes several calls; repos change rarely
@@ -167,6 +181,21 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, opts, users, workspaces, db, activity, myRepos, workItems, syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, clones, busyIn, ownsRun };
+  const deps: Deps = { runs, runners: new RunnerRegistry(db), embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
+
+  runs.recover();
+  const open = runs.openJobs();
+  activity.failOrphans(new Set(open.map((j) => j.runId)));
+  sweepWorkspaces(wsRoot, new Set(open.flatMap((j) => (j.request.clone ? [workspacePath(wsRoot, j.workspaceId, parseRepo(j.request.clone.repo)!, j.request.clone.key)] : []))));
+  setInterval(() => runs.reap(), 5000).unref();
+  if (embedded) {
+    new Runner({
+      transport: localTransport(runs, { id: EMBEDDED, workspaceId: null, embedded: true }, opts.pollWaitMs),
+      manager,
+      wsRoot,
+      gitUrl: opts.gitUrl,
+      credential: (job) => gitToken(deps, job.request.workspaceId ?? 'local', parseRepo(job.clone!.repo)!),
+    }).start();
+  }
   return deps;
 }

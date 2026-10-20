@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { ConnAuth, ConnKind } from '../connections.ts';
-import { domain, gitToken, localOnly, parse, readBody, requireMyRepo, text, type Deps, type Env } from '../http.ts';
-import { managedWorkspace } from '../workspace.ts';
+import { domain, gitToken, parse, readBody, requireMyRepo, text, type Deps, type Env } from '../http.ts';
+import { parseRepo } from '../workspace.ts';
 
 // Headers worth passing between Claude Code and workbench on the MCP proxy.
 const MCP_REQ_HEADERS = ['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id'];
@@ -21,24 +21,24 @@ const newConnSchema = z.object({
 });
 
 export function connectionsRoutes(deps: Deps) {
-  const { runs, connsFor, grants, http, wsRoot } = deps;
+  const { runs, connsFor, grants, http, hostOk } = deps;
   const routes = new Hono<Env>();
 
   // git's credential helper in a run's clone asks here each time; every answer is a freshly minted token for that run's own repo.
   routes.get('/git/credential', async (c) => {
-    if (!localOnly(c.req.header('host'))) return c.text('forbidden host', 403);
+    if (!hostOk(c.req.header('host'))) return c.text('forbidden host', 403);
     const run = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '');
     if (!run) return c.json({ error: 'unknown run' }, 403);
-    const ws = managedWorkspace(wsRoot, run.cwd);
-    if (!ws || ws.workspaceId !== run.workspaceId || run.repo !== `${ws.repo.workspace}/${ws.repo.slug}`) return c.json({ error: 'run has no repo' }, 403);
-    requireMyRepo(deps, run.workspaceId, run.repo);
-    const token = await gitToken(deps, run.workspaceId, ws.repo);
+    const repo = run.repo && parseRepo(run.repo);
+    if (!repo) return c.json({ error: 'run has no repo' }, 403);
+    requireMyRepo(deps, run.workspaceId, run.repo!);
+    const token = await gitToken(deps, run.workspaceId, repo);
     return c.text(`username=x-token-auth\npassword=${token}\n`, 200, { 'cache-control': 'no-store' });
   });
 
   // Claude Code processes reach Settings connections through here; credentials are attached fresh on every request.
   routes.all('/mcp/:name', async (c) => {
-    if (!localOnly(c.req.header('host'))) return c.text('forbidden host', 403);
+    if (!hostOk(c.req.header('host'))) return c.text('forbidden host', 403);
     const workspaceId = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '')?.workspaceId;
     if (workspaceId === undefined) return c.json({ error: 'unknown run' }, 403);
     const conns = connsFor(workspaceId);

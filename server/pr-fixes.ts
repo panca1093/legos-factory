@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { FixItem, FixQueue, Run, StreamMessage } from '../shared/types.ts';
-import type { RunManager, StartRequest } from './claude-runs.ts';
+import type { StartRequest } from './claude-runs.ts';
+import type { RunControl } from './runs.ts';
 
 // "Ask factory" on a PR's review comments, strictly one comment at a time on one clone of the PR branch:
 //   propose (read-only run) → you approve, edit or skip → fix (commit + push) → reply on the comment → next.
@@ -81,7 +82,7 @@ export class FixQueues {
   private bases = new Map<string, string>();
 
   constructor(
-    private runs: RunManager,
+    private runs: RunControl,
     private deps: FixDeps,
     private git: GitOps = realGit,
   ) {

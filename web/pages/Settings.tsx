@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo, type Role, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo, type Role, type Runner, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
@@ -28,6 +28,7 @@ export function SettingsPage() {
             </div>
           </div>
           <Workspace />
+          <Runners />
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           <Repositories />
@@ -144,6 +145,71 @@ function Workspace() {
               </div>
             </form>
           )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// Machines that run this workspace's agents by pulling jobs from here. Runs start on the one inside this app unless it is turned off.
+function Runners() {
+  const [list, setList] = useState<Runner[] | null>(null);
+  const [name, setName] = useState('');
+  const [fresh, setFresh] = useState<{ name: string; token: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => api.runners().then((r) => setList(r.runners), (e) => setErr(e.message));
+  useEffect(() => void load(), []);
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    await load();
+  };
+  return (
+    <>
+      <div className="sectionbar">
+        <h2>Runners</h2>
+      </div>
+      {err && <p className="error">{err}</p>}
+      <form
+        className="pr-box name-box"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void act(async () => (setFresh(await api.addRunner(name.trim())), setName('')));
+        }}
+      >
+        <div className="pr-reply-actions">
+          <input className="input sm" value={name} maxLength={64} placeholder="Name of a machine, e.g. build-box" onChange={(e) => setName(e.target.value)} />
+          <button className="btn sm" disabled={!name.trim()}>
+            Add runner
+          </button>
+        </div>
+        {fresh && (
+          <p className="muted">
+            Token for {fresh.name}, shown once: <code className="mono">{fresh.token}</code>
+            <br />
+            On that machine: <code className="mono">LEGOS_CONTROL_URL=&lt;this app&gt; LEGOS_RUNNER_TOKEN=… npm run runner</code>
+          </p>
+        )}
+      </form>
+      {!!list?.length && (
+        <div className="section-list">
+          {list.map((r) => (
+            <div key={r.id} className="row">
+              <div className="copy">
+                <b>{r.name}</b>
+                <span>{r.online ? 'online' : r.lastSeenAt ? `last seen ${new Date(r.lastSeenAt).toLocaleString()}` : 'never connected'}</span>
+              </div>
+              <div className="actions">
+                <button className="btn sm ghost" onClick={() => void act(() => api.removeRunner(r.id))}>
+                  Revoke
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </>

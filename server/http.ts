@@ -3,16 +3,18 @@ import type { Context } from 'hono';
 import type { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
-import type { RunManager, StartRequest } from './claude-runs.ts';
 import type { Role, Run } from '../shared/types.ts';
 import type { ActivityLog } from './activity.ts';
 import type { Connections, Pending } from './connections.ts';
 import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
+import type { RunnerRegistry } from './runner-auth.ts';
+import type { Runs } from './runs.ts';
 import type { Workspaces } from './tenancy.ts';
 import type { Users } from './users.ts';
 import type { WorkItems } from './work-items.ts';
 import { tokenFromCloneUrl, type Workbench } from './workbench.ts';
+import type { JobRequest } from './protocol.ts';
 import type { RepoRef } from './workspace.ts';
 
 export type AppOptions = {
@@ -21,6 +23,15 @@ export type AppOptions = {
   // defaults to a throwaway in-memory database
   db?: DatabaseSync;
   selfUrl?: string;
+  // where runners on other machines reach this app (put TLS in front); its host is accepted next to localhost
+  publicUrl?: string | null;
+  // false: this process only coordinates, runs execute on remote runners
+  embeddedRunner?: boolean;
+  // job leases: a runner that stays silent this long loses its jobs, which are claimed again up to maxAttempts times
+  leaseMs?: number;
+  maxAttempts?: number;
+  // how long a runner's poll waits for work before answering empty
+  pollWaitMs?: number;
   fetch?: typeof fetch;
   // team hub base URL; unset = no team activity
   hubUrl?: string | null;
@@ -41,7 +52,11 @@ export type Repos = Awaited<ReturnType<Workbench['bitbucketRepos']>>;
 
 // What the route modules share; built once in createApp.
 export type Deps = {
-  runs: RunManager;
+  runs: Runs;
+  runners: RunnerRegistry;
+  // false when no runner lives in this process: runs there need a repo, so a runner can clone it
+  embedded: boolean;
+  hostOk: (host: string | undefined) => boolean;
   opts: AppOptions;
   users: Users | null;
   workspaces: Workspaces;
@@ -64,10 +79,8 @@ export type Deps = {
   grants: Map<string, string>;
   // how Claude Code processes reach this app
   selfUrl: string;
-  // runs.start, plus a grant for repo runs (git credentials) and for the named connections (MCP proxy)
-  startRun: (req: StartRequest, mcpNames?: string[]) => Run;
-  // run -> its throwaway clone, deleted once no live run works in it
-  clones: Map<string, string>;
+  // queues a run; repo runs get git credentials and the named connections reach the MCP proxy, both at claim time
+  startRun: (req: Omit<JobRequest, 'id' | 'mcpNames' | 'gitHelper'>, mcpNames?: string[]) => Run;
   busyIn: (path: string) => boolean;
   ownsRun: (workspaceId: string, runId: string) => boolean;
 };

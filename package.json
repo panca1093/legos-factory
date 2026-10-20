@@ -8,6 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc",
     "dev:team": "concurrently -k -n hub,server,web \"LEGOS_MODE=hub tsx watch --env-file-if-exists=.env.local server/index.ts\" \"LEGOS_HUB_URL=http://localhost:4400 tsx watch --env-file-if-exists=.env.local server/index.ts\" \"vite\"",
+    "runner": "tsx --env-file-if-exists=.env.local server/runner-main.ts",
     "hub": "LEGOS_MODE=hub tsx --env-file-if-exists=.env.local server/index.ts"
   },
   "type": "module",
