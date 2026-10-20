@@ -1,8 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { JobRequest } from './protocol.ts';
 
-// The durable queue of runs: runners claim a job with a lease and keep it alive with heartbeats; a lease that
-// runs out puts the job back in the queue, or fails it once it has been claimed too often.
+// The durable run queue: jobs are leased to runners, and a lapsed lease requeues the job or, after too many claims, fails it.
 
 export const EMBEDDED = 'embedded';
 
@@ -77,8 +76,7 @@ export class Dispatcher {
     return rows.map((r) => ({ ...toJob(r), state: r.state, runnerId: r.runner_id, queuedAt: r.queued_at }));
   }
 
-  // Leases that ran out (or, with runnerId, every lease that runner holds) go back to the queue; a job that has
-  // been claimed maxAttempts times fails instead.
+  // Lapsed leases (or every lease of runnerId) go back to the queue; a job claimed maxAttempts times fails instead.
   expire(runnerId?: string): { requeued: QueuedJob[]; failed: QueuedJob[] } {
     const rows = this.db
       .prepare(`select run_id, workspace_id, request, attempts from jobs where state = 'leased' and (lease_until < ? or runner_id = ?) order by queued_at, rowid`)

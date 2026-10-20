@@ -15,6 +15,7 @@ import type { Runs } from './runs.ts';
 import type { Workspaces } from './tenancy.ts';
 import type { Users } from './users.ts';
 import type { WorkItems } from './work-items.ts';
+import type { Oidc, OidcConfig } from './oidc.ts';
 import type { Forge, RepoRow, WorkSource } from './ports.ts';
 import type { Workbench } from './workbench.ts';
 import type { JobRequest } from './protocol.ts';
@@ -38,6 +39,8 @@ export type AppOptions = {
   fetch?: typeof fetch;
   // team hub base URL; unset = no team activity
   hubUrl?: string | null;
+  // OpenID Connect provider for sign-in; unset hides that option
+  oidc?: OidcConfig | null;
   // workbench MCP URL behind "Sign in with workbench"; unset hides that option
   workbenchUrl?: string | null;
   // where repo runs get their throwaway clones, and how to reach a repo (see workspace.ts)
@@ -59,6 +62,7 @@ export type Repos = RepoRow[];
 export type Deps = {
   runs: Runs;
   runners: RunnerRegistry;
+  oidc: Oidc | null;
   // false when no runner lives in this process: runs there need a repo, so a runner can clone it
   embedded: boolean;
   hostOk: (host: string | undefined) => boolean;

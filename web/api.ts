@@ -3,12 +3,14 @@ import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, P
 
 export type Me = {
   authEnabled: boolean;
-  // "Sign in with workbench" is configured
-  workbenchLogin: boolean;
+  // PIN sign-in is offered: only when the app is reached from this machine
+  pin: boolean;
+  // the outside providers people can sign in with: workbench, OpenID Connect
+  providers: { id: 'workbench' | 'oidc'; label: string }[];
   // local (PIN) users, for the sign-in screen
   users: string[];
   authenticated: boolean;
-  user: { id: string; kind: 'pin' | 'workbench'; name: string; email: string | null } | null;
+  user: { id: string; kind: 'pin' | 'workbench' | 'oidc'; name: string; email: string | null } | null;
 };
 
 // Any 401 means the session ended (logout elsewhere, refresh failed): show the sign-in screen.
@@ -85,7 +87,7 @@ export const api = {
   me: () => call<Me>('/auth/me'),
   createUser: (name: string, pin: string) => call<{ ok: true }>('/auth/users', { method: 'POST', body: JSON.stringify({ name, pin }) }),
   login: (name: string, pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ name, pin }) }),
-  workbenchSignIn: (attempt: string) => call<{ url: string }>('/auth/workbench', { method: 'POST', body: JSON.stringify({ attempt }) }),
+  providerSignIn: (id: string, attempt: string) => call<{ url: string }>(`/auth/providers/${id}`, { method: 'POST', body: JSON.stringify({ attempt }) }),
   claim: (attempt: string) => call<{ ok: boolean }>(`/auth/claim?attempt=${attempt}`),
   connections: () => call<{ connections: Connection[] }>('/api/connections'),
   addConnection: (c: NewConnection) => call<Connection>('/api/connections', { method: 'POST', body: JSON.stringify(c) }),

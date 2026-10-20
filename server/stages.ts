@@ -5,8 +5,7 @@ import { launchRun } from './launch-run.ts';
 import { keyOf } from './work-items.ts';
 import { CONVENTIONS, stageAfter, stageDef, type FactType } from './workflow.ts';
 
-// The stage engine: where each repo of a work item stands in the factory workflow, and what moves it on.
-// Agents do the work of a stage; only facts (a merged PR, green checks, a person's approval) open a gate.
+// The stage engine: where each repo of a work item stands in the workflow; only facts, never agents' claims, open a gate.
 
 export const MAX_REVIEW_LOOPS = 3;
 const FINDINGS_MAX = 6000;

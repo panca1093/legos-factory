@@ -4,12 +4,13 @@ import { api, type Me } from '../api.ts';
 const CLAIM_EVERY_MS = 1500;
 const CLAIM_FOR_MS = 10 * 60_000;
 
-// Two separate kinds of user: local ones (name + PIN) and workbench ones.
+// Local users (name + PIN) on this machine, and people an outside provider vouches for.
 export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; onDone: () => void }) {
   const names = me?.users ?? [];
   // sign-in first; only straight to create when there's nothing to sign in with
-  const canSignIn = names.length > 0 || !!me?.workbenchLogin;
-  const [creating, setCreating] = useState(!canSignIn);
+  const providers = me?.providers ?? [];
+  const canSignIn = names.length > 0 || providers.length > 0;
+  const [creating, setCreating] = useState(!canSignIn && !!me?.pin);
   const [flip, setFlip] = useState<'out' | 'in' | null>(null);
   const [name, setName] = useState(names[0] ?? '');
   const [pin, setPin] = useState('');
@@ -59,12 +60,12 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
     }
   };
   // The link may open in the system browser (desktop pane), which keeps its own cookie: poll for ours.
-  const workbench = async () => {
+  const provider = async (id: string, label: string) => {
     setErr(null);
     const attempt = crypto.randomUUID();
     const tab = window.open('', '_blank');
     try {
-      const { url } = await api.workbenchSignIn(attempt);
+      const { url } = await api.providerSignIn(id, attempt);
       if (tab) tab.location.href = url;
       else window.open(url, '_blank');
     } catch (e: any) {
@@ -84,7 +85,7 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
       if (here) return finish();
     }
     setWaiting(false);
-    fail('Workbench sign-in timed out — try again.');
+    fail(`Sign-in with ${label} timed out — try again.`);
   };
   const ready = pin.length === 6 && name.trim() && (!creating || pin2.length === 6);
   return (
@@ -121,7 +122,7 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
               <i />
               <i />
             </span>
-            <p className="signin-note">Finish signing in to workbench in the window that opened. This page continues on its own.</p>
+            <p className="signin-note">Finish signing in in the window that opened. This page continues on its own.</p>
           </div>
         ) : creating ? (
           <div className="signin-body" key="create">
@@ -159,18 +160,21 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
                 </button>
               </>
             )}
-            {me?.workbenchLogin && (
-              <>
-                {names.length > 0 && <div className="signin-or">or</div>}
-                <button type="button" className={`btn signin-btn${names.length ? '' : ' primary'}`} onClick={workbench}>
-                  Sign in with workbench
+            {providers.map((p, i) => (
+              <div key={p.id} className="signin-body">
+                {(names.length > 0 || i > 0) && <div className="signin-or">or</div>}
+                <button type="button" className={`btn signin-btn${names.length || i ? '' : ' primary'}`} onClick={() => provider(p.id, p.label)}>
+                  Sign in with {p.label}
                 </button>
-              </>
+              </div>
+            ))}
+            {!canSignIn && !me?.pin && <p className="signin-note">No sign-in method is set up for this address. Ask whoever runs this app.</p>}
+            {me?.pin && (
+              <button type="button" className="btn ghost signin-switch" onClick={turn}>
+                Create a new user
+              </button>
             )}
-            <button type="button" className="btn ghost signin-switch" onClick={turn}>
-              Create a new user
-            </button>
-            <p className="signin-note">Each user sees only their own sessions and connections.</p>
+            <p className="signin-note">Each person works in their own workspace and in the teams they were added to.</p>
           </div>
         )}
         {(err || error) && (

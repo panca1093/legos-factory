@@ -2,8 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Role, WorkspaceConfig, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
-// The tenancy unit: every user has a personal workspace and may belong to team ones. What a workspace
-// holds (connections, repos, runs, work items) is reachable only by its members, per role.
+// Workspaces are the tenancy unit: what one holds is reachable only by its members, per role.
 
 const ROLES: Role[] = ['owner', 'member', 'viewer'];
 export const isRole = (r: unknown): r is Role => ROLES.includes(r as Role);

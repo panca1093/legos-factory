@@ -13,6 +13,7 @@ import { FixQueues } from './pr-fixes.ts';
 import { RunnerRegistry } from './runner-auth.ts';
 import type { Forge } from './ports.ts';
 import { Runner, localTransport } from './runner.ts';
+import { Oidc } from './oidc.ts';
 import { Runs } from './runs.ts';
 import { StageStore, onRunFinished, settle } from './stages.ts';
 import { authRoutes, SID_COOKIE } from './routes/auth.ts';
@@ -194,7 +195,7 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, runners: new RunnerRegistry(db), embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, forge, workSource, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
+  const deps: Deps = { runs, runners: new RunnerRegistry(db), oidc: opts.oidc ? new Oidc(opts.oidc, http) : null, embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, forge, workSource, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
 
   deps.stages.onNewFact((ws, ticket, repo) => void settle(deps, ws, ticket, repo).catch((err) => console.warn('stage engine failed:', err.message)));
   runs.recover();

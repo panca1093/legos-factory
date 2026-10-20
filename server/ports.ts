@@ -1,7 +1,6 @@
 import type { RepoRef } from './workspace.ts';
 
-// The two things the factory needs from the outside world, as the core sees them. A provider module
-// implements each for one product; nothing outside server/providers names that product.
+// What the core needs from tickets and code hosting; one module per product in server/providers implements each.
 
 export type PrState = 'OPEN' | 'MERGED' | 'DECLINED';
 

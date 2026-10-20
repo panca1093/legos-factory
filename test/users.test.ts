@@ -98,7 +98,7 @@ const cookieOf = (r: Response) => r.headers.get('set-cookie')!.split(';')[0];
 describe('sign-in', () => {
   it('gates the API until someone creates a user or signs in', async () => {
     const { req, post } = setup();
-    expect(await (await req('/auth/me')).json()).toMatchObject({ authEnabled: true, workbenchLogin: false, users: [], authenticated: false });
+    expect(await (await req('/auth/me')).json()).toMatchObject({ authEnabled: true, pin: true, providers: [], users: [], authenticated: false });
     expect((await req('/api/sessions')).status).toBe(401);
     expect((await post('/auth/users', { name: 'Ada', pin: '12ab56' })).status).toBe(400);
     expect((await post('/auth/users', { name: '', pin: '123456' })).status).toBe(400);
@@ -136,10 +136,10 @@ describe('sign-in', () => {
   it('signs in with workbench as its own user, with workbench already connected', async () => {
     const { srv, req, post, signUp } = setup({ workbench: true });
     const ada = await signUp('Ada');
-    expect(await (await req('/auth/me')).json()).toMatchObject({ workbenchLogin: true });
+    expect(await (await req('/auth/me')).json()).toMatchObject({ providers: [{ id: 'workbench', label: 'workbench' }] });
 
     const attempt = 'attempt-0123456789abcdef';
-    const start = await post('/auth/workbench', { attempt });
+    const start = await post('/auth/providers/workbench', { attempt });
     expect(start.status).toBe(200);
     const authorize = new URL((await start.json()).url);
     expect(authorize.origin + authorize.pathname).toBe(`${WB}/authorize`);
@@ -166,7 +166,7 @@ describe('sign-in', () => {
     expect(await (await req('/auth/me')).json()).toMatchObject({ users: ['Ada'] });
 
     // signing in again reuses the same user
-    const again = new URL((await (await post('/auth/workbench', {})).json()).url);
+    const again = new URL((await (await post('/auth/providers/workbench', {})).json()).url);
     srv.setChallenge(again.searchParams.get('code_challenge')!);
     const cb2 = await req(`/auth/callback?code=abc&state=${again.searchParams.get('state')}`);
     const me1 = (await (await req('/auth/me', {}, viaClaim)).json()).user.id;
@@ -176,9 +176,9 @@ describe('sign-in', () => {
 
   it('hides workbench sign-in when not configured and rejects forged callbacks', async () => {
     const { req, post } = setup();
-    expect((await post('/auth/workbench', {})).status).toBe(404);
-    expect((await post('/auth/workbench', { attempt: 'x' })).status).toBe(404);
-    expect((await setup({ workbench: true }).post('/auth/workbench', { attempt: 'bad id!' })).status).toBe(400);
+    expect((await post('/auth/providers/workbench', {})).status).toBe(404);
+    expect((await post('/auth/providers/workbench', { attempt: 'x' })).status).toBe(404);
+    expect((await setup({ workbench: true }).post('/auth/providers/workbench', { attempt: 'bad id!' })).status).toBe(400);
     expect((await req('/auth/callback?code=x&state=forged')).status).toBe(400);
   });
 });

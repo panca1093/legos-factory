@@ -6,8 +6,7 @@ import type { Command, Job, RunnerMessage, Transport } from './protocol.ts';
 import type { Runs } from './runs.ts';
 import { createWorkspace, exists, parseRepo, removeWorkspace, workspacePath } from './workspace.ts';
 
-// The process that executes the agent. It only ever calls the control plane: poll for jobs and commands,
-// report what happened. Claude and git credentials live on this machine or arrive with the job.
+// Executes the agent on this machine; only ever calls the control plane, with Claude credentials of its own and git ones per job.
 
 export type RunnerOptions = {
   transport: Transport;

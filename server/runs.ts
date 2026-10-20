@@ -5,8 +5,7 @@ import { ALIVE, MAX_EVENTS, newRun, type RunManager } from './claude-runs.ts';
 import { EMBEDDED, type Dispatcher, type QueuedJob, type RunnerRef } from './dispatcher.ts';
 import type { Command, Job, JobRequest, Order, PollRequest, PollResponse, RunnerMessage } from './protocol.ts';
 
-// The control plane's view of every run: queued, executing on some runner, or finished. Runners report what
-// happens; this keeps the live picture the UI streams, hands out jobs and relays commands back.
+// The control plane's live picture of every run, fed by runner reports; it hands out jobs and relays commands.
 
 export type RunsOptions = {
   selfUrl: string;
@@ -170,8 +169,7 @@ export class Runs extends EventEmitter {
     return { jobs, commands, lost };
   }
 
-  // Credentials for this run exist only now, for this runner: a secret that unlocks the connections proxy and
-  // the git credential endpoint for as long as the run lives.
+  // The per-run secret for the connections proxy and git credentials is made here, for this runner, and dies with the run.
   private materialize(job: QueuedJob, runner: RunnerRef): Job {
     const { mcpNames = [], gitHelper, clone, ownsClone, prepared, priority: _b, recoverable: _c, ...req } = job.request;
     this.revoke(job.runId);

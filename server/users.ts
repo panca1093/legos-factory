@@ -2,8 +2,8 @@ import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'no
 import type { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 
-// Who may use this app. Two separate kinds of user: local ones (name + 6-digit PIN) and ones that
-// signed in with workbench. Sessions are stateless HMAC-signed cookies naming the user.
+// Who may use this app. Separate kinds of user: local ones (name + 6-digit PIN) and ones that signed in with an
+// outside provider (workbench, OpenID Connect). Sessions are stateless HMAC-signed cookies naming the user.
 
 const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -14,7 +14,7 @@ const BASE_LOCK_MS = 30_000;
 const MAX_LOCK_MS = 15 * 60_000;
 const COOKIE_RE = /^(v2\.([0-9a-f-]{36})\.(\d+))\.([\w-]+)$/;
 
-export type UserKind = 'pin' | 'workbench';
+export type UserKind = 'pin' | 'workbench' | 'oidc';
 export type User = { id: string; kind: UserKind; name: string; email: string | null };
 export type LoginResult = { ok: true; cookie: string } | { ok: false; retryAfterMs: number | null };
 

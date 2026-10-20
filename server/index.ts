@@ -31,11 +31,22 @@ async function startApp() {
   // a bare workbench host means its MCP endpoint
   const workbenchUrl = wb ? (new URL(wb).pathname === '/' ? `${wb}/mcp` : wb) : null;
   const bitbucketWorkspace = process.env.LEGOS_BITBUCKET_WORKSPACE?.trim() || null;
+  const oidc = process.env.LEGOS_OIDC_ISSUER
+    ? {
+        issuer: process.env.LEGOS_OIDC_ISSUER,
+        clientId: process.env.LEGOS_OIDC_CLIENT_ID ?? '',
+        clientSecret: process.env.LEGOS_OIDC_CLIENT_SECRET ?? '',
+        label: process.env.LEGOS_OIDC_NAME,
+        scopes: process.env.LEGOS_OIDC_SCOPES,
+        allowedDomains: process.env.LEGOS_OIDC_ALLOWED_DOMAINS?.split(',').filter(Boolean),
+      }
+    : null;
+  if (oidc && (!oidc.clientId || !oidc.clientSecret)) throw new Error('LEGOS_OIDC_CLIENT_ID and LEGOS_OIDC_CLIENT_SECRET are required with LEGOS_OIDC_ISSUER');
   const publicUrl = process.env.LEGOS_PUBLIC_URL?.replace(/\/$/, '') || null;
   const embeddedRunner = process.env.LEGOS_RUNNER !== 'off';
   const leaseMs = Number(process.env.LEGOS_LEASE_MS) || undefined;
   const maxAttempts = Number(process.env.LEGOS_MAX_ATTEMPTS) || undefined;
-  const opts = { users, db, selfUrl, publicUrl, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
+  const opts = { users, db, selfUrl, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
   const deps = buildDeps(runs, opts);
   const app = createApp(runs, opts, deps);
   startSyncLoop(deps, Number(process.env.LEGOS_SYNC_MS ?? 120_000));
@@ -51,7 +62,7 @@ async function startApp() {
   const hostname = process.env.LEGOS_BIND || '127.0.0.1';
   serve({ fetch: app.fetch, hostname, port }, () => {
     console.log(
-      `legos-factory api on ${selfUrl} · sign-in ${users ? `PIN${workbenchUrl ? ' + workbench' : ''}` : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'} · runner ${embeddedRunner ? 'embedded' : 'remote only'}`,
+      `legos-factory api on ${selfUrl} · sign-in ${users ? ['PIN', workbenchUrl && 'workbench', oidc && 'OpenID Connect'].filter(Boolean).join(' + ') : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'} · runner ${embeddedRunner ? 'embedded' : 'remote only'}`,
     );
   });
 }
