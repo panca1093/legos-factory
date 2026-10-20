@@ -62,8 +62,14 @@ export type Stage = 'design' | 'build';
 // chat = interactive discussion; task = one prompt, runs to completion, no follow-ups
 export type RunKind = 'chat' | 'task';
 
+export type Role = 'owner' | 'member' | 'viewer';
+
+export type WorkspaceInfo = { id: string; name: string; kind: 'personal' | 'team'; role: Role };
+export type WorkspaceMember = { userId: string; name: string; email: string | null; role: Role };
+
 export type Run = {
   id: string;
+  workspaceId: string;
   // user id of whoever launched it
   owner: string;
   // "workspace/repo" when it works in a fresh clone of that repo
@@ -141,6 +147,7 @@ export type FixQueueStatus = 'preparing' | 'working' | 'waiting' | 'done' | 'can
 
 export type FixQueue = {
   id: string;
+  workspaceId: string;
   owner: string;
   repo: string;
   prId: number;

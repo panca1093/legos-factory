@@ -7,6 +7,7 @@ import { toEvents } from './claude-sessions.ts';
 export type QueryFn = typeof sdkQuery;
 
 export type StartRequest = {
+  workspaceId?: string;
   owner?: string;
   repo?: string | null;
   kind?: RunKind;
@@ -136,6 +137,7 @@ export class RunManager extends EventEmitter {
     const now = new Date().toISOString();
     const run: Run = {
       id: randomUUID(),
+      workspaceId: req.workspaceId ?? 'local',
       owner: req.owner ?? 'local',
       repo: req.repo ?? null,
       kind: req.kind ?? 'chat',

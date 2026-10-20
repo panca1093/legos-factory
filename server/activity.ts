@@ -29,7 +29,7 @@ export function toTeamItem(i: ActivityItem): TeamItem {
   return rest;
 }
 
-// Every run launched here, per owner, latest state only. This is also the Sessions list: only
+// Every run launched here, per workspace, latest state only. This is also the Sessions list: only
 // sessions started from legos-factory show up, never the machine's other Claude sessions.
 export class ActivityLog {
   private lastSig = new Map<string, string>();
@@ -42,55 +42,55 @@ export class ActivityLog {
   }
 
   // Returns the item when it was written (a real change), else null.
-  async record(run: Omit<Run, 'events'>, owner: string): Promise<ActivityItem | null> {
+  async record(run: Omit<Run, 'events'>, workspaceId: string): Promise<ActivityItem | null> {
     const item = toItem(run);
     const sig = [item.status, item.turns, item.endedAt, item.ticket, item.model, item.kind, item.sessionId].join('|');
     if (this.lastSig.get(item.runId) === sig) return null;
     this.lastSig.set(item.runId, sig);
     this.db
       .prepare(
-        `insert into runs (run_id, owner, session_id, item, started_at, last_event_at) values (?, ?, ?, ?, ?, ?)
+        `insert into runs (run_id, workspace_id, session_id, item, started_at, last_event_at) values (?, ?, ?, ?, ?, ?)
          on conflict (run_id) do update set session_id = excluded.session_id, item = excluded.item, last_event_at = excluded.last_event_at`,
       )
-      .run(item.runId, owner, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt);
+      .run(item.runId, workspaceId, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt);
     return item;
   }
 
-  async list(owner: string, sinceMs: number): Promise<ActivityItem[]> {
+  async list(workspaceId: string, sinceMs: number): Promise<ActivityItem[]> {
     const since = new Date(sinceMs).toISOString();
     const rows = this.db
-      .prepare(`select item from runs where owner = ? and (last_event_at >= ? or started_at >= ?) order by started_at desc`)
-      .all(owner, since, since) as { item: string }[];
+      .prepare(`select item from runs where workspace_id = ? and (last_event_at >= ? or started_at >= ?) order by started_at desc`)
+      .all(workspaceId, since, since) as { item: string }[];
     return rows.map((r) => JSON.parse(r.item));
   }
 
-  // Claude session ids this owner started here, most recently active first.
-  sessionIds(owner: string, limit: number): string[] {
+  // Claude session ids this workspace started here, most recently active first.
+  sessionIds(workspaceId: string, limit: number): string[] {
     const rows = this.db
-      .prepare(`select session_id from runs where owner = ? and session_id is not null group by session_id order by max(last_event_at) desc limit ?`)
-      .all(owner, limit) as { session_id: string }[];
+      .prepare(`select session_id from runs where workspace_id = ? and session_id is not null group by session_id order by max(last_event_at) desc limit ?`)
+      .all(workspaceId, limit) as { session_id: string }[];
     return rows.map((r) => r.session_id);
   }
 
   // a design or build run on this ticket has started
-  workedOn(owner: string, ticket: string): boolean {
+  workedOn(workspaceId: string, ticket: string): boolean {
     return !!this.db
-      .prepare(`select 1 from runs where owner = ? and json_extract(item, '$.ticket') = ? and json_extract(item, '$.stage') is not null limit 1`)
-      .get(owner, ticket);
+      .prepare(`select 1 from runs where workspace_id = ? and json_extract(item, '$.ticket') = ? and json_extract(item, '$.stage') is not null limit 1`)
+      .get(workspaceId, ticket);
   }
 
   // session -> the ticket its latest ticketed run was started with
-  sessionTickets(owner: string): Map<string, string> {
+  sessionTickets(workspaceId: string): Map<string, string> {
     const rows = this.db
       .prepare(
         `select session_id, json_extract(item, '$.ticket') as ticket from runs
-         where owner = ? and session_id is not null and json_extract(item, '$.ticket') is not null order by started_at`,
+         where workspace_id = ? and session_id is not null and json_extract(item, '$.ticket') is not null order by started_at`,
       )
-      .all(owner) as { session_id: string; ticket: string }[];
+      .all(workspaceId) as { session_id: string; ticket: string }[];
     return new Map(rows.map((r) => [r.session_id, r.ticket]));
   }
 
-  ownsSession(owner: string, sessionId: string): boolean {
-    return !!this.db.prepare(`select 1 from runs where owner = ? and session_id = ? limit 1`).get(owner, sessionId);
+  ownsSession(workspaceId: string, sessionId: string): boolean {
+    return !!this.db.prepare(`select 1 from runs where workspace_id = ? and session_id = ? limit 1`).get(workspaceId, sessionId);
   }
 }

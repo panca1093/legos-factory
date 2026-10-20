@@ -39,6 +39,7 @@ function setup(answer: (prompt: string, git: { head: string; upstream: string })
     git,
   );
   const queue = fixes.create({
+    workspaceId: 'w1',
     owner: 'u1',
     repo: 'acme/api',
     prId: 12,
@@ -125,8 +126,8 @@ describe('fix queue', () => {
 
   it('allows one open queue per PR', async () => {
     const { fixes, queue } = setup(() => 'proposal');
-    expect(() => fixes.create({ owner: 'u1', repo: 'acme/api', prId: 12, branch: 'b', comments: [] })).toThrow(/already working/);
-    expect(fixes.forPr('u1', 'acme/api', 12)?.id).toBe(queue.id);
-    expect(fixes.forPr('u2', 'acme/api', 12)).toBeNull();
+    expect(() => fixes.create({ workspaceId: 'w1', owner: 'u1', repo: 'acme/api', prId: 12, branch: 'b', comments: [] })).toThrow(/already working/);
+    expect(fixes.forPr('w1', 'acme/api', 12)?.id).toBe(queue.id);
+    expect(fixes.forPr('w2', 'acme/api', 12)).toBeNull();
   });
 });

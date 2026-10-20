@@ -5,7 +5,7 @@ import { dirname, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 // Throwaway checkouts: a run on a repo gets a fresh shallow clone, deleted when the run ends. The path
-// encodes owner, repo and key (ticket), so continuing a session re-clones into the same place and
+// encodes workspace, repo and key (ticket), so continuing a session re-clones into the same place and
 // Claude's transcript (stored by working directory) still lines up.
 
 const run = promisify(execFile);
@@ -25,17 +25,17 @@ export function parseRepo(s: string): RepoRef | null {
   return !rest.length && workspace && slug && safe(workspace) && safe(slug) ? { workspace, slug } : null;
 }
 
-export function workspacePath(root: string, owner: string, repo: RepoRef, key: string): string {
-  if (![owner, key].every(safe)) throw new Error('invalid workspace key');
-  return join(root, owner, repo.workspace, repo.slug, key);
+export function workspacePath(root: string, workspaceId: string, repo: RepoRef, key: string): string {
+  if (![workspaceId, key].every(safe)) throw new Error('invalid workspace key');
+  return join(root, workspaceId, repo.workspace, repo.slug, key);
 }
 
 // A path this module manages, split back into its parts; null for any other directory.
-export function managedWorkspace(root: string, path: string): { owner: string; repo: RepoRef; key: string } | null {
+export function managedWorkspace(root: string, path: string): { workspaceId: string; repo: RepoRef; key: string } | null {
   const parts = relative(root, path).split(sep);
   if (parts.length !== 4 || !parts.every(safe)) return null;
-  const [owner, workspace, slug, key] = parts;
-  return { owner, repo: { workspace, slug }, key };
+  const [workspaceId, workspace, slug, key] = parts;
+  return { workspaceId, repo: { workspace, slug }, key };
 }
 
 const BITBUCKET = 'https://bitbucket.org';

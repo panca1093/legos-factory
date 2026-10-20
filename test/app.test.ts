@@ -22,7 +22,7 @@ const MINE = '11111111-1111-1111-1111-111111111111';
 const db = openDb(':memory:');
 const now = new Date().toISOString();
 await new ActivityLog(db).record(
-  { id: 'r0', owner: 'local', sessionId: MINE, kind: 'chat', cwd: '/tmp', prompt: 'x', status: 'completed', startedAt: now, lastEventAt: now } as Run,
+  { id: 'r0', workspaceId: 'local', owner: 'local', sessionId: MINE, kind: 'chat', cwd: '/tmp', prompt: 'x', status: 'completed', startedAt: now, lastEventAt: now } as Run,
   'local',
 );
 const app = createApp(new RunManager(idle), { db });

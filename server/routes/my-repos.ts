@@ -15,26 +15,26 @@ export function myReposRoutes(deps: Deps) {
   const { myRepos } = deps;
   const routes = new Hono<Env>();
 
-  routes.get('/api/my-repos', (c) => c.json({ repos: myRepos.list(c.get('uid')) }));
+  routes.get('/api/my-repos', (c) => c.json({ repos: myRepos.list(c.get('ws')) }));
 
   routes.post('/api/my-repos', async (c) => {
-    const uid = c.get('uid');
+    const ws = c.get('ws');
     const { repo } = parse(addSchema, await readBody(c));
-    const wb = await requireWorkbench(deps, uid);
-    return c.json(await domain(addRepo(deps, uid, wb, repo)), 201);
+    const wb = await requireWorkbench(deps, ws);
+    return c.json(await domain(addRepo(deps, ws, wb, repo)), 201);
   });
 
   routes.patch('/api/my-repos/:ws/:slug', async (c) => {
-    const uid = c.get('uid');
+    const ws = c.get('ws');
     const repo = `${c.req.param('ws')}/${c.req.param('slug')}`;
-    requireMyRepo(deps, uid, repo);
+    requireMyRepo(deps, ws, repo);
     const { projects } = parse(projectsSchema, await readBody(c));
-    myRepos.setProjects(uid, repo, projects);
-    return c.json(myRepos.get(uid, repo));
+    myRepos.setProjects(ws, repo, projects);
+    return c.json(myRepos.get(ws, repo));
   });
 
   routes.delete('/api/my-repos/:ws/:slug', (c) => {
-    myRepos.remove(c.get('uid'), `${c.req.param('ws')}/${c.req.param('slug')}`);
+    myRepos.remove(c.get('ws'), `${c.req.param('ws')}/${c.req.param('slug')}`);
     return c.body(null, 204);
   });
 
@@ -42,8 +42,8 @@ export function myReposRoutes(deps: Deps) {
 }
 
 // Only repos that exist in their workspace, under the forge's spelling and with its main branch.
-async function addRepo(deps: Deps, uid: string, wb: WorkbenchClient, repo: string) {
-  const found = (await upstream(deps.workspaceRepos(uid, wb, parseRepo(repo)!.workspace))).find((r) => r.name.toLowerCase() === repo.toLowerCase());
+async function addRepo(deps: Deps, ws: string, wb: WorkbenchClient, repo: string) {
+  const found = (await upstream(deps.workspaceRepos(ws, wb, parseRepo(repo)!.workspace))).find((r) => r.name.toLowerCase() === repo.toLowerCase());
   if (!found) throw new HttpError(404, `${repo} not found in Bitbucket`);
-  return deps.myRepos.add(uid, { name: found.name, mainBranch: found.mainBranch });
+  return deps.myRepos.add(ws, { name: found.name, mainBranch: found.mainBranch });
 }

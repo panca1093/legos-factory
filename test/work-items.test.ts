@@ -490,10 +490,10 @@ describe('link a found PR', () => {
     expect((await linkIt(s)).status).toBe(502);
   });
 
-  it('keeps owners apart', async () => {
+  it('keeps workspaces apart', async () => {
     const s = await ready();
     s.items.create('u2', 'PROJ-2');
-    s.db.prepare(`insert into user_repos (owner, repo_key, name, main_branch, added_at) values ('u2', 'acme/api', 'acme/api', 'main', 'x')`).run();
+    s.db.prepare(`insert into workspace_repos (workspace_id, repo_key, name, main_branch, added_at) values ('u2', 'acme/api', 'acme/api', 'main', 'x')`).run();
     s.items.addRepo('u2', 'PROJ-2', 'acme/api');
     expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' }, 'PROJ-2')).status).toBe(404);
     expect(s.items.links('u2', 'PROJ-2')).toEqual([]);

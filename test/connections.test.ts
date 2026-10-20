@@ -21,7 +21,7 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   const path = join(mkdtempSync(join(tmpdir(), 'lf-conn-')), 'factory.db');
   const db = openDb(path);
   // a second view on the same rows as the app's own (sign-in off: everything belongs to 'local')
-  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', db, owner: 'local', fetch: fetchFn });
+  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', db, workspaceId: 'local', fetch: fetchFn });
   const runs = new RunManager(alive);
   const app = createApp(runs, { db, selfUrl: 'http://localhost:4317', fetch: fetchFn, hubUrl: opts.hub ? 'https://hub.test' : null });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });

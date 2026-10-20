@@ -17,6 +17,8 @@ import { myReposRoutes } from './routes/my-repos.ts';
 import { prsRoutes } from './routes/prs.ts';
 import { runsRoutes } from './routes/runs.ts';
 import { workItemsRoutes } from './routes/work-items.ts';
+import { workspacesRoutes } from './routes/workspaces.ts';
+import { Workspaces, allowed } from './tenancy.ts';
 import { Workbench } from './workbench.ts';
 import { WorkItems } from './work-items.ts';
 import { createWorkspace, managedWorkspace, parseRepo, removeWorkspace, workspacePath, workspacesDir } from './workspace.ts';
@@ -24,7 +26,7 @@ import { createWorkspace, managedWorkspace, parseRepo, removeWorkspace, workspac
 export type { AppOptions } from './http.ts';
 export { nameFromEmail, type ReviewRequest } from './routes/prs.ts';
 
-// whoever runs everything when sign-in is off (LEGOS_AUTH=off)
+// whoever runs everything when sign-in is off (LEGOS_AUTH=off), in their own personal workspace
 const LOCAL_UID = 'local';
 
 export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildDeps(runs, opts)) {
@@ -37,7 +39,13 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
     if (c.req.method !== 'GET' && c.req.header('x-legos') !== '1') return c.json({ error: 'missing x-legos header' }, 403);
     const user = users?.verify(getCookie(c, SID_COOKIE)) ?? null;
     if (users && !user) return c.json({ error: 'sign in required' }, 401);
-    c.set('uid', user?.id ?? LOCAL_UID);
+    const uid = user?.id ?? LOCAL_UID;
+    deps.workspaces.ensurePersonal(uid, user?.name ?? 'Local');
+    const { id, role } = deps.workspaces.active(uid);
+    if (!allowed(role, c.req.method, c.req.path)) return c.json({ error: `the ${role} role cannot do this in this workspace` }, 403);
+    c.set('uid', uid);
+    c.set('ws', id);
+    c.set('role', role);
     await next();
   });
 
@@ -48,6 +56,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
   app.route('/', jiraRoutes(deps));
   app.route('/', myReposRoutes(deps));
   app.route('/', workItemsRoutes(deps));
+  app.route('/', workspacesRoutes(deps));
   app.onError(onError);
   return app;
 }
@@ -55,6 +64,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
 export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   const users = opts.users ?? null;
   const db = opts.db ?? openDb(':memory:');
+  const workspaces = new Workspaces(db);
   const activity = new ActivityLog(db);
   const myRepos = new MyRepos(db);
   const workItems = new WorkItems(db);
@@ -62,23 +72,23 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   const selfUrl = opts.selfUrl ?? 'http://localhost:4317';
   const callbackUrl = `${selfUrl}/auth/callback`;
   const pending = new Map<string, Pending>();
-  const connsByOwner = new Map<string, Connections>();
-  const connsFor = (owner: string) => {
-    if (!connsByOwner.has(owner)) connsByOwner.set(owner, new Connections({ callbackUrl, db, owner, fetch: http, pending }));
-    return connsByOwner.get(owner)!;
+  const connsByWorkspace = new Map<string, Connections>();
+  const connsFor = (workspaceId: string) => {
+    if (!connsByWorkspace.has(workspaceId)) connsByWorkspace.set(workspaceId, new Connections({ callbackUrl, db, workspaceId, fetch: http, pending }));
+    return connsByWorkspace.get(workspaceId)!;
   };
   const grants = new Map<string, string>();
   const wsRoot = opts.workspaces ?? workspacesDir();
   const clones = new Map<string, string>();
   const busyIn = (path: string) => [...runs.activeRunBySession().values(), ...clones.keys()].some((id) => runs.get(id)?.cwd === path && !runs.get(id)?.endedAt);
   const clients = new Map<string, Workbench>();
-  const workbench = async (owner: string): Promise<WorkbenchClient | null> => {
-    const wb = await connsFor(owner).workbench();
+  const workbench = async (workspaceId: string): Promise<WorkbenchClient | null> => {
+    const wb = await connsFor(workspaceId).workbench();
     if (!wb) return null;
     if (!clients.has(wb.url)) clients.set(wb.url, new Workbench(wb.url, http));
     return { client: clients.get(wb.url)!, token: wb.token };
   };
-  const ownsRun = (uid: string, runId: string) => runs.get(runId)?.owner === uid;
+  const ownsRun = (workspaceId: string, runId: string) => runs.get(runId)?.workspaceId === workspaceId;
   const startRun = (req: StartRequest, mcpNames: string[] = []) => {
     const repoRun = !!req.repo && !!managedWorkspace(wsRoot, req.cwd);
     if (!repoRun && !mcpNames.length) return runs.start(req);
@@ -92,16 +102,16 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     start: startRun,
     prepare: async (q) => {
       const repo = parseRepo(q.repo)!;
-      const path = workspacePath(wsRoot, q.owner, repo, `pr-${q.prId}`);
+      const path = workspacePath(wsRoot, q.workspaceId, repo, `pr-${q.prId}`);
       if (busyIn(path)) throw new Error(`a run is already working in ${path.split('/').pop()}`);
       const author = users?.get(q.owner);
-      return createWorkspace({ path, repo, branch: q.branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, q.owner, repo), author });
+      return createWorkspace({ path, repo, branch: q.branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, q.workspaceId, repo), author });
     },
     cleanup: async (_q, cwd) => {
       if (!busyIn(cwd)) await removeWorkspace(wsRoot, cwd);
     },
     reply: async (q, item, text) => {
-      const wb = await workbench(q.owner);
+      const wb = await workbench(q.workspaceId);
       if (!wb) throw new Error(NO_WB);
       const repo = parseRepo(q.repo)!;
       await wb.client.bitbucketAddComment(wb.token, repo.workspace, repo.slug, q.prId, text, item.path && item.line ? { path: item.path, line: item.line } : undefined);
@@ -117,16 +127,16 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
       // the PR is found from the clone's branch, so capture it before the clone goes
       void capturePr(deps, run, clone)
         .then(() => {
-          if (run.ticket && run.stage) void syncWorkItem(deps, run.owner, run.ticket);
+          if (run.ticket && run.stage) void syncWorkItem(deps, run.workspaceId, run.ticket);
           if (!busyIn(clone)) return removeWorkspace(wsRoot, clone);
         })
         .catch((err) => console.warn('workspace cleanup failed:', err.message));
     }
     void activity
-      .record(m.run, m.run.owner)
+      .record(m.run, m.run.workspaceId)
       .then(async (item) => {
         if (!item || item.share === 'private' || !opts.hubUrl) return;
-        const wb = await workbench(m.run.owner);
+        const wb = await workbench(m.run.workspaceId);
         if (!wb) return;
         const res = await http(`${opts.hubUrl}/hub/events`, {
           method: 'POST',
@@ -142,8 +152,8 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
   const repoCache = new Map<string, { at: number; repos: Repos }>();
   // concurrent callers join the same load
   const repoLoads = new Map<string, Promise<Repos>>();
-  const workspaceRepos = (uid: string, wb: WorkbenchClient, workspace: string, refresh = false): Promise<Repos> => {
-    const key = `${uid}:${workspace}`;
+  const workspaceRepos = (workspaceId: string, wb: WorkbenchClient, workspace: string, refresh = false): Promise<Repos> => {
+    const key = `${workspaceId}:${workspace}`;
     const hit = repoCache.get(key);
     if (hit && Date.now() - hit.at < 3600_000 && !refresh) return Promise.resolve(hit.repos);
     let load = repoLoads.get(key);
@@ -157,6 +167,6 @@ export function buildDeps(runs: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, opts, users, db, activity, myRepos, workItems, syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, clones, busyIn, ownsRun };
+  const deps: Deps = { runs, opts, users, workspaces, db, activity, myRepos, workItems, syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, clones, busyIn, ownsRun };
   return deps;
 }

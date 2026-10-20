@@ -69,7 +69,7 @@ describe('repo workspaces', () => {
   it('parses repo refs and recognises only its own paths', () => {
     expect(parseRepo('acme/app')).toEqual({ workspace: 'acme', slug: 'app' });
     for (const bad of ['acme', 'acme/app/x', '../app', 'acme/..', 'ac me/app', '']) expect(parseRepo(bad)).toBeNull();
-    expect(managedWorkspace('/ws', '/ws/u1/acme/app/PROJ-1')).toEqual({ owner: 'u1', repo: { workspace: 'acme', slug: 'app' }, key: 'PROJ-1' });
+    expect(managedWorkspace('/ws', '/ws/u1/acme/app/PROJ-1')).toEqual({ workspaceId: 'u1', repo: { workspace: 'acme', slug: 'app' }, key: 'PROJ-1' });
     expect(managedWorkspace('/ws', '/ws/u1/acme/app')).toBeNull();
     expect(managedWorkspace('/ws', '/elsewhere/u1/acme/app/PROJ-1')).toBeNull();
   });

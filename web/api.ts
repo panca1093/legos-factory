@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -43,7 +43,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
-export type { Stage, WorkItem };
+export type { Role, Stage, WorkItem, WorkspaceInfo, WorkspaceMember };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -64,6 +64,12 @@ export type JiraIssue = JiraRow & {
 export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null; dev: JiraDev | null };
 
 export const api = {
+  workspaces: () => call<{ active: string; workspaces: WorkspaceInfo[] }>('/api/workspaces'),
+  createWorkspace: (name: string) => call<WorkspaceInfo>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
+  switchWorkspace: (id: string) => call<{ ok: true }>('/api/workspaces/active', { method: 'POST', body: JSON.stringify({ id }) }),
+  members: (id: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`),
+  setMember: (id: string, user: string, role: Role) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`, { method: 'PUT', body: JSON.stringify({ user, role }) }),
+  removeMember: (id: string, userId: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members/${userId}`, { method: 'DELETE' }),
   myActivity: (days: number) => call<{ items: ActivityItem[] }>(`/api/activity/me?days=${days}`),
   team: (days: number) => call<{ configured: boolean; me?: string; members?: TeamMember[] }>(`/api/team?days=${days}`),
   integrations: () => call<{ integrations: Integration[] }>('/api/workbench/integrations'),

@@ -83,7 +83,7 @@ describe('pull requests', () => {
     await connectWorkbench();
     // a run on a repo that is not in my repos doesn't make it a candidate
     const now = new Date().toISOString();
-    await new ActivityLog(db).record({ id: 'r1', owner: 'local', repo: 'acme/legacy', ticket: 'PROJ-7', sessionId: null, cwd: '/x', prompt: 'p', kind: 'task', status: 'completed', startedAt: now, lastEventAt: now } as Run, 'local');
+    await new ActivityLog(db).record({ id: 'r1', workspaceId: 'local', owner: 'local', repo: 'acme/legacy', ticket: 'PROJ-7', sessionId: null, cwd: '/x', prompt: 'p', kind: 'task', status: 'completed', startedAt: now, lastEventAt: now } as Run, 'local');
 
     const res = await (await req('/api/prs?ticket=PROJ-7&repos=acme/other')).json();
     expect(res.searched).toEqual(['acme/api', 'acme/web']);

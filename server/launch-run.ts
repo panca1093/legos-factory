@@ -40,11 +40,11 @@ const STAGE_GUIDE: Record<Stage, (ticket: string) => string> = {
 
 export type LaunchRequest = z.output<typeof launchSchema>;
 
-// Runs in cwd or a fresh clone of repo, with the owner's connections reached through this app's proxy.
-export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Promise<Run> {
+// Runs in cwd or a fresh clone of repo, with the workspace's connections reached through this app's proxy.
+export async function launchRun(deps: Deps, { uid, ws }: { uid: string; ws: string }, req: LaunchRequest): Promise<Run> {
   const { runs, activity, opts, wsRoot } = deps;
   const { prompt, branch, permissionMode, resume, model, kind } = req;
-  if (resume && !activity.ownsSession(uid, resume)) throw new HttpError(404, 'session not found');
+  if (resume && !activity.ownsSession(ws, resume)) throw new HttpError(404, 'session not found');
   if (resume && runs.activeRunBySession().has(resume)) throw new HttpError(409, 'session already has an active run');
   if (req.ticket && !req.stage) throw new HttpError(400, 'a ticket run needs a stage: design or build');
   const stage = req.ticket ? req.stage! : null;
@@ -56,14 +56,14 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   if (req.repo) {
     const repo = parseRepo(req.repo);
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
-    requireMyRepo(deps, uid, req.repo);
-    if (stage && !deps.workItems.hasRepo(uid, req.ticket, req.repo)) throw new HttpError(409, `add ${req.repo} to ${req.ticket}'s work item first`, { needWorkItem: true });
+    requireMyRepo(deps, ws, req.repo);
+    if (stage && !deps.workItems.hasRepo(ws, req.ticket, req.repo)) throw new HttpError(409, `add ${req.repo} to ${req.ticket}'s work item first`, { needWorkItem: true });
     const key = req.ticket || `run-${randomBytes(4).toString('hex')}`;
-    clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
+    clone = { path: workspacePath(wsRoot, ws, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
-    if (m.owner !== uid) throw new HttpError(404, 'session not found');
-    requireMyRepo(deps, uid, `${m.repo.workspace}/${m.repo.slug}`);
+    if (m.workspaceId !== ws) throw new HttpError(404, 'session not found');
+    requireMyRepo(deps, ws, `${m.repo.workspace}/${m.repo.slug}`);
     clone = { path: cwd, repo: m.repo };
   }
   if (clone) {
@@ -71,7 +71,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     cwd = clone.path;
     const { repo } = clone;
     const author = deps.users?.get(uid);
-    if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo, branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, uid, repo), author }));
+    if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo, branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, ws, repo), author }));
   } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
     throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
   } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
@@ -81,8 +81,8 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
   const ticket = req.ticket || null;
   const share = req.share ?? shareFor(cwd, settings);
-  const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
-  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt, permissionMode, resume, model, ticket, stage, share }, connected));
-  if (stage && deps.workItems.get(uid, req.ticket)) void syncWorkItem(deps, uid, req.ticket);
+  const connected = opts.selfUrl ? (await deps.connsFor(ws).all()).filter((x) => x.connected).map((x) => x.name) : [];
+  const run = started(deps.startRun({ workspaceId: ws, owner: uid, repo, kind, cwd, prompt: stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt, permissionMode, resume, model, ticket, stage, share }, connected));
+  if (stage && deps.workItems.get(ws, req.ticket)) void syncWorkItem(deps, ws, req.ticket);
   return run;
 }

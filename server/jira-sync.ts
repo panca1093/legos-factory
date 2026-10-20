@@ -32,12 +32,12 @@ export function planMoves(flow: JiraFlow, status: string | null, f: Facts): { mo
   return { moves, skipped: null };
 }
 
-const syncKey = (owner: string, ticket: string) => `${owner}\n${ticket}`;
+const syncKey = (workspaceId: string, ticket: string) => `${workspaceId}\n${ticket}`;
 
 // One sync at a time per work item: a second call runs after the first. Never rejects.
-export function syncWorkItem(deps: Deps, owner: string, ticket: string): Promise<void> {
-  const key = syncKey(owner, ticket);
-  const run = (deps.syncs.get(key) ?? Promise.resolve()).then(() => syncOnce(deps, owner, ticket)).catch((err) => console.warn(`sync of ${ticket} failed:`, errMsg(err)));
+export function syncWorkItem(deps: Deps, workspaceId: string, ticket: string): Promise<void> {
+  const key = syncKey(workspaceId, ticket);
+  const run = (deps.syncs.get(key) ?? Promise.resolve()).then(() => syncOnce(deps, workspaceId, ticket)).catch((err) => console.warn(`sync of ${ticket} failed:`, errMsg(err)));
   deps.syncs.set(key, run);
   void run.finally(() => deps.syncs.get(key) === run && deps.syncs.delete(key));
   return run;
@@ -45,25 +45,25 @@ export function syncWorkItem(deps: Deps, owner: string, ticket: string): Promise
 
 const CAPTURE_FAILED = 'Error: PR capture failed';
 
-async function syncOnce(deps: Deps, owner: string, ticket: string) {
+async function syncOnce(deps: Deps, workspaceId: string, ticket: string) {
   const { workItems } = deps;
-  const item = workItems.get(owner, ticket);
+  const item = workItems.get(workspaceId, ticket);
   if (!item) return;
   // an error outranks a skip; a clean sync clears the note, but a PR capture failure outranks both until its repo gets a link
   let issue: string | null = null;
   const note = (text: string) => void (issue?.startsWith('Error') || (issue = text));
   try {
-    const wb = await deps.workbench(owner);
+    const wb = await deps.workbench(workspaceId);
     if (!wb) throw new Error(NO_WB);
     const { client, token } = wb;
-    for (const l of workItems.links(owner, ticket)) {
+    for (const l of workItems.links(workspaceId, ticket)) {
       const repo = parseRepo(l.repo)!;
       try {
         const pr = await client.bitbucketPr(token, repo.workspace, repo.slug, l.prId);
-        workItems.update(owner, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
+        workItems.update(workspaceId, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
         if (l.commented) continue;
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
-        workItems.update(owner, ticket, l.repo, l.prId, { commented: true });
+        workItems.update(workspaceId, ticket, l.repo, l.prId, { commented: true });
         await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
       } catch (err) {
         note(`Error: ${l.repo} #${l.prId}: ${errMsg(err)}`);
@@ -71,7 +71,7 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
     }
 
     const { jiraFlow: flow } = await loadSettings();
-    const facts: Facts = { started: deps.activity.workedOn(owner, ticket), repos: workItems.repos(owner, ticket).map((r) => r.name), links: workItems.links(owner, ticket) };
+    const facts: Facts = { started: deps.activity.workedOn(workspaceId, ticket), repos: workItems.repos(workspaceId, ticket).map((r) => r.name), links: workItems.links(workspaceId, ticket) };
     let status = await client.jiraStatus(token, ticket);
     const plan = planMoves(flow, status, facts);
     let skipped = plan.skipped;
@@ -90,21 +90,21 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
       status = await client.jiraStatus(token, ticket);
     }
     if (skipped) note(`Skipped ${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
-    const done = same(status, flow.readyForQa) || everyRepo({ ...facts, links: workItems.links(owner, ticket) }, ['MERGED']);
-    workItems.setStatus(owner, ticket, status, status === null ? item.done : done);
+    const done = same(status, flow.readyForQa) || everyRepo({ ...facts, links: workItems.links(workspaceId, ticket) }, ['MERGED']);
+    workItems.setStatus(workspaceId, ticket, status, status === null ? item.done : done);
   } catch (err) {
     note(`Error: ${errMsg(err)}`);
   }
   // re-read: a capture may have failed while this sync ran
-  if (!workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(owner, ticket, issue);
+  if (!workItems.get(workspaceId, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(workspaceId, ticket, issue);
 }
 
-// The periodic pass: work items not yet at Ready for QA or fully merged, of owners with a connected workbench.
+// The periodic pass: work items not yet at Ready for QA or fully merged, of workspaces with a connected workbench.
 export async function syncDue(deps: Deps): Promise<void> {
-  const due = deps.workItems.pending().filter((i) => !deps.syncs.has(syncKey(i.owner, i.ticket)));
+  const due = deps.workItems.pending().filter((i) => !deps.syncs.has(syncKey(i.workspaceId, i.ticket)));
   const connected = new Map<string, boolean>();
-  for (const owner of new Set(due.map((i) => i.owner))) connected.set(owner, !!(await deps.workbench(owner).catch(() => null)));
-  await Promise.all(due.filter((i) => connected.get(i.owner)).map((i) => syncWorkItem(deps, i.owner, i.ticket)));
+  for (const workspaceId of new Set(due.map((i) => i.workspaceId))) connected.set(workspaceId, !!(await deps.workbench(workspaceId).catch(() => null)));
+  await Promise.all(due.filter((i) => connected.get(i.workspaceId)).map((i) => syncWorkItem(deps, i.workspaceId, i.ticket)));
 }
 
 export function startSyncLoop(deps: Deps, ms: number) {
@@ -115,19 +115,19 @@ export function startSyncLoop(deps: Deps, ms: number) {
 
 // At the end of a design or build run: the open PR of the branch it left the clone on becomes a link.
 export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: string): Promise<void> {
-  const { owner, ticket, stage, repo } = run;
-  if (!ticket || !stage || !repo || !deps.workItems.hasRepo(owner, ticket, repo)) return;
+  const { workspaceId, ticket, stage, repo } = run;
+  if (!ticket || !stage || !repo || !deps.workItems.hasRepo(workspaceId, ticket, repo)) return;
   try {
     const branch = await gitBranch(cwd);
-    if (!branch || branch === (deps.myRepos.get(owner, repo)?.mainBranch ?? 'main')) return;
-    const wb = await deps.workbench(owner);
+    if (!branch || branch === (deps.myRepos.get(workspaceId, repo)?.mainBranch ?? 'main')) return;
+    const wb = await deps.workbench(workspaceId);
     if (!wb) throw new Error(NO_WB);
     const ref = parseRepo(repo)!;
     const pr = (await wb.client.bitbucketPrs(wb.token, ref.workspace, ref.slug, 'OPEN')).find((p) => p.source === branch);
     if (!pr) return;
-    deps.workItems.link(owner, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, runId: run.id });
-    if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(`${CAPTURE_FAILED} in ${repo}:`)) deps.workItems.setNote(owner, ticket, null);
+    deps.workItems.link(workspaceId, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, runId: run.id });
+    if (deps.workItems.get(workspaceId, ticket)?.note?.text.startsWith(`${CAPTURE_FAILED} in ${repo}:`)) deps.workItems.setNote(workspaceId, ticket, null);
   } catch (err) {
-    deps.workItems.setNote(owner, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);
+    deps.workItems.setNote(workspaceId, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);
   }
 }

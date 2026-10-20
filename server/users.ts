@@ -54,6 +54,13 @@ export class Users {
     return r && this.toUser(r);
   }
 
+  // Everyone an id, e-mail address or local name points at, for adding members to a workspace.
+  find(who: string): User[] {
+    return this.db
+      .prepare(`select id, kind, name, email from users where id = ? or lower(email) = lower(?) or (kind = 'pin' and name = ? collate nocase) order by created_at`)
+      .all(who, who, who) as User[];
+  }
+
   async createPin(name: string, pin: string): Promise<{ user: User; cookie: string }> {
     if (!PIN_RE.test(pin)) throw new Error('PIN must be 6 digits');
     if (this.row(`kind = 'pin' and name = ? collate nocase`, name)) throw new Error(`a user named ${name} already exists`);

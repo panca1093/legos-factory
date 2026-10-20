@@ -27,6 +27,7 @@ export type FixDeps = {
 };
 
 export type NewQueue = {
+  workspaceId: string;
   owner: string;
   repo: string;
   prId: number;
@@ -94,18 +95,19 @@ export class FixQueues {
   }
 
   // The newest queue for a PR, open or not, so the page can show how the last one went.
-  forPr(owner: string, repo: string, prId: number): FixQueue | null {
-    const mine = [...this.queues.values()].filter((q) => q.owner === owner && q.repo === repo && q.prId === prId);
+  forPr(workspaceId: string, repo: string, prId: number): FixQueue | null {
+    const mine = [...this.queues.values()].filter((q) => q.workspaceId === workspaceId && q.repo === repo && q.prId === prId);
     return mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   }
 
   create(req: NewQueue): FixQueue {
-    const last = this.forPr(req.owner, req.repo, req.prId);
+    const last = this.forPr(req.workspaceId, req.repo, req.prId);
     if (last && OPEN.includes(last.status))
       throw Object.assign(new Error('the factory is already working on this PR'), { status: 409 });
     const now = new Date().toISOString();
     const q: FixQueue = {
       id: randomUUID(),
+      workspaceId: req.workspaceId,
       owner: req.owner,
       repo: req.repo,
       prId: req.prId,
@@ -199,6 +201,7 @@ export class FixQueues {
 
   private start(q: FixQueue, item: FixItem, prompt: string, fixing: boolean) {
     const run = (this.deps.start ?? ((r) => this.runs.start(r)))({
+      workspaceId: q.workspaceId,
       owner: q.owner,
       repo: q.repo,
       kind: 'task',

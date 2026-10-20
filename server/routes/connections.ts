@@ -30,18 +30,18 @@ export function connectionsRoutes(deps: Deps) {
     const run = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '');
     if (!run) return c.json({ error: 'unknown run' }, 403);
     const ws = managedWorkspace(wsRoot, run.cwd);
-    if (!ws || ws.owner !== run.owner || run.repo !== `${ws.repo.workspace}/${ws.repo.slug}`) return c.json({ error: 'run has no repo' }, 403);
-    requireMyRepo(deps, run.owner, run.repo);
-    const token = await gitToken(deps, run.owner, ws.repo);
+    if (!ws || ws.workspaceId !== run.workspaceId || run.repo !== `${ws.repo.workspace}/${ws.repo.slug}`) return c.json({ error: 'run has no repo' }, 403);
+    requireMyRepo(deps, run.workspaceId, run.repo);
+    const token = await gitToken(deps, run.workspaceId, ws.repo);
     return c.text(`username=x-token-auth\npassword=${token}\n`, 200, { 'cache-control': 'no-store' });
   });
 
   // Claude Code processes reach Settings connections through here; credentials are attached fresh on every request.
   routes.all('/mcp/:name', async (c) => {
     if (!localOnly(c.req.header('host'))) return c.text('forbidden host', 403);
-    const owner = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '')?.owner;
-    if (owner === undefined) return c.json({ error: 'unknown run' }, 403);
-    const conns = connsFor(owner);
+    const workspaceId = runs.get(grants.get(c.req.header('x-legos-run') ?? '') ?? '')?.workspaceId;
+    if (workspaceId === undefined) return c.json({ error: 'unknown run' }, 403);
+    const conns = connsFor(workspaceId);
     const name = c.req.param('name');
     const [url, creds] = await Promise.all([conns.url(name), conns.headersFor(name)]);
     if (!url) return c.json({ error: 'unknown connection' }, 404);
@@ -65,24 +65,24 @@ export function connectionsRoutes(deps: Deps) {
     return new Response(upstream.body, { status: upstream.status, headers: out });
   });
 
-  routes.get('/api/connections', async (c) => c.json({ connections: await connsFor(c.get('uid')).all() }));
+  routes.get('/api/connections', async (c) => c.json({ connections: await connsFor(c.get('ws')).all() }));
 
   routes.post('/api/connections', async (c) => {
     const b = parse(newConnSchema, await readBody(c));
-    return c.json(await domain(connsFor(c.get('uid')).add({ name: b.name, kind: b.kind as ConnKind, url: b.url, auth: b.auth as ConnAuth, headers: b.headers })), 201);
+    return c.json(await domain(connsFor(c.get('ws')).add({ name: b.name, kind: b.kind as ConnKind, url: b.url, auth: b.auth as ConnAuth, headers: b.headers })), 201);
   });
 
   routes.delete('/api/connections/:name', async (c) => {
-    await domain(connsFor(c.get('uid')).remove(c.req.param('name')));
+    await domain(connsFor(c.get('ws')).remove(c.req.param('name')));
     return c.json({ ok: true });
   });
 
   routes.post('/api/connections/:name/connect', async (c) => {
-    return c.json({ url: await domain(connsFor(c.get('uid')).startOAuth(c.req.param('name'))) });
+    return c.json({ url: await domain(connsFor(c.get('ws')).startOAuth(c.req.param('name'))) });
   });
 
   routes.post('/api/connections/:name/disconnect', async (c) => {
-    await domain(connsFor(c.get('uid')).disconnect(c.req.param('name')));
+    await domain(connsFor(c.get('ws')).disconnect(c.req.param('name')));
     return c.json({ ok: true });
   });
 

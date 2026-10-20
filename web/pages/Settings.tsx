@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo, type Role, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
@@ -27,12 +27,126 @@ export function SettingsPage() {
               <p className="lead">Servers your chats and tasks can reach, and the repos you work on.</p>
             </div>
           </div>
+          <Workspace />
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           <Repositories />
         </div>
       </div>
     </Frame>
+  );
+}
+
+// Where your connections, repos and runs live: your own, or a team's. Members share what a workspace holds.
+function Workspace() {
+  const [list, setList] = useState<{ active: string; workspaces: WorkspaceInfo[] } | null>(null);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [who, setWho] = useState('');
+  const [role, setRole] = useState<Role>('member');
+  const current = list?.workspaces.find((w) => w.id === list.active);
+  const load = () => api.workspaces().then(setList, (e) => setErr(e.message));
+  useEffect(() => void load(), []);
+  useEffect(() => {
+    if (current?.kind === 'team') api.members(current.id).then((r) => setMembers(r.members), (e) => setErr(e.message));
+    else setMembers([]);
+  }, [current?.id]);
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  // everything on screen belongs to the old workspace
+  const switchTo = (id: string) => act(async () => (await api.switchWorkspace(id), location.reload()));
+  const manage = current?.kind === 'team' && current.role === 'owner';
+  return (
+    <>
+      <div className="sectionbar">
+        <h2>Workspace</h2>
+      </div>
+      {err && <p className="error">{err}</p>}
+      {list && (
+        <div className="pr-box name-box">
+          <label className="field">
+            <span>Working in</span>
+            <select className="input" value={list.active} onChange={(e) => void switchTo(e.target.value)}>
+              {list.workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} · {w.kind === 'personal' ? 'personal' : w.role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <form
+            className="pr-reply-actions"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void act(async () => (await switchTo((await api.createWorkspace(name.trim())).id), setName('')));
+            }}
+          >
+            <input className="input sm" value={name} maxLength={64} placeholder="New team workspace" onChange={(e) => setName(e.target.value)} />
+            <button className="btn sm" disabled={!name.trim()}>
+              Create
+            </button>
+          </form>
+        </div>
+      )}
+      {current?.kind === 'team' && (
+        <div className="section-list">
+          {members.map((m) => (
+            <div key={m.userId} className="row">
+              <div className="copy">
+                <b>{m.name}</b>
+                <span>{m.email ?? 'local user'}</span>
+              </div>
+              <div className="actions">
+                {manage ? (
+                  <select className="input sm" value={m.role} onChange={(e) => void act(async () => setMembers((await api.setMember(current.id, m.userId, e.target.value as Role)).members))}>
+                    {(['owner', 'member', 'viewer'] as Role[]).map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="muted">{m.role}</span>
+                )}
+                {manage && (
+                  <button className="btn sm ghost" onClick={() => void act(async () => setMembers((await api.removeMember(current.id, m.userId)).members))}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {manage && (
+            <form
+              className="row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(async () => (setMembers((await api.setMember(current.id, who.trim(), role)).members), setWho('')));
+              }}
+            >
+              <div className="copy">
+                <input className="input sm" value={who} placeholder="Name or e-mail of someone who has signed in" onChange={(e) => setWho(e.target.value)} />
+              </div>
+              <div className="actions">
+                <select className="input sm" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+                  {(['owner', 'member', 'viewer'] as Role[]).map((r) => (
+                    <option key={r}>{r}</option>
+                  ))}
+                </select>
+                <button className="btn sm" disabled={!who.trim()}>
+                  Add
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

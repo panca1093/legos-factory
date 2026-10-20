@@ -5,8 +5,8 @@ import { PIN_RE } from '../users.ts';
 import { HttpError, domain, errMsg, localOnly, parse, readBody, text, type Deps, type Env } from '../http.ts';
 
 export const SID_COOKIE = 'lf_sid';
-// owner of sign-in's own workbench client registration; no user has an empty id
-const LOGIN_OWNER = '';
+// workspace id of sign-in's own workbench client registration; no workspace has an empty id
+const LOGIN_WORKSPACE = '';
 const ATTEMPT_RE = /^[\w-]{16,64}$/;
 const ATTEMPT_TTL_MS = 10 * 60_000;
 const page = (title: string, body: string, close = false, link = '/#/settings', linkText = 'Open Settings') =>
@@ -23,7 +23,7 @@ const attemptSchema = z.object({ attempt: text().refine((a) => !a || ATTEMPT_RE.
 // Lax, not Strict: the workbench callback is a cross-site redirect that must still set it.
 const signedIn = (c: Context, cookie: string) => setCookie(c, SID_COOKIE, cookie, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 30 * 24 * 3600 });
 
-export function authRoutes({ users, opts, connsFor, pending }: Deps) {
+export function authRoutes({ users, workspaces, opts, connsFor, pending }: Deps) {
   const routes = new Hono<Env>();
   // workbench sign-in: OAuth state -> the attempt the app is polling, and finished attempts -> cookie
   const attempts = new Map<string, { attempt: string; at: number }>();
@@ -32,7 +32,7 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
     for (const [k, v] of m) if (Date.now() - v.at > ATTEMPT_TTL_MS) m.delete(k);
   };
   const startWorkbenchLogin = async (workbenchUrl: string, attempt: string) => {
-    const lc = connsFor(LOGIN_OWNER);
+    const lc = connsFor(LOGIN_WORKSPACE);
     if (!(await lc.all()).some((x) => x.name === 'workbench')) await lc.add({ name: 'workbench', kind: 'workbench', url: workbenchUrl, auth: 'oauth' });
     const url = await lc.startOAuth('workbench');
     prune(attempts);
@@ -57,7 +57,7 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
     return c.json({ authEnabled: true, workbenchLogin, users: users.pinNames(), authenticated: !!user, user });
   });
 
-  // Anyone at this machine may add a local user; each user only ever sees their own runs and connections.
+  // Anyone at this machine may add a local user; each gets a personal workspace of their own.
   routes.post('/auth/users', async (c) => {
     const users = authWrite(c);
     const { name, pin } = parse(newUserSchema, await readBody(c));
@@ -111,15 +111,15 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
   routes.get('/auth/callback', async (c) => {
     const { code, state, error, error_description } = c.req.query();
     if (error || !code || !state) return c.html(page('Connection was not completed', esc(error_description ?? error ?? 'missing code')), 400);
-    const owner = pending.get(state)?.owner;
-    if (owner === LOGIN_OWNER && users) {
+    const workspaceId = pending.get(state)?.workspaceId;
+    if (workspaceId === LOGIN_WORKSPACE && users) {
       try {
-        const r = await connsFor(LOGIN_OWNER).redeem(code, state);
+        const r = await connsFor(LOGIN_WORKSPACE).redeem(code, state);
         const who = r.oauth.user;
         if (!who?.id) throw new Error('workbench did not say who you are');
         const user = users.upsertExternal('workbench', who.id, who.name || who.email || who.id, who.email);
-        // the sign-in tokens double as this user's workbench connection
-        await connsFor(user.id).putOAuth('workbench', 'workbench', r.url, r.oauth);
+        // the sign-in tokens double as the workbench connection of this user's personal workspace
+        await connsFor(workspaces.ensurePersonal(user.id, user.name)).putOAuth('workbench', 'workbench', r.url, r.oauth);
         const cookie = users.issue(user.id);
         signedIn(c, cookie);
         const a = attempts.get(state);
@@ -133,9 +133,9 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
         return c.html(page('Sign-in failed', esc(errMsg(err)), false, '/', 'Back to sign-in'), 400);
       }
     }
-    if (owner === undefined || owner === LOGIN_OWNER) return c.html(page('Connection failed', 'connect expired or was not started here — try again from Settings'), 400);
+    if (workspaceId === undefined || workspaceId === LOGIN_WORKSPACE) return c.html(page('Connection failed', 'connect expired or was not started here — try again from Settings'), 400);
     try {
-      const name = await connsFor(owner).callback(code, state);
+      const name = await connsFor(workspaceId).callback(code, state);
       return c.html(page(`Connected ${esc(name)}`, 'You can close this window and go back to legos-factory.', true));
     } catch (err) {
       return c.html(page('Connection failed', esc(errMsg(err))), 400);
