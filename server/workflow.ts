@@ -80,12 +80,13 @@ export function persona(wf: Workflow, id: Stage): string {
 export const CONVENTIONS = "Before anything else, read this repo's own conventions: CLAUDE.md, AGENTS.md, CONTRIBUTING and its docs folder.";
 
 // The target repo owns its conventions; the factory only says what the stage should produce.
-export function stageGuide(stage: Stage, ticket: string): string {
+export function stageGuide(stage: Stage, ticket: string, titleRule?: string): string {
+  const rule = titleRule ? ` ${titleRule}` : '';
   switch (stage) {
     case 'design':
-      return `${CONVENTIONS} Write the spec for ${ticket} where this repo keeps specs, then open a pull request for it. Put ${ticket} in the branch name and in the PR title, following the repo's title format; a spec PR title carries no deployment tag.`;
+      return `${CONVENTIONS} Write the spec for ${ticket} where this repo keeps specs, then open a pull request for it. Put ${ticket} in the branch name and in the PR title, following the repo's title format.${rule}`;
     case 'build':
-      return `${CONVENTIONS} Implement ${ticket}, verify it, then open a pull request. Put ${ticket} in the branch name and in the PR title, following the repo's title format.`;
+      return `${CONVENTIONS} Implement ${ticket}, verify it, then open a pull request. Put ${ticket} in the branch name and in the PR title, following the repo's title format.${rule}`;
     case 'inspect':
       return `${CONVENTIONS} The pull request for ${ticket} is checked out on this branch. Review it against its spec and the repo's rules. This run is read-only: do not edit, commit or push. List your findings (BLOCKER, COVERAGE, DEBT, NIT), then end with one line: "Verdict: APPROVE", "Verdict: REQUEST_CHANGES" or "Verdict: ABSTAIN".`;
     case 'catalog':

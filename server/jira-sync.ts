@@ -53,19 +53,17 @@ async function syncOnce(deps: Deps, workspaceId: string, ticket: string) {
   let issue: string | null = null;
   const note = (text: string) => void (issue?.startsWith('Error') || (issue = text));
   try {
-    const wb = await deps.workbench(workspaceId);
-    if (!wb) throw new Error(NO_WB);
-    const { client, token } = wb;
+    const [forge, source] = await Promise.all([deps.forge(workspaceId), deps.workSource(workspaceId)]);
+    if (!forge || !source) throw new Error(NO_WB);
     for (const l of workItems.links(workspaceId, ticket)) {
-      const repo = parseRepo(l.repo)!;
       try {
-        const pr = await client.bitbucketPr(token, repo.workspace, repo.slug, l.prId);
+        const pr = await forge.getPr(parseRepo(l.repo)!, l.prId);
         workItems.update(workspaceId, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
         deps.stages.observe(workspaceId, ticket, l, pr);
         if (l.commented) continue;
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
         workItems.update(workspaceId, ticket, l.repo, l.prId, { commented: true });
-        await client.jiraAddComment(token, ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
+        await source.comment(ticket, `${kind} PR for ${l.repo}: ${pr.title} — ${pr.url ?? `#${l.prId}`}`);
       } catch (err) {
         note(`Error: ${l.repo} #${l.prId}: ${errMsg(err)}`);
       }
@@ -73,7 +71,7 @@ async function syncOnce(deps: Deps, workspaceId: string, ticket: string) {
 
     const { jiraFlow: flow } = await loadSettings();
     const facts: Facts = { started: deps.activity.workedOn(workspaceId, ticket), repos: workItems.repos(workspaceId, ticket).map((r) => r.name), links: workItems.links(workspaceId, ticket) };
-    let status = await client.jiraStatus(token, ticket);
+    let status = await source.status(ticket);
     const plan = planMoves(flow, status, facts);
     let skipped = plan.skipped;
     for (const step of plan.moves) {
@@ -81,14 +79,12 @@ async function syncOnce(deps: Deps, workspaceId: string, ticket: string) {
         skipped = step;
         break;
       }
-      const t = (await client.jiraTransitions(token, ticket)).find((x) => same(x.toStatus, step.to));
-      if (!t) {
+      if (!(await source.transitionTo(ticket, step.to))) {
         skipped = null;
         note(`Error: no transition to ${step.to} from ${status}`);
         break;
       }
-      await client.jiraTransition(token, ticket, t.id);
-      status = await client.jiraStatus(token, ticket);
+      status = await source.status(ticket);
     }
     if (skipped) note(`Skipped ${skipped.from} → ${skipped.to}: status was ${status ?? 'unknown'}`);
     const done = same(status, flow.readyForQa) || everyRepo({ ...facts, links: workItems.links(workspaceId, ticket) }, ['MERGED']);
@@ -120,10 +116,9 @@ export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, branch: st
   if (!ticket || (stage !== 'design' && stage !== 'build') || !repo || !deps.workItems.hasRepo(workspaceId, ticket, repo)) return;
   try {
     if (!branch || branch === (deps.myRepos.get(workspaceId, repo)?.mainBranch ?? 'main')) return;
-    const wb = await deps.workbench(workspaceId);
-    if (!wb) throw new Error(NO_WB);
-    const ref = parseRepo(repo)!;
-    const pr = (await wb.client.bitbucketPrs(wb.token, ref.workspace, ref.slug, 'OPEN')).find((p) => p.source === branch);
+    const forge = await deps.forge(workspaceId);
+    if (!forge) throw new Error(NO_WB);
+    const pr = (await forge.listPrs(parseRepo(repo)!, 'OPEN')).find((p) => p.source === branch);
     if (!pr) return;
     deps.workItems.link(workspaceId, ticket, { repo, kind: stage === 'design' ? 'spec' : 'impl', prId: pr.id, branch, title: pr.title, state: pr.state, runId: run.id });
     if (deps.workItems.get(workspaceId, ticket)?.note?.text.startsWith(`${CAPTURE_FAILED} in ${repo}:`)) deps.workItems.setNote(workspaceId, ticket, null);

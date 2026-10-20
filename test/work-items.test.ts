@@ -229,17 +229,17 @@ describe('jira sync', () => {
   it('does not retry a comment that failed and records an error', async () => {
     const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
-    const orig = s.deps.workbench;
-    s.deps.workbench = async (o: string) => {
-      const wb = await orig(o);
-      if (wb) wb.client.jiraAddComment = async () => Promise.reject(new Error('timed out'));
-      return wb;
+    const orig = s.deps.workSource;
+    s.deps.workSource = async (o: string) => {
+      const source = await orig(o);
+      if (source) source.comment = async () => Promise.reject(new Error('timed out'));
+      return source;
     };
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     const body = await s.item();
     expect(body.links[0].commented).toBe(true);
     expect(body.note.text).toMatch(/^Error: .*timed out/);
-    s.deps.workbench = orig;
+    s.deps.workSource = orig;
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect(s.tools('jira_add_comment')).toEqual([]);
   });
@@ -276,14 +276,14 @@ describe('jira sync', () => {
     const s = setup({ status: 'Code Review', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
     const failure = 'Error: PR capture failed in acme/api: boom';
-    const orig = s.deps.workbench;
-    s.deps.workbench = async (o: string) => {
-      const wb = await orig(o);
-      if (wb) {
-        const get = wb.client.bitbucketPr.bind(wb.client);
-        wb.client.bitbucketPr = async (...a: Parameters<typeof get>) => (s.items.setNote('local', 'PROJ-1', failure), get(...a));
+    const orig = s.deps.forge;
+    s.deps.forge = async (o: string) => {
+      const forge = await orig(o);
+      if (forge) {
+        const get = forge.getPr.bind(forge);
+        forge.getPr = async (...a: Parameters<typeof get>) => (s.items.setNote('local', 'PROJ-1', failure), get(...a));
       }
-      return wb;
+      return forge;
     };
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note.text).toBe(failure);

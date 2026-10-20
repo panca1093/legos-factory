@@ -11,6 +11,7 @@ import { MyRepos } from './my-repos.ts';
 import { HttpError, NO_WB, gitToken, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
 import { FixQueues } from './pr-fixes.ts';
 import { RunnerRegistry } from './runner-auth.ts';
+import type { Forge } from './ports.ts';
 import { Runner, localTransport } from './runner.ts';
 import { Runs } from './runs.ts';
 import { StageStore, onRunFinished, settle } from './stages.ts';
@@ -24,6 +25,8 @@ import { runsRoutes } from './routes/runs.ts';
 import { workItemsRoutes } from './routes/work-items.ts';
 import { workspacesRoutes } from './routes/workspaces.ts';
 import { Workspaces, allowed } from './tenancy.ts';
+import { bitbucketForge } from './providers/bitbucket-workbench.ts';
+import { jiraWorkSource } from './providers/jira-workbench.ts';
 import { Workbench } from './workbench.ts';
 import { WorkItems } from './work-items.ts';
 import { loadWorkflow } from './workflow.ts';
@@ -108,6 +111,14 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
     if (!clients.has(wb.url)) clients.set(wb.url, new Workbench(wb.url, http));
     return { client: clients.get(wb.url)!, token: wb.token };
   };
+  const forge = async (workspaceId: string) => {
+    const wb = await workbench(workspaceId);
+    return wb && bitbucketForge(wb.client, wb.token);
+  };
+  const workSource = async (workspaceId: string) => {
+    const wb = await workbench(workspaceId);
+    return wb && jiraWorkSource(wb.client, wb.token);
+  };
   const ownsRun = (workspaceId: string, runId: string) => runs.get(runId)?.workspaceId === workspaceId;
   const startRun: Deps['startRun'] = (req, mcpNames = []) => {
     const gitHelper = !!req.repo && (!!req.clone || !!managedWorkspace(wsRoot, req.cwd));
@@ -131,10 +142,9 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
       if (!busyIn(cwd)) await removeWorkspace(wsRoot, cwd);
     },
     reply: async (q, item, text) => {
-      const wb = await workbench(q.workspaceId);
-      if (!wb) throw new Error(NO_WB);
-      const repo = parseRepo(q.repo)!;
-      await wb.client.bitbucketAddComment(wb.token, repo.workspace, repo.slug, q.prId, text, item.path && item.line ? { path: item.path, line: item.line } : undefined);
+      const git = await forge(q.workspaceId);
+      if (!git) throw new Error(NO_WB);
+      await git.addComment(parseRepo(q.repo)!, q.prId, text, item.path && item.line ? { path: item.path, line: item.line } : undefined);
     },
   });
   runs.on('message', (m: StreamMessage) => {
@@ -169,14 +179,14 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   const repoCache = new Map<string, { at: number; repos: Repos }>();
   // concurrent callers join the same load
   const repoLoads = new Map<string, Promise<Repos>>();
-  const workspaceRepos = (workspaceId: string, wb: WorkbenchClient, workspace: string, refresh = false): Promise<Repos> => {
+  const workspaceRepos = (workspaceId: string, git: Forge, workspace: string, refresh = false): Promise<Repos> => {
     const key = `${workspaceId}:${workspace}`;
     const hit = repoCache.get(key);
     if (hit && Date.now() - hit.at < 3600_000 && !refresh) return Promise.resolve(hit.repos);
     let load = repoLoads.get(key);
     if (!load) {
-      load = wb.client
-        .bitbucketRepos(wb.token, workspace)
+      load = git
+        .listRepos(workspace)
         .then((repos) => (repoCache.set(key, { at: Date.now(), repos }), repos))
         .finally(() => repoLoads.delete(key));
       repoLoads.set(key, load);
@@ -184,7 +194,7 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, runners: new RunnerRegistry(db), embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
+  const deps: Deps = { runs, runners: new RunnerRegistry(db), embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, forge, workSource, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
 
   deps.stages.onNewFact((ws, ticket, repo) => void settle(deps, ws, ticket, repo).catch((err) => console.warn('stage engine failed:', err.message)));
   runs.recover();

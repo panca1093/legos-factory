@@ -85,7 +85,7 @@ export async function launchRun(deps: Deps, { uid, ws }: { uid: string; ws: stri
   const connected = opts.selfUrl ? (await deps.connsFor(ws).all()).filter((x) => x.connected).map((x) => x.name) : [];
   const spec = clone && { repo: repo!, key: clone.key, branch, author };
   const run = deps.startRun(
-    { workspaceId: ws, owner: uid, repo, kind, cwd, prompt: stage ? [prompt, o.guide ?? stageGuide(stage, req.ticket), `## Persona\n${persona(deps.workflow, stage)}`].join('\n\n') : prompt, permissionMode, resume, model, ticket, stage, share, readOnly: o.readOnly, priority: o.priority ?? (kind === 'chat' ? 1 : 0), ...(spec && { clone: spec, prepared: deps.embedded, ownsClone: true }) },
+    { workspaceId: ws, owner: uid, repo, kind, cwd, prompt: stage ? [prompt, o.guide ?? stageGuide(stage, req.ticket, stage === 'design' || stage === 'build' ? deps.workspaces.config(ws).prTitle?.[stage] : undefined), `## Persona\n${persona(deps.workflow, stage)}`].join('\n\n') : prompt, permissionMode, resume, model, ticket, stage, share, readOnly: o.readOnly, priority: o.priority ?? (kind === 'chat' ? 1 : 0), ...(spec && { clone: spec, prepared: deps.embedded, ownsClone: true }) },
     connected,
   );
   if (stage && deps.workItems.get(ws, req.ticket)) void syncWorkItem(deps, ws, req.ticket);

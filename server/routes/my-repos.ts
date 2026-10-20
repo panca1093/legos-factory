@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { parseRepo } from '../workspace.ts';
-import { HttpError, domain, parse, readBody, requireMyRepo, requireWorkbench, text, upstream, type Deps, type Env, type WorkbenchClient } from '../http.ts';
+import { HttpError, domain, parse, readBody, requireForge, requireMyRepo, text, upstream, type Deps, type Env } from '../http.ts';
+import type { Forge } from '../ports.ts';
 
 const projectsSchema = z.object({
   projects: z
@@ -20,8 +21,8 @@ export function myReposRoutes(deps: Deps) {
   routes.post('/api/my-repos', async (c) => {
     const ws = c.get('ws');
     const { repo } = parse(addSchema, await readBody(c));
-    const wb = await requireWorkbench(deps, ws);
-    return c.json(await domain(addRepo(deps, ws, wb, repo)), 201);
+    const git = await requireForge(deps, ws);
+    return c.json(await domain(addRepo(deps, ws, git, repo)), 201);
   });
 
   routes.patch('/api/my-repos/:ws/:slug', async (c) => {
@@ -42,8 +43,8 @@ export function myReposRoutes(deps: Deps) {
 }
 
 // Only repos that exist in their workspace, under the forge's spelling and with its main branch.
-async function addRepo(deps: Deps, ws: string, wb: WorkbenchClient, repo: string) {
-  const found = (await upstream(deps.workspaceRepos(ws, wb, parseRepo(repo)!.workspace))).find((r) => r.name.toLowerCase() === repo.toLowerCase());
+async function addRepo(deps: Deps, ws: string, git: Forge, repo: string) {
+  const found = (await upstream(deps.workspaceRepos(ws, git, parseRepo(repo)!.workspace))).find((r) => r.name.toLowerCase() === repo.toLowerCase());
   if (!found) throw new HttpError(404, `${repo} not found in Bitbucket`);
   return deps.myRepos.add(ws, { name: found.name, mainBranch: found.mainBranch });
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StageView, StreamMessage, WorkItem, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StageView, StreamMessage, WorkItem, WorkspaceConfig, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -45,7 +45,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
-export type { Role, Stage, StageView, WorkItem, WorkspaceInfo, WorkspaceMember };
+export type { Role, Stage, StageView, WorkItem, WorkspaceConfig, WorkspaceInfo, WorkspaceMember };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -66,7 +66,8 @@ export type JiraIssue = JiraRow & {
 export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null; dev: JiraDev | null };
 
 export const api = {
-  workspaces: () => call<{ active: string; workspaces: WorkspaceInfo[] }>('/api/workspaces'),
+  workspaces: () => call<{ active: string; workspaces: WorkspaceInfo[]; config: WorkspaceConfig }>('/api/workspaces'),
+  setWorkspaceConfig: (id: string, prTitle: NonNullable<WorkspaceConfig['prTitle']>) => call<{ config: WorkspaceConfig }>(`/api/workspaces/${id}/config`, { method: 'PUT', body: JSON.stringify({ prTitle }) }),
   createWorkspace: (name: string) => call<WorkspaceInfo>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
   switchWorkspace: (id: string) => call<{ ok: true }>('/api/workspaces/active', { method: 'POST', body: JSON.stringify({ id }) }),
   members: (id: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`),

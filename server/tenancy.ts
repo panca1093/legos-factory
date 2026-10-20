@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Role, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
+import type { Role, WorkspaceConfig, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
 // The tenancy unit: every user has a personal workspace and may belong to team ones. What a workspace
 // holds (connections, repos, runs, work items) is reachable only by its members, per role.
@@ -50,6 +50,15 @@ export class Workspaces {
 
   get(id: string): { id: string; name: string; kind: 'personal' | 'team' } | null {
     return (this.db.prepare(`select id, name, kind from workspaces where id = ?`).get(id) as { id: string; name: string; kind: 'personal' | 'team' } | undefined) ?? null;
+  }
+
+  config(workspaceId: string): WorkspaceConfig {
+    const row = this.db.prepare(`select config from workspaces where id = ?`).get(workspaceId) as { config: string } | undefined;
+    return row ? JSON.parse(row.config) : {};
+  }
+
+  setConfig(workspaceId: string, config: WorkspaceConfig) {
+    this.db.prepare(`update workspaces set config = ? where id = ?`).run(JSON.stringify(config), workspaceId);
   }
 
   roleOf(workspaceId: string, userId: string): Role | null {

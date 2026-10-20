@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo, type Role, type Runner, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
+import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo, type Role, type Runner, type WorkspaceConfig, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 
@@ -40,7 +40,7 @@ export function SettingsPage() {
 
 // Where your connections, repos and runs live: your own, or a team's. Members share what a workspace holds.
 function Workspace() {
-  const [list, setList] = useState<{ active: string; workspaces: WorkspaceInfo[] } | null>(null);
+  const [list, setList] = useState<{ active: string; workspaces: WorkspaceInfo[]; config: WorkspaceConfig } | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -94,6 +94,26 @@ function Workspace() {
               Create
             </button>
           </form>
+        </div>
+      )}
+      {list && current?.role === 'owner' && (
+        <div className="pr-box name-box">
+          {(['design', 'build'] as const).map((stage) => (
+            <label key={stage} className="field">
+              <span>PR title rule for {stage} runs</span>
+              <input
+                className="input"
+                defaultValue={list.config.prTitle?.[stage] ?? ''}
+                maxLength={500}
+                placeholder="e.g. Start the title with the ticket key. Empty: follow each repo's own format."
+                onBlur={(e) => {
+                  const next = { ...list.config.prTitle, [stage]: e.target.value.trim() || undefined };
+                  if ((list.config.prTitle?.[stage] ?? '') !== e.target.value.trim()) void act(async () => setList({ ...list, config: (await api.setWorkspaceConfig(list.active, next)).config }));
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              />
+            </label>
+          ))}
         </div>
       )}
       {current?.kind === 'team' && (

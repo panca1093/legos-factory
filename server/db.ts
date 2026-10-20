@@ -25,7 +25,7 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create unique index if not exists users_pin_name on users (name collate nocase) where kind = 'pin';
     create unique index if not exists users_ext on users (kind, ext_id) where ext_id is not null;
     create table if not exists workspaces (
-      id text primary key, name text not null, kind text not null, created_at text not null);
+      id text primary key, name text not null, kind text not null, created_at text not null, config text not null default '{}');
     create table if not exists workspace_members (
       workspace_id text not null, user_id text not null, role text not null, primary key (workspace_id, user_id));
     create index if not exists workspace_members_user on workspace_members (user_id);
@@ -73,6 +73,7 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create index if not exists runs_workspace on runs (workspace_id, last_event_at);
   `);
   addColumn(db, 'users', 'active_workspace', 'text');
+  addColumn(db, 'workspaces', 'config', `text not null default '{}'`);
   // tables made before these columns existed
   addColumn(db, 'workspace_repos', 'jira_projects', `text not null default ''`);
   addColumn(db, 'work_items', 'note', 'text');

@@ -5,6 +5,8 @@ import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.t
 
 const nameSchema = z.object({ name: text().refine((n) => !!n && n.length <= 64, 'name is required (max 64)') });
 const switchSchema = z.object({ id: text() });
+const rule = () => text().refine((t) => t.length <= 500, 'a rule is at most 500 characters').transform((t) => t || undefined);
+const configSchema = z.object({ prTitle: z.object({ design: rule(), build: rule() }) });
 const memberSchema = z.object({
   user: text().refine((u) => !!u, 'user is required: a name or e-mail address'),
   role: z.custom<'owner' | 'member' | 'viewer'>(isRole, 'role must be owner, member or viewer'),
@@ -29,7 +31,7 @@ export function workspacesRoutes({ users, workspaces }: Deps) {
     if (role !== 'owner') throw new HttpError(403, 'only owners manage members');
   };
 
-  routes.get('/api/workspaces', (c) => c.json({ active: c.get('ws'), workspaces: workspaces.list(c.get('uid')) }));
+  routes.get('/api/workspaces', (c) => c.json({ active: c.get('ws'), workspaces: workspaces.list(c.get('uid')), config: workspaces.config(c.get('ws')) }));
 
   routes.post('/api/workspaces', async (c) => {
     teams();
@@ -41,6 +43,14 @@ export function workspacesRoutes({ users, workspaces }: Deps) {
     const { id } = parse(switchSchema, await readBody(c));
     if (!workspaces.setActive(c.get('uid'), id)) throw new HttpError(404, 'workspace not found');
     return c.json({ ok: true });
+  });
+
+  routes.put('/api/workspaces/:id/config', async (c) => {
+    const id = c.req.param('id');
+    if (mine(c.get('uid'), id).role !== 'owner') throw new HttpError(403, 'only owners change workspace settings');
+    const { prTitle } = parse(configSchema, await readBody(c));
+    workspaces.setConfig(id, { prTitle });
+    return c.json({ config: workspaces.config(id) });
   });
 
   routes.get('/api/workspaces/:id/members', (c) => {

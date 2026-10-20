@@ -1,11 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { HttpError, TICKET_RE, parse, readBody, requireWorkbench, text, upstream, type Deps, type Env } from '../http.ts';
-
-const JQL_PRESETS: Record<string, string> = {
-  mine: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
-  sprint: 'assignee = currentUser() AND sprint in openSprints() ORDER BY status ASC, updated DESC',
-};
+import { HttpError, TICKET_RE, domain, parse, readBody, requireForge, requireWorkSource, requireWorkbench, text, upstream, type Deps, type Env } from '../http.ts';
 
 const reposQuery = z.object({ workspace: text() });
 const connectSchema = z.object({ integration: text().refine((i) => /^[a-z0-9-]{1,64}$/.test(i), 'invalid integration') });
@@ -16,25 +11,26 @@ export function jiraRoutes(deps: Deps) {
   const routes = new Hono<Env>();
 
   routes.get('/api/jira/issues', async (c) => {
-    const jql = (c.req.query('jql') ?? '').trim() || JQL_PRESETS[c.req.query('filter') ?? 'mine'];
-    if (!jql || jql.length > 1000) throw new HttpError(400, 'unknown filter or JQL too long');
-    const wb = await requireWorkbench(deps, c.get('ws'));
-    return c.json(await upstream(wb.client.jiraSearch(wb.token, jql, 20, c.req.query('pageToken') || undefined)));
+    const query = (c.req.query('jql') ?? '').trim();
+    if (query.length > 1000) throw new HttpError(400, 'unknown filter or JQL too long');
+    const source = await requireWorkSource(deps, c.get('ws'));
+    const { items, next } = await domain(source.list({ filter: c.req.query('filter') ?? 'mine', query }, 20, c.req.query('pageToken') || undefined));
+    return c.json({ issues: items, nextPageToken: next });
   });
 
   routes.get('/api/jira/issues/:key', async (c) => {
     const key = c.req.param('key').toUpperCase();
     if (!TICKET_RE.test(key)) throw new HttpError(400, 'invalid issue key');
-    const wb = await requireWorkbench(deps, c.get('ws'));
-    return c.json(await upstream(wb.client.jiraIssue(wb.token, key)));
+    const source = await requireWorkSource(deps, c.get('ws'));
+    return c.json(await upstream(source.get(key)));
   });
 
   routes.get('/api/repos', async (c) => {
     const workspace = parse(reposQuery, c.req.query()).workspace || opts.bitbucketWorkspace || '';
     if (!workspace) throw new HttpError(400, 'workspace is required', { needWorkspace: true });
     if (!/^[\w.-]{1,100}$/.test(workspace)) throw new HttpError(400, 'invalid workspace');
-    const wb = await requireWorkbench(deps, c.get('ws'));
-    return c.json({ workspace, repos: await upstream(deps.workspaceRepos(c.get('ws'), wb, workspace, c.req.query('refresh') === '1')) });
+    const forge = await requireForge(deps, c.get('ws'));
+    return c.json({ workspace, repos: await upstream(deps.workspaceRepos(c.get('ws'), forge, workspace, c.req.query('refresh') === '1')) });
   });
 
   routes.get('/api/workbench/integrations', async (c) => {

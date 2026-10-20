@@ -50,6 +50,10 @@ Runs are queued in the database and handed out highest priority first, then firs
 
 A work item (Jira tab → Work on this) takes each repo through the workflow in `workflows/factory/factory.yaml`: **Design** (spec PR) → gate → **Build** → **Inspect** → **Catalog**. Gates open on facts the forge or a person reports — `pr.merged`, `ci.passed`, `human.approved` — never on what an agent says. Merging the spec PR unlocks Build, which starts only from its **Start build** button. Inspect is a read-only reviewer on the build PR; if it asks for changes, Build runs again with its findings, at most 3 times, then a person decides. Jira statuses move forward by themselves as before. See `docs/specs/stage-engine.md`.
 
+## Ports
+
+The core talks to tickets and code hosting through two small interfaces in `server/ports.ts`: **WorkSource** (list/get a ticket, move its status, comment) and **Forge** (repos, pull requests, diff, comments, merge, clone credential). One module per provider implements them in `server/providers`: Jira and Bitbucket through workbench (what ships), and a read-only GitHub forge that proves the contract. Organisation-specific text lives in per-workspace configuration, not code: Jira project → repo mapping (Settings → Repositories) and PR title rules per stage (Settings → Workspace). See `docs/specs/ports.md`.
+
 ## Notes
 
 - Everything legos-factory owns lives in one SQLite file, `~/.legos-factory/factory.db` (0600): users, workspaces, and each workspace's connections, repos, work items and runs.
@@ -59,7 +63,7 @@ A work item (Jira tab → Work on this) takes each repo through the workflow in 
 
 - Git clone, pull and push use the workspace's Bitbucket identity through workbench (`bitbucket_get_clone_url`), not an SSH key: clones use plain `https://bitbucket.org/...` remotes, and a credential helper in each clone asks this app (`/git/credential`, with the run's own secret, for live runs only) for a fresh short-lived token for that run's own repo while it is in My repos. Pushing needs repository write access on your workbench connection. See `docs/specs/git-via-workbench.md`.
 
-- Reviews and Ask factory go through workbench's Bitbucket tools, which have two gaps: no threaded replies (a reply is a new comment on the same line, quoting the original) and no search for review requests (Reviews scans the 40 most recently updated open PRs across your repos, matches you by Bitbucket account id — your name comes from the Reviews page, else workbench, else your email — and caches for 5 minutes). Ask factory works on its own fresh clone of the PR branch (`pr-<id>` under the workspaces dir), so your own checkout is never touched; its shell commands (tests, commit, push) still ask in Needs you.
+- Reviews and Ask factory go through the Forge port (Bitbucket via workbench), which has two gaps: no threaded replies (a reply is a new comment on the same line, quoting the original) and no search for review requests (Reviews scans the 40 most recently updated open PRs across your repos, matches you by Bitbucket account id — your name comes from the Reviews page, else workbench, else your email — and caches for 5 minutes). Ask factory works on its own fresh clone of the PR branch (`pr-<id>` under the workspaces dir), so your own checkout is never touched; its shell commands (tests, commit, push) still ask in Needs you.
 
 - Binds to 127.0.0.1 only. `/api` rejects non-local `Host` and requires `x-legos: 1` on writes, since launching a run executes code.
 - Each live session is a `claude` process. Restarting the server does not fail unfinished runs: those that were working go back in the queue and resume their Claude session (a clone is kept and reused); a chat that was only waiting for you ends and can be continued from Sessions. Ask factory queues live in memory and still end.

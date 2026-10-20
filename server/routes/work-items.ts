@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WorkItem } from '../../shared/types.ts';
 import { approve, startBuild, stageViews } from '../stages.ts';
 import { parseRepo } from '../workspace.ts';
-import { HttpError, TICKET_RE, optText, parse, readBody, requireMyRepo, requireWorkbench, upstream, type Deps, type Env } from '../http.ts';
+import { HttpError, TICKET_RE, optText, parse, readBody, requireForge, requireMyRepo, upstream, type Deps, type Env } from '../http.ts';
 import { MODEL_RE } from '../launch-run.ts';
 
 const reposSchema = z.object({
@@ -63,8 +63,8 @@ export function workItemsRoutes(deps: Deps) {
     const name = myRepos.get(ws, repo)!.name;
     if (!workItems.hasRepo(ws, ticket, name)) throw new HttpError(409, `add ${name} to ${ticket} first`, { needWorkItem: true });
     const ref = parseRepo(name)!;
-    const wb = await requireWorkbench(deps, ws);
-    const pr = await upstream(wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, prId));
+    const forge = await requireForge(deps, ws);
+    const pr = await upstream(forge.getPr(ref, prId));
     const hit = new RegExp(`(^|[^A-Z0-9])${ticket}([^0-9]|$)`, 'i');
     if (!hit.test(pr.source) && !hit.test(pr.title)) throw new HttpError(400, `that PR does not mention ${ticket}`);
     workItems.link(ws, ticket, { repo: name, kind, prId, branch: pr.source, title: pr.title, state: pr.state, runId: null }, true);

@@ -65,6 +65,9 @@ export type RunKind = 'chat' | 'task';
 
 export type Role = 'owner' | 'member' | 'viewer';
 
+// What a workspace sets for itself instead of the code knowing it: house rules appended to a stage's instructions
+export type WorkspaceConfig = { prTitle?: { design?: string; build?: string } };
+
 export type WorkspaceInfo = { id: string; name: string; kind: 'personal' | 'team'; role: Role };
 export type WorkspaceMember = { userId: string; name: string; email: string | null; role: Role };
 
