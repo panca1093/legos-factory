@@ -193,7 +193,7 @@ describe('pull requests', () => {
   });
 
   it("matches you by the name in your email when workbench gives none, or by the name you set", async () => {
-    expect(nameFromEmail('saifullah.panca@amartha.com')).toBe('Saifullah Panca');
+    expect(nameFromEmail('jane.doe@acme.test')).toBe('Jane Doe');
     expect(nameFromEmail('JANE_doe2+ci@x.io')).toBe('Jane Doe2');
     expect(nameFromEmail('42@x.io')).toBe('');
 
