@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StageView, StreamMessage, WorkItem, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -45,7 +45,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
-export type { Role, Stage, WorkItem, WorkspaceInfo, WorkspaceMember };
+export type { Role, Stage, StageView, WorkItem, WorkspaceInfo, WorkspaceMember };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -116,6 +116,8 @@ export const api = {
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  startBuild: (ticket: string, repo: string) => call<Run>(`/api/work-items/${ticket}/repos/${repo}/start-build`, { method: 'POST', body: '{}' }),
+  approveBuild: (ticket: string, repo: string) => call<WorkItem>(`/api/work-items/${ticket}/repos/${repo}/approve`, { method: 'POST', body: '{}' }),
   linkPr: (ticket: string, repo: string, prId: number, kind: 'spec' | 'impl') => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
   setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),

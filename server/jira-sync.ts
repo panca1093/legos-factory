@@ -61,6 +61,7 @@ async function syncOnce(deps: Deps, workspaceId: string, ticket: string) {
       try {
         const pr = await client.bitbucketPr(token, repo.workspace, repo.slug, l.prId);
         workItems.update(workspaceId, ticket, l.repo, l.prId, { state: pr.state, title: pr.title });
+        deps.stages.observe(workspaceId, ticket, l, pr);
         if (l.commented) continue;
         const kind = l.kind === 'spec' ? 'Spec' : 'Implementation';
         workItems.update(workspaceId, ticket, l.repo, l.prId, { commented: true });
@@ -116,7 +117,7 @@ export function startSyncLoop(deps: Deps, ms: number) {
 // At the end of a design or build run: the open PR of the branch it left the clone on becomes a link.
 export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, branch: string | null): Promise<void> {
   const { workspaceId, ticket, stage, repo } = run;
-  if (!ticket || !stage || !repo || !deps.workItems.hasRepo(workspaceId, ticket, repo)) return;
+  if (!ticket || (stage !== 'design' && stage !== 'build') || !repo || !deps.workItems.hasRepo(workspaceId, ticket, repo)) return;
   try {
     if (!branch || branch === (deps.myRepos.get(workspaceId, repo)?.mainBranch ?? 'main')) return;
     const wb = await deps.workbench(workspaceId);

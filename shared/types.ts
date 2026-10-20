@@ -56,8 +56,9 @@ export type Settings = {
 
 export type JiraFlow = { todo: string; inProgress: string; codeReview: string; readyForQa: string };
 
-// design = write the spec and open a PR for it; build = implement it and open a PR
-export type Stage = 'design' | 'build';
+// design = write the spec and open a PR for it; build = implement it and open a PR; inspect = read-only review of
+// that PR; catalog = record what the ticket taught us. The order and gates live in workflows/factory/factory.yaml.
+export type Stage = 'design' | 'build' | 'inspect' | 'catalog';
 
 // chat = interactive discussion; task = one prompt, runs to completion, no follow-ups
 export type RunKind = 'chat' | 'task';
@@ -209,10 +210,25 @@ export type TicketLink = {
 };
 // the latest skip or error of the Jira sync or PR capture; transitions live in Jira's own history
 export type WorkItemNote = { text: string; at: string };
+// run = an agent is working; gate = waiting for facts about the stage's PR; ready = the gate is open and a person
+// must start the stage; escalated = the engine stopped and a person decides
+export type StagePhase = 'run' | 'gate' | 'ready' | 'escalated' | 'done';
+export type StageView = {
+  repo: string;
+  stage: Stage;
+  phase: StagePhase;
+  // rejections the reviewer has sent back to Build so far
+  loops: number;
+  prId: number | null;
+  note: string | null;
+  // facts the gate still waits for: pr.merged, ci.passed, human.approved
+  missing: string[];
+};
 export type WorkItem = {
   ticket: string;
   repos: { name: string; addedAt: string }[];
   links: TicketLink[];
+  stages: StageView[];
   note: WorkItemNote | null;
   // the Jira status last read
   status: string | null;

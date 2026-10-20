@@ -9,6 +9,8 @@ import type { Connections, Pending } from './connections.ts';
 import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
 import type { RunnerRegistry } from './runner-auth.ts';
+import type { StageStore } from './stages.ts';
+import type { Workflow } from './workflow.ts';
 import type { Runs } from './runs.ts';
 import type { Workspaces } from './tenancy.ts';
 import type { Users } from './users.ts';
@@ -40,6 +42,8 @@ export type AppOptions = {
   // where repo runs get their throwaway clones, and how to reach a repo (see workspace.ts)
   workspaces?: string;
   gitUrl?: string;
+  // where factory.yaml and its personas live; defaults to the one in this repo
+  workflowDir?: string;
   // the Bitbucket workspace repos are listed from when none is asked for (the forge can't tell us)
   bitbucketWorkspace?: string | null;
 };
@@ -64,6 +68,8 @@ export type Deps = {
   activity: ActivityLog;
   myRepos: MyRepos;
   workItems: WorkItems;
+  stages: StageStore;
+  workflow: Workflow;
   // the Jira sync running or queued per work item (see jira-sync.ts)
   syncs: Map<string, Promise<void>>;
   http: typeof fetch;

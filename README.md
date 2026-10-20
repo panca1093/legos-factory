@@ -46,6 +46,10 @@ legos-factory is a **control plane** (this app: API, UI, database, the run queue
 
 Runs are queued in the database and handed out highest priority first, then first come first served (chats before tasks). A runner claims a job with a lease and keeps it alive with heartbeats (`LEGOS_LEASE_MS`, default 60 s); a job whose runner goes quiet returns to the queue and resumes its Claude session, and fails after `LEGOS_MAX_ATTEMPTS` (default 3) claims. Each runner takes at most its capacity at once (`LEGOS_MAX_RUNS`, default 3). See `docs/specs/runner-dispatcher.md`.
 
+## Stages
+
+A work item (Jira tab → Work on this) takes each repo through the workflow in `workflows/factory/factory.yaml`: **Design** (spec PR) → gate → **Build** → **Inspect** → **Catalog**. Gates open on facts the forge or a person reports — `pr.merged`, `ci.passed`, `human.approved` — never on what an agent says. Merging the spec PR unlocks Build, which starts only from its **Start build** button. Inspect is a read-only reviewer on the build PR; if it asks for changes, Build runs again with its findings, at most 3 times, then a person decides. Jira statuses move forward by themselves as before. See `docs/specs/stage-engine.md`.
+
 ## Notes
 
 - Everything legos-factory owns lives in one SQLite file, `~/.legos-factory/factory.db` (0600): users, workspaces, and each workspace's connections, repos, work items and runs.

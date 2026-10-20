@@ -37,6 +37,13 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create table if not exists runners (
       id text primary key, workspace_id text not null, name text not null, token_hash text not null unique,
       created_at text not null, last_seen_at text);
+    create table if not exists work_item_stages (
+      workspace_id text not null, ticket text not null, repo_key text not null, stage text not null, phase text not null,
+      loops integer not null default 0, pr_id integer, note text, owner text, updated_at text not null,
+      primary key (workspace_id, ticket, repo_key));
+    create table if not exists stage_events (
+      workspace_id text not null, ticket text not null, repo_key text not null, type text not null,
+      pr_id integer not null, actor text, at text not null, primary key (workspace_id, ticket, repo_key, type, pr_id));
     create table if not exists connections (
       workspace_id text not null, name text not null, data text not null, primary key (workspace_id, name));
     create table if not exists runs (

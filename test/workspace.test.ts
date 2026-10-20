@@ -79,14 +79,14 @@ describe('repo workspaces', () => {
     const items = new WorkItems(db);
     items.create('local', 'PROJ-1');
     items.addRepo('local', 'PROJ-1', 'acme/app');
-    const res = await post({ repo: 'acme/app', prompt: 'work on it', ticket: 'PROJ-1', stage: 'build' });
+    const res = await post({ repo: 'acme/app', prompt: 'work on it', ticket: 'PROJ-1', stage: 'design' });
     expect(res.status).toBe(201);
     const run = await res.json();
     expect(run.cwd).toBe(join(workspaces, 'local', 'acme', 'app', 'PROJ-1'));
     expect(readFileSync(join(run.cwd, 'README.md'), 'utf8')).toBe('main\n');
     expect(git(run.cwd, 'rev-list', '--count', 'HEAD')).toBe('1'); // shallow
 
-    const again = await post({ repo: 'acme/app', prompt: 'again', ticket: 'PROJ-1', stage: 'build' });
+    const again = await post({ repo: 'acme/app', prompt: 'again', ticket: 'PROJ-1', stage: 'design' });
     expect(again.status).toBe(409);
     expect((await again.json()).error).toMatch(/already working/);
 

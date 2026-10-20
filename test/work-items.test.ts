@@ -537,7 +537,7 @@ describe('PR capture', () => {
     const s = setup({ gitUrl: forge(), ...o });
     await s.connectWorkbench();
     await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
-    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'build' })).json();
+    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'design' })).json();
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: earlier');
     if (branch) git(run.cwd, 'checkout', '-qb', branch);
     await s.runs.end(run.id);
@@ -550,7 +550,7 @@ describe('PR capture', () => {
     const { s, run } = await launch({ open, prs: { 'acme/api#12': pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1') } }, 'feat/PROJ-1');
     expect(s.tools('bitbucket_list_prs').map((c) => c.args.state)).toEqual(['OPEN']);
     const links = s.items.links('local', 'PROJ-1');
-    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', branch: 'feat/PROJ-1', runId: run.id })]);
+    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'spec', branch: 'feat/PROJ-1', runId: run.id })]);
     expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();
     await settle(() => s.tools('jira_add_comment').length === 1);
   });
@@ -559,7 +559,7 @@ describe('PR capture', () => {
     const open = { 'acme/api': [pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1')] };
     const { s } = await launch({ open }, 'feat/PROJ-1');
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/web: later');
-    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'again', ticket: 'PROJ-1', stage: 'build' })).json();
+    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'again', ticket: 'PROJ-1', stage: 'design' })).json();
     git(run.cwd, 'checkout', '-qb', 'feat/PROJ-1');
     await s.runs.end(run.id);
     await settle(() => !existsSync(run.cwd));

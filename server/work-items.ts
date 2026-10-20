@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { TicketLink, WorkItemNote } from '../shared/types.ts';
 
-const keyOf = (repo: string) => repo.trim().toLowerCase();
+export const keyOf = (repo: string) => repo.trim().toLowerCase();
 const now = () => new Date().toISOString();
 
 type LinkRow = Omit<TicketLink, 'commented' | 'updatedAt'>;

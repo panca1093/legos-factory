@@ -16,10 +16,10 @@ clean, a human approval) — never ask for confirmation in chat, never merge, an
 repo's main branch.
 
 ```
-Design  → PR #1 (spec + plan + failing tests, skipped)   gate: PR #1 merged
-Build   → PR #2 (implementation, tests green)            gate: no blockers + human approval
-Inspect → findings on PR #2 (read-only)                  runs when PR #2 opens
-Catalog → small docs PR, if the repo keeps docs          runs after PR #2 merges, no gate
+Design  → PR #1 (spec + plan + failing tests, skipped)   gate: PR #1 merged (pr.merged)
+Build   → PR #2 (implementation, tests green)            starts from the "Start build" button; ready to merge when ci.passed + human.approved
+Inspect → findings on PR #2 (read-only)                  runs when PR #2 opens; a reject goes back to Build, at most 3 times
+Catalog → small docs PR, if the repo keeps docs          runs after PR #2 merges (pr.merged)
 ```
 
 ## Ground rules for every stage
@@ -78,6 +78,9 @@ Goal: does PR #2 match the contract merged in PR #1? Read-only.
   **implementation** (code is wrong → fix on the branch).
 - Report findings as structured output; legos-factory shows them on the PR and lets the human
   choose what to post.
+- End with one line, `Verdict: APPROVE`, `Verdict: REQUEST_CHANGES` or `Verdict: ABSTAIN`. legos-factory
+  sends a REQUEST_CHANGES back to Build with your findings (at most 3 times); the verdict never opens a
+  gate, only merged PRs, green checks and human approval do.
 
 ## Stage: Catalog — persona `cataloger`
 
