@@ -4,8 +4,9 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { DecisionAnswer, PendingDecision, SessionSummary, Settings, StreamMessage } from '../../shared/types.ts';
 import { getSession, listSessions } from '../claude-sessions.ts';
-import { gitBranch, loadSettings, settingsPath, shareFor } from '../policy.ts';
+import { gitBranch, loadSettings, saveAutomation, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
+import { isOwner } from '../owners.ts';
 import { MODEL_RE, launchRun, launchSchema } from '../launch-run.ts';
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
@@ -21,10 +22,11 @@ const decisionSchema = z.object({
   behavior: z.enum(['allow', 'deny'], { error: 'behavior must be allow or deny' }),
   answers: z.custom<Record<string, string>>().optional(),
   message: z.custom<string>().optional(),
+  remember: z.boolean().optional(),
 });
 
 export function runsRoutes(deps: Deps) {
-  const { runs, activity, ownsRun } = deps;
+  const { runs, activity, ownsRun, users } = deps;
   const routes = new Hono<Env>();
   const decisionById = (id: string): PendingDecision | undefined => {
     const snap = runs.snapshot();
@@ -99,6 +101,15 @@ export function runsRoutes(deps: Deps) {
 
   routes.post('/api/decisions/:id', async (c) => {
     const b = parse(decisionSchema, await readBody(c));
+    const decision = decisionById(c.req.param('id'));
+    if (b.remember && b.behavior === 'allow' && decision?.toolName === 'Bash' && (!users || isOwner(users.get(c.get('uid'))))) {
+      const command = decision.input.command;
+      if (typeof command === 'string' && command.trim()) {
+        const prefix = command.trim().split(/\s+/).slice(0, 2).join(' ');
+        const { automation } = await loadSettings();
+        await saveAutomation({ ...automation, allowlist: [...automation.allowlist, prefix] });
+      }
+    }
     const answer: DecisionAnswer = b.behavior === 'allow' ? { behavior: 'allow', answers: b.answers } : { behavior: 'deny', message: b.message };
     // 410: expired, withdrawn, or answered elsewhere — the UI must drop it, not retry
     if (!runs.decide(c.req.param('id'), answer)) throw new HttpError(410, 'decision no longer open');
