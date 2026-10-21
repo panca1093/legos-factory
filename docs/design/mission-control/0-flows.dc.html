@@ -37,14 +37,14 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <div style="display:flex;flex-direction:column;gap:10px;max-width:920px">
 <div class="k">legos / factory · redesign on main</div>
 <h1 style="margin:0;font-size:40px;line-height:1.1;font-weight:800;letter-spacing:-.02em">Five pages, each answering one question</h1>
-<p style="margin:0;font-size:16px;color:#5b6479;line-height:1.55">Home is the summary you land on. Work is what your factory is producing. Reviews is other people's code that waits on you. Activity is what already happened, yours and the team's. New starts a chat or a task; attaching a ticket is what turns a task into tracked work.</p>
+<p style="margin:0;font-size:16px;color:#5b6479;line-height:1.55">Overview is the summary you land on. Work is what your factory is producing. Reviews is other people's code that waits on you. Activity is what already happened, yours and the team's. New starts a chat or a task; attaching a ticket is what turns a task into tracked work.</p>
 </div>
 
 <div style="display:flex;flex-direction:column;gap:12px">
 <div class="k">Pages and their jobs</div>
 <div style="background:#fff;border:1px solid rgba(31,42,72,.09);border-radius:16px;overflow:hidden;min-width:0">
 <div class="tr" style="border-top:0;background:#f9fafc;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5b6479"><span>Page</span><span>Question</span><span>What it shows</span><span>Main actions</span></div>
-<div class="tr"><b>Home</b><span>“What is going on, and what needs me now?” <span class="where">· now</span></span><span class="where">Summary tiles, the Needs you section (gates and escalations), work in flight, reviews waiting, what just happened, team pulse</span><span class="where">Answer an agent inline, jump to any page from its tile</span></div>
+<div class="tr"><b>Overview</b><span>“What is going on, and what needs me now?” <span class="where">· now</span></span><span class="where">Summary tiles, the Needs you section (gates and escalations), work in flight, reviews waiting, what just happened, team pulse</span><span class="where">Answer an agent inline, jump to any page from its tile</span></div>
 <div class="tr"><b>Work</b><span>“How is what I asked the factory to build going?” <span class="where">· in flight, outbound</span></span><span class="where">Board of tickets in factory-state columns, Jira tickets not started yet, a work item page per ticket</span><span class="where">Work on a ticket, open its runs and PRs, add a repo, run again</span></div>
 <div class="tr"><b>Reviews</b><span>“Whose code do I need to look at?” <span class="where">· inbound</span></span><span class="where">PRs where you are reviewer or mentioned, and comments left on PRs the factory opened for you</span><span class="where">Review with factory (draft), post, Ask factory to fix comments</span></div>
 <div class="tr"><b>Activity</b><span>“What happened?” <span class="where">· past, mine and team</span></span><span class="where">Day-by-day history of every chat and task with outcome and est. cost; Team tab with status per person</span><span class="where">Open a transcript, continue a chat, filter by ticket or person</span></div>
@@ -64,7 +64,7 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who agent">Agent</span><b>Spec PR</b><span class="where">Written in each repo's own spec conventions</span><span class="pg">Work</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>Spec review</b><span class="where">Approve, or ask for changes and the agent revises</span><span class="pg">Home · Reviews</span></div>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>Spec review</b><span class="where">Approve, or ask for changes and the agent revises</span><span class="pg">Overview · Reviews</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who agent">Agent</span><b>Build per repo</b><span class="where">No prompts. A command outside the allowlist pauses the run and escalates</span><span class="pg">Work</span></div>
 <span class="arrow" aria-hidden="true">→</span>
@@ -73,9 +73,9 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <div class="steps">
 <div class="box"><span class="who fac">Factory</span><b>Route by rules</b><span class="where">Workspace rules decide: diff size, sensitive paths, ticket type. The agent may raise to human, never lower</span><span class="pg">Work item · why</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>PR review <span style="font-weight:500;color:#5b6479">(high risk)</span></b><span class="where">With the agent's review beside the diff</span><span class="pg">Home · Reviews</span></div>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>PR review <span style="font-weight:500;color:#5b6479">(high risk)</span></b><span class="where">With the agent's review beside the diff</span><span class="pg">Overview · Reviews</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box" style="background:#f4f3ff;border-color:#d9d5ff"><span class="who you">You</span><b>Merge, one click</b><span class="where">Low-risk PRs skip review and wait as “Ready to merge”. The factory never merges</span><span class="pg">Home · Work</span></div>
+<div class="box" style="background:#f4f3ff;border-color:#d9d5ff"><span class="who you">You</span><b>Merge, one click</b><span class="where">Low-risk PRs skip review and wait as “Ready to merge”. The factory never merges</span><span class="pg">Overview · Work</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box" style="background:#eff8f4;border-color:#c8e2d5"><span class="who fac">Factory</span><b>Ready for QA</b><span class="where">Jira moves on its own at each step; done when every repo is merged</span><span class="pg">Work · Done</span></div>
 </div>
@@ -84,7 +84,7 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <section class="flow" aria-label="Flow B">
 <div class="fh"><span class="fl">B</span><b style="font-size:17px">Review a teammate's PR</b><span class="where">inbound · the agent drafts, you decide what gets posted</span></div>
 <div class="steps">
-<div class="box"><span class="who fac">Factory</span><b>Finds PRs waiting on you</b><span class="where">You are a reviewer, or someone @-mentioned you</span><span class="pg">Reviews · Home tile</span></div>
+<div class="box"><span class="who fac">Factory</span><b>Finds PRs waiting on you</b><span class="where">You are a reviewer, or someone @-mentioned you</span><span class="pg">Reviews · Overview tile</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who you">You</span><b>Open the PR</b><span class="where">Diff with line numbers, existing comments, checks</span><span class="pg">PR page</span></div>
 <span class="arrow" aria-hidden="true">→</span>
@@ -107,7 +107,7 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who agent">Agent</span><b>Proposes a fix</b><span class="where">Read-only run on its own clone of the branch</span><span class="pg">PR page</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">You</span><b>Approve, edit or skip</b><span class="where">Your call on what is said to a reviewer; shown in Needs you</span><span class="pg">PR page · Home</span></div>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">You</span><b>Approve, edit or skip</b><span class="where">Your call on what is said to a reviewer; shown in Needs you</span><span class="pg">PR page · Overview</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who agent">Agent</span><b>Commits and pushes</b><span class="where">Auto mode, same allowlist as Build</span><span class="pg">PR page</span></div>
 <span class="arrow" aria-hidden="true">→</span>
@@ -121,14 +121,14 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <div class="steps">
 <div class="box"><span class="who you">You</span><b>New → Chat</b><span class="where">Discuss, reply between turns</span><span class="pg">New · rail</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box"><span class="who agent">Agent</span><b>Finishes a turn</b><span class="where">“Your turn” on Home</span><span class="pg">Home</span></div>
+<div class="box"><span class="who agent">Agent</span><b>Finishes a turn</b><span class="where">“Your turn” on Overview</span><span class="pg">Overview</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who you">You</span><b>Continue later</b><span class="where">Idle 30 min closes it; reopen from history</span><span class="pg">Activity</span></div>
 </div>
 <div class="steps">
 <div class="box"><span class="who you">You</span><b>New → Task</b><span class="where">One prompt, permissions chosen up front</span><span class="pg">New</span></div>
 <span class="arrow" aria-hidden="true">→</span>
-<div class="box"><span class="who agent">Agent</span><b>Runs to the end</b><span class="where">Done or failed shows on Home</span><span class="pg">Home</span></div>
+<div class="box"><span class="who agent">Agent</span><b>Runs to the end</b><span class="where">Done or failed shows on Overview</span><span class="pg">Overview</span></div>
 <span class="arrow" aria-hidden="true">→</span>
 <div class="box"><span class="who you">You</span><b>Discuss in chat</b><span class="where">Follow up on the result</span><span class="pg">Run page</span></div>
 </div>
@@ -153,7 +153,7 @@ a{color:#5148c7}a:hover{color:#3c348e}
 <div style="display:flex;flex-direction:column;gap:12px">
 <div class="k">Navigation, before → after</div>
 <div class="box" style="padding:0;gap:0;overflow:hidden">
-<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Overview</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Home <span style="font-weight:400;color:#5b6479">(summary, Needs you is one section)</span></b></div>
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Overview</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Overview <span style="font-weight:400;color:#5b6479">(summary, Needs you is one section)</span></b></div>
 <div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Tasks + its Jira tab, ticket modal</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Work <span style="font-weight:400;color:#5b6479">(board, tickets, work item page)</span></b></div>
 <div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Reviews</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Reviews <span style="font-weight:400;color:#5b6479">(+ comments on your PRs)</span></b></div>
 <div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Sessions · My activity · Team activity</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Activity <span style="font-weight:400;color:#5b6479">(Mine · Team)</span></b></div>
