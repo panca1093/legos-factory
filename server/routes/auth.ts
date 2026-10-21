@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
+import { isOwner } from '../owners.ts';
 import { PIN_RE } from '../users.ts';
 import { HttpError, domain, errMsg, localOnly, parse, readBody, text, type Deps, type Env } from '../http.ts';
 
@@ -52,9 +53,9 @@ export function authRoutes({ users, opts, connsFor, pending }: Deps) {
 
   routes.get('/auth/me', async (c) => {
     const workbenchLogin = !!(users && opts.workbenchUrl);
-    if (!users) return c.json({ authEnabled: false, workbenchLogin, users: [], authenticated: true, user: null });
+    if (!users) return c.json({ authEnabled: false, workbenchLogin, users: [], authenticated: true, user: null, isOwner: true });
     const user = users.verify(getCookie(c, SID_COOKIE));
-    return c.json({ authEnabled: true, workbenchLogin, users: users.pinNames(), authenticated: !!user, user });
+    return c.json({ authEnabled: true, workbenchLogin, users: users.pinNames(), authenticated: !!user, user, isOwner: isOwner(user) });
   });
 
   // Anyone at this machine may add a local user; each user only ever sees their own runs and connections.
