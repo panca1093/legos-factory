@@ -67,8 +67,12 @@ export function parsePlan(prDescription: string, repos: string[]): Plan {
     }
     const tasks = records.map((record) => ({ ...record, state: 'waiting' })) as PlanTask[];
     const ids = new Set<string>();
+    const normalizedIds = new Set<string>();
     for (const task of tasks) {
-      if (ids.has(task.id)) throw new Error(`duplicate task id: ${task.id}`);
+      if (!/^[A-Za-z0-9_-]+$/.test(task.id)) throw new Error(`invalid task id: ${task.id}`);
+      const normalized = task.id.trim().toLowerCase();
+      if (normalizedIds.has(normalized)) throw new Error(`duplicate task id: ${task.id}`);
+      normalizedIds.add(normalized);
       ids.add(task.id);
       if (!repos.includes(task.repo)) throw new Error(`unknown repo: ${task.repo}`);
     }
