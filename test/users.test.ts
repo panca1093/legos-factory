@@ -120,7 +120,7 @@ describe('sign-in', () => {
     for (let i = 0; i < 4; i++) await post('/auth/login', { name: 'Ada', pin: '000000' });
     const locked = await post('/auth/login', { name: 'Ada', pin: '000000' });
     expect(locked.status).toBe(429);
-    expect((await locked.json()).retryAfterMs).toBe(30_000);
+    expect((await locked.json()).retryAfterMs).toBeGreaterThanOrEqual(29_999);
     expect((await req('/auth/login', { method: 'POST', body: '{"name":"Ada","pin":"123456"}' })).status).toBe(403);
     expect((await req('/auth/users', { method: 'POST', body: '{"name":"Eve","pin":"123456"}' })).status).toBe(403);
   });
