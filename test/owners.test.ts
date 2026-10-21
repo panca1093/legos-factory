@@ -49,7 +49,7 @@ describe('owners', () => {
   it('an owner can save automation', async () => {
     const { request } = setup();
     const automation = { ...(await loadSettings()).automation, allowlist: ['go vet'] };
-    for (const owner of [' aDa , other@example.com ', ' ADA@EXAMPLE.COM ']) {
+    for (const owner of [' ada@example.com , other@example.com ', ' ADA@EXAMPLE.COM ']) {
       process.env.LEGOS_OWNERS = owner;
       expect((await request('/api/settings/automation', automation)).status).toBe(200);
       expect(JSON.parse(await readFile(path, 'utf8')).automation).toEqual(automation);
@@ -60,7 +60,7 @@ describe('owners', () => {
     const { request } = setup();
     const originalSettings = JSON.stringify({ custom: 'acme', automation: (await loadSettings()).automation });
     await writeFile(path, originalSettings);
-    for (const owner of [undefined, '', 'Adaline, other-ada@example.com', 'other@example.com']) {
+    for (const owner of [undefined, '', 'other-ada@example.com, ada@other.example.com', 'other@example.com']) {
       if (owner === undefined) delete process.env.LEGOS_OWNERS;
       else process.env.LEGOS_OWNERS = owner;
       const response = await request('/api/settings/automation', { ...(await loadSettings()).automation, allowlist: ['go vet'] });
@@ -71,15 +71,29 @@ describe('owners', () => {
     }
   });
 
+  it('an owner is matched by e-mail', async () => {
+    const { request } = setup();
+    for (const owner of ['ada@example.com', 'ADA@EXAMPLE.COM', ' ada@example.com , other@example.com ']) {
+      process.env.LEGOS_OWNERS = owner;
+      expect(await (await request('/auth/me')).json()).toMatchObject({ authenticated: true, isOwner: true, user: { name: 'Ada', email: 'ada@example.com' } });
+    }
+  });
+
+  it('a name in the owners list is not an owner', async () => {
+    const { request } = setup();
+    process.env.LEGOS_OWNERS = 'Ada';
+    expect(await (await request('/auth/me')).json()).toMatchObject({ authenticated: true, isOwner: false });
+  });
+
   it('me reports isOwner', async () => {
     const { request } = setup();
-    for (const [owner, expected] of [['ADA', true], ['ADA@EXAMPLE.COM', true], ['other@example.com', false]] as const) {
+    for (const [owner, expected] of [['ADA', false], ['ADA@EXAMPLE.COM', true], ['other@example.com', false]] as const) {
       process.env.LEGOS_OWNERS = owner;
       expect(await (await request('/auth/me')).json()).toMatchObject({ authenticated: true, isOwner: expected, user: { name: 'Ada' } });
     }
     delete process.env.LEGOS_OWNERS;
     expect(await (await request('/auth/me')).json()).toMatchObject({ authenticated: true, isOwner: false });
-    process.env.LEGOS_OWNERS = 'Ada';
+    process.env.LEGOS_OWNERS = 'ada@example.com';
     expect(await (await request('/auth/me', undefined, false)).json()).toMatchObject({ authenticated: false, isOwner: false });
   });
 

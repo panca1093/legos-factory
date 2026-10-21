@@ -71,7 +71,7 @@ Track B, auto mode → PR 2:
 - Tests: `remember adds the command prefix to the allowlist`, `remember is ignored for non-Bash decisions`, `remember from a non-owner does not change the allowlist`.
 
 **WP-12 Owners** · PR 1 merged · `server/owners.ts` (new), `server/routes/settings.ts`, `server/routes/auth.ts`, `test/owners.test.ts` (new)
-- Owners come from `LEGOS_OWNERS` (comma-separated user names or e-mails, case-insensitive). With sign-in off (`LEGOS_AUTH=off`) the local user is an owner. Unset with sign-in on: nobody is an owner.
+- Owners come from `LEGOS_OWNERS` (comma-separated e-mail addresses, case-insensitive). With sign-in off (`LEGOS_AUTH=off`) the local user is an owner. Unset with sign-in on: nobody is an owner.
 - `isOwner(user)` in `server/owners.ts`. `PUT /api/settings/automation` answers 403 `{"error":"only owners can change automation"}` for non-owners. `GET /auth/me` adds `isOwner: boolean`.
 - Tests: `an owner can save automation`, `a non-owner gets 403`, `me reports isOwner`, `sign-in off makes the local user an owner`.
 
