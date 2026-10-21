@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type { JiraFlow, Settings, ShareLevel } from '../shared/types.ts';
+import { z } from 'zod';
+import type { AutomationSettings, JiraFlow, Settings, ShareLevel } from '../shared/types.ts';
 
 const run = promisify(execFile);
 
@@ -13,18 +14,35 @@ export function settingsPath(): string {
 
 const FLOW: JiraFlow = { todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' };
 const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, jiraFlow: FLOW };
+export const automationSchema = z.object({
+  allowlist: z.array(z.string().trim().min(1, 'allowlist entries must not be empty')),
+  routing: z.array(z.object({ id: z.string(), kind: z.enum(['paths', 'lines', 'jira', 'repo']), value: z.string(), on: z.boolean() })),
+  models: z.object({ foreman: z.string(), builder: z.string(), inspector: z.string(), cataloger: z.string() }),
+  parallelBuilders: z.number().int().min(0).max(4),
+  reviewAttempts: z.number().int().min(1).max(5),
+  brainstorm: z.enum(['optional', 'always']),
+}).refine((a) => a.models.inspector !== a.models.builder, { message: 'inspector model must differ from builder model', path: ['models', 'inspector'] });
+const AUTOMATION: AutomationSettings = {
+  allowlist: ['npm test', 'npm run build', 'npm run lint', 'go test', 'go vet'],
+  routing: [],
+  models: { foreman: 'opus', builder: 'sonnet', inspector: 'opus', cataloger: 'haiku' },
+  parallelBuilders: 0,
+  reviewAttempts: 3,
+  brainstorm: 'optional',
+};
 const LEVELS: ShareLevel[] = ['private', 'status', 'full'];
 
 const expand = (p: string) => resolve(p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
 
 // A missing or broken file falls back to private-by-default; never share by accident.
-export async function loadSettings(): Promise<Settings & { error: string | null }> {
+export async function loadSettings(): Promise<Settings & { automation: AutomationSettings; error: string | null }> {
   let raw: any;
   try {
     raw = JSON.parse(await readFile(settingsPath(), 'utf8'));
   } catch (err: any) {
-    return { ...DEFAULTS, error: err.code === 'ENOENT' ? null : `could not read ${settingsPath()}: ${err.message}` };
+    return { ...DEFAULTS, automation: structuredClone(AUTOMATION), error: err.code === 'ENOENT' ? null : `could not read ${settingsPath()}: ${err.message}` };
   }
+  const automation = automationSchema.safeParse(raw?.automation);
   const rules = Array.isArray(raw?.share?.rules) ? raw.share.rules : [];
   return {
     share: {
@@ -34,8 +52,22 @@ export async function loadSettings(): Promise<Settings & { error: string | null 
         .map((r: any) => ({ path: expand(r.path), level: r.level })),
     },
     jiraFlow: Object.fromEntries(Object.entries(FLOW).map(([k, d]) => [k, typeof raw?.jiraFlow?.[k] === 'string' && raw.jiraFlow[k].trim() ? raw.jiraFlow[k].trim() : d])) as JiraFlow,
+    automation: automation.success ? automation.data : structuredClone(AUTOMATION),
     error: null,
   };
+}
+
+export async function saveAutomation(automation: AutomationSettings): Promise<void> {
+  const path = settingsPath();
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(await readFile(path, 'utf8'));
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') throw err;
+    raw = {};
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify({ ...raw, automation }, null, 2) + '\n');
 }
 
 // Longest matching folder wins, so a repo can override its parent folder.
