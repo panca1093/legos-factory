@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel, Stage } from '../shared/types.ts';
@@ -28,6 +28,8 @@ export const launchSchema = z.object({
   kind: z.enum(['chat', 'task']).catch('chat'),
   share: z.enum(SHARES).optional().catch(undefined),
   stage: z.enum(['design', 'build']).optional().catch(undefined),
+  task: optText(),
+  persona: z.enum(['foreman', 'builder', 'inspector', 'cataloger']).optional(),
 });
 
 // The target repo owns its conventions; the factory only says what the stage should produce.
@@ -82,7 +84,10 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const ticket = req.ticket || null;
   const share = req.share ?? shareFor(cwd, settings);
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
-  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt, permissionMode, resume, model, ticket, stage, share }, connected));
+  let runPrompt = stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt;
+  if (req.persona) runPrompt += `\n\n${await readFile(new URL(`../workflows/factory/personas/${req.persona}.md`, import.meta.url), 'utf8')}`;
+  const runModel = model ?? (req.persona ? settings.automation.models[req.persona] : undefined);
+  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: runPrompt, permissionMode, resume, model: runModel, ticket, stage, share, task: req.task, persona: req.persona }, connected));
   if (stage && deps.workItems.get(uid, req.ticket)) void syncWorkItem(deps, uid, req.ticket);
   return run;
 }
