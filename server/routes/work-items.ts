@@ -20,7 +20,7 @@ export function workItemsRoutes(deps: Deps) {
 
   const view = (owner: string, ticket: string): WorkItem => {
     const item = workItems.get(owner, ticket)!;
-    return { ticket, source: 'jira', plan: null, repos: workItems.repos(owner, ticket).map((repo) => ({ ...repo, stage: 'building', attempt: 0 })), links: workItems.links(owner, ticket), note: item.note, status: item.status };
+    return { ticket, source: item.source, plan: item.plan, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), note: item.note, status: item.status };
   };
 
   routes.get('/api/work-items', (c) => {
@@ -63,6 +63,10 @@ export function workItemsRoutes(deps: Deps) {
     workItems.link(uid, ticket, { repo: name, kind, prId, branch: pr.source, title: pr.title, state: pr.state, runId: null }, true);
     return c.json(view(uid, ticket));
   });
+
+  routes.post('/api/work-items/:ticket/approve-spec', (c) => c.json({ error: 'not implemented yet' }, 501));
+  routes.post('/api/work-items/:ticket/prs/:repo/approve', (c) => c.json({ error: 'not implemented yet' }, 501));
+  routes.post('/api/work-items/:ticket/prs/:repo/merge', (c) => c.json({ error: 'not implemented yet' }, 501));
 
   return routes;
 }
