@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -77,8 +78,23 @@ export async function saveAutomation(automation: AutomationSettings): Promise<vo
     raw = {};
   }
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(`${path}.tmp`, JSON.stringify({ ...raw, automation }, null, 2) + '\n');
-  await rename(`${path}.tmp`, path);
+  // The temp name carries the pid and a random suffix so two saves in flight never share a file.
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  let mode: number | undefined;
+  try {
+    mode = (await stat(path)).mode & 0o777;
+  } catch (err: any) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  try {
+    await writeFile(tmp, JSON.stringify({ ...raw, automation }, null, 2) + '\n');
+    // The rename replaces the inode, so the permissions the owner chose have to be carried over.
+    if (mode !== undefined) await chmod(tmp, mode);
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true });
+    throw err;
+  }
 }
 
 // Longest matching folder wins, so a repo can override its parent folder.
