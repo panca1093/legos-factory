@@ -1,7 +1,9 @@
-import type { JiraFlow, LinkKind, Run } from '../shared/types.ts';
+import type { JiraFlow, LinkKind, Run, StreamMessage } from '../shared/types.ts';
 import { NO_WB, errMsg, type Deps } from './http.ts';
 import { gitBranch, loadSettings } from './policy.ts';
-import { parseRepo } from './workspace.ts';
+import { managedWorkspace, parseRepo } from './workspace.ts';
+
+import { pipelineRunEnded, syncPipeline } from './pipeline.ts';
 
 // What the factory knows about a work item: whether work started, its repos and their PRs.
 export type Facts = { started: boolean; repos: string[]; links: { repo: string; kind: LinkKind; state: string }[] };
@@ -96,7 +98,9 @@ async function syncOnce(deps: Deps, owner: string, ticket: string) {
     note(`Error: ${errMsg(err)}`);
   }
   // re-read: a capture may have failed while this sync ran
-  if (!workItems.get(owner, ticket)?.note?.text.startsWith(CAPTURE_FAILED)) workItems.setNote(owner, ticket, issue);
+  const currentNote = workItems.get(owner, ticket)?.note?.text;
+  if (!currentNote?.startsWith(CAPTURE_FAILED) && !currentNote?.startsWith('Escalated:')) workItems.setNote(owner, ticket, issue);
+  await syncPipeline(deps, owner, ticket);
 }
 
 // The periodic pass: work items not yet at Ready for QA or fully merged, of owners with a connected workbench.
@@ -107,7 +111,26 @@ export async function syncDue(deps: Deps): Promise<void> {
   await Promise.all(due.filter((i) => connected.get(i.owner)).map((i) => syncWorkItem(deps, i.owner, i.ticket)));
 }
 
+const started = new WeakSet<Deps>();
+
 export function startSyncLoop(deps: Deps, ms: number) {
+  if (!started.has(deps)) {
+    started.add(deps);
+    deps.workItems.backfillStages();
+    deps.runs.on('message', (message: StreamMessage) => {
+      if (message.type !== 'run') return;
+      const run = message.run;
+      if (!run.endedAt && run.stage === 'design' && run.ticket && !deps.workItems.get(run.owner, run.ticket)?.plan) {
+        const links = deps.workItems.links(run.owner, run.ticket);
+        for (const repo of deps.workItems.repos(run.owner, run.ticket)) {
+          const worked = deps.db.prepare(`select 1 from runs where owner = ? and run_id != ? and json_extract(item, '$.ticket') = ? and lower(json_extract(item, '$.repo')) = ? and (task is not null or persona is not null) limit 1`).get(run.owner, run.id, run.ticket, repo.name.toLowerCase());
+          if (repo.stage === 'building' && repo.attempt === 0 && !worked && !links.some((l) => l.repo === repo.name && l.kind === 'impl')) deps.workItems.setStage(run.owner, run.ticket, repo.name, 'shaping');
+        }
+      }
+      if (!run.endedAt || managedWorkspace(deps.wsRoot, run.cwd)) return;
+      void pipelineRunEnded(deps, message.run).catch((err) => console.warn('pipeline run end failed:', errMsg(err)));
+    });
+  }
   const timer = setInterval(() => void syncDue(deps).catch((err) => console.warn('work item sync failed:', errMsg(err))), ms);
   timer.unref?.();
   return timer;
@@ -129,5 +152,7 @@ export async function capturePr(deps: Deps, run: Omit<Run, 'events'>, cwd: strin
     if (deps.workItems.get(owner, ticket)?.note?.text.startsWith(`${CAPTURE_FAILED} in ${repo}:`)) deps.workItems.setNote(owner, ticket, null);
   } catch (err) {
     deps.workItems.setNote(owner, ticket, `${CAPTURE_FAILED} in ${repo}: ${errMsg(err)}`);
+  } finally {
+    await pipelineRunEnded(deps, run);
   }
 }

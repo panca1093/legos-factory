@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { query as sdkQuery, type CanUseTool, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, Stage, StreamMessage, TimelineEvent } from '../shared/types.ts';
+import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Persona, Run, RunKind, ShareLevel, Stage, StreamMessage, TimelineEvent } from '../shared/types.ts';
 import { toEvents } from './claude-sessions.ts';
 import { loadSettings } from './policy.ts';
 
@@ -20,6 +20,8 @@ export type StartRequest = {
   model?: string;
   ticket?: string | null;
   stage?: Stage | null;
+  task?: string | null;
+  persona?: Persona | null;
   share?: ShareLevel;
   // extra MCP servers for this run only (the Settings connections, via the local proxy)
   mcp?: Record<string, { url: string; headers: Record<string, string> }>;
@@ -200,8 +202,8 @@ export class RunManager extends EventEmitter {
       fromTask: false,
       ticket: req.ticket ?? null,
       stage: req.stage ?? null,
-      task: null,
-      persona: null,
+      task: req.task ?? null,
+      persona: req.persona ?? null,
       share: req.share ?? 'private',
       runtime: 'claude-code',
       sessionId: req.resume ?? null,
@@ -433,6 +435,17 @@ export class RunManager extends EventEmitter {
     if (!live || !live.run.fromTask || live.run.kind !== 'chat' || live.run.status !== 'idle' || live.input.closed) return false;
     live.run.kind = 'task';
     this.enqueue(live, note?.trim() || 'Discussion is done. Continue the original task to completion, applying what we agreed.');
+    this.publish(live.run);
+    return true;
+  }
+
+  // The discussion is over: the tracked chat becomes the spec run and ends on its own.
+  startSpec(id: string, text: string): boolean {
+    const live = this.live.get(id);
+    if (!live || live.run.kind !== 'chat' || live.run.status !== 'idle' || live.input.closed) return false;
+    if (!live.run.ticket || live.run.stage !== 'design') return false;
+    live.run.kind = 'task';
+    this.enqueue(live, text);
     this.publish(live.run);
     return true;
   }

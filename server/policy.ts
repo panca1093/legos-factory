@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { routingRuleError } from './routing.ts';
 import type { AutomationSettings, JiraFlow, Settings, ShareLevel } from '../shared/types.ts';
 
 const run = promisify(execFile);
@@ -15,9 +16,13 @@ export function settingsPath(): string {
 
 const FLOW: JiraFlow = { todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' };
 const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, jiraFlow: FLOW };
+const routingRuleSchema = z.object({ id: z.string(), kind: z.enum(['paths', 'lines', 'jira', 'repo']), value: z.string(), on: z.boolean() }).superRefine((rule, ctx) => {
+  const error = routingRuleError(rule);
+  if (error) ctx.addIssue({ code: 'custom', message: `routing rule ${rule.id}: ${error}`, path: ['value'] });
+});
 export const automationSchema = z.object({
   allowlist: z.array(z.string().trim().min(1, 'allowlist entries must not be empty')),
-  routing: z.array(z.object({ id: z.string(), kind: z.enum(['paths', 'lines', 'jira', 'repo']), value: z.string(), on: z.boolean() })),
+  routing: z.array(routingRuleSchema),
   models: z.object({ foreman: z.string(), builder: z.string(), inspector: z.string(), cataloger: z.string() }).refine((models) => models.inspector !== models.builder, { message: 'inspector model must differ from builder model', path: ['inspector'] }),
   parallelBuilders: z.number().int().min(0).max(4),
   reviewAttempts: z.number().int().min(1).max(5),
@@ -35,6 +40,16 @@ function readAutomation(raw: unknown): { automation: AutomationSettings; automat
   const automationErrors: string[] = [];
   const entries = (Object.keys(AUTOMATION) as (keyof AutomationSettings)[]).map((key) => {
     const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined;
+    if (key === 'routing' && Array.isArray(value)) {
+      const rules = value.flatMap((rule) => {
+        const parsed = routingRuleSchema.safeParse(rule);
+        if (parsed.success) return [parsed.data];
+        const id = rule && typeof rule.id === 'string' ? rule.id : null;
+        automationErrors.push(id === null ? 'routing' : `routing rule ${id}`);
+        return [];
+      });
+      return [key, rules];
+    }
     const parsed = automationSchema.shape[key].safeParse(value);
     if (parsed.success) return [key, parsed.data];
     automationErrors.push(key);

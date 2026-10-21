@@ -1,8 +1,10 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { WorkItem } from '../../shared/types.ts';
 import { parseRepo } from '../workspace.ts';
 import { HttpError, TICKET_RE, parse, readBody, requireMyRepo, requireWorkbench, upstream, type Deps, type Env } from '../http.ts';
+import { approvePr, approveSpec, requestPrChanges, requestSpecChanges } from '../pipeline.ts';
+import { mergePrInForge } from './prs.ts';
 
 const reposSchema = z.object({
   repos: z.custom<string[]>((r) => Array.isArray(r) && r.length <= 25 && r.every((x) => typeof x === 'string' && !!parseRepo(x)), 'repos must list at most 25 workspace/repo names'),
@@ -14,13 +16,30 @@ const linkSchema = z.object({
   kind: z.enum(['spec', 'impl']),
 });
 
+const commentSchema = z.object({
+  comment: z.string().trim().catch('').refine((c) => !!c, 'comment is required'),
+});
+
 export function workItemsRoutes(deps: Deps) {
   const { workItems, myRepos } = deps;
   const routes = new Hono<Env>();
 
   const view = (owner: string, ticket: string): WorkItem => {
     const item = workItems.get(owner, ticket)!;
-    return { ticket, source: item.source, plan: item.plan, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), note: item.note, status: item.status };
+    return { ticket, source: item.source, plan: item.plan, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), note: item.note, status: item.status, routing: workItems.routingView(owner, ticket) };
+  };
+
+  const ticketOf = (c: Context<Env>): string => {
+    const ticket = (c.req.param('ticket') ?? '').toUpperCase();
+    if (!TICKET_RE.test(ticket)) throw new HttpError(400, 'ticket must look like PROJ-123');
+    return ticket;
+  };
+
+  const repoOf = (owner: string, ticket: string, name: string) => {
+    if (!workItems.get(owner, ticket)) throw new HttpError(404, 'work item not found');
+    const repo = workItems.repos(owner, ticket).find((r) => r.name.toLowerCase() === name.toLowerCase());
+    if (!repo) throw new HttpError(404, 'that repo is not part of this work item');
+    return repo;
   };
 
   routes.get('/api/work-items', (c) => {
@@ -30,8 +49,7 @@ export function workItemsRoutes(deps: Deps) {
 
   routes.put('/api/work-items/:ticket', async (c) => {
     const uid = c.get('uid');
-    const ticket = c.req.param('ticket').toUpperCase();
-    if (!TICKET_RE.test(ticket)) throw new HttpError(400, 'ticket must look like PROJ-123');
+    const ticket = ticketOf(c);
     const { repos } = parse(reposSchema, await readBody(c));
     if (!repos.length && !workItems.get(uid, ticket)) throw new HttpError(400, 'repos required: pick at least 1');
     for (const r of repos) requireMyRepo(deps, uid, r);
@@ -48,8 +66,7 @@ export function workItemsRoutes(deps: Deps) {
 
   routes.post('/api/work-items/:ticket/links', async (c) => {
     const uid = c.get('uid');
-    const ticket = c.req.param('ticket').toUpperCase();
-    if (!TICKET_RE.test(ticket)) throw new HttpError(400, 'ticket must look like PROJ-123');
+    const ticket = ticketOf(c);
     const { repo, prId, kind } = parse(linkSchema, await readBody(c));
     if (!workItems.get(uid, ticket)) throw new HttpError(404, 'work item not found');
     requireMyRepo(deps, uid, repo);
@@ -64,9 +81,50 @@ export function workItemsRoutes(deps: Deps) {
     return c.json(view(uid, ticket));
   });
 
-  routes.post('/api/work-items/:ticket/approve-spec', (c) => c.json({ error: 'not implemented yet' }, 501));
-  routes.post('/api/work-items/:ticket/prs/:repo/approve', (c) => c.json({ error: 'not implemented yet' }, 501));
-  routes.post('/api/work-items/:ticket/prs/:repo/merge', (c) => c.json({ error: 'not implemented yet' }, 501));
+  routes.post('/api/work-items/:ticket/approve-spec', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    await approveSpec(deps, uid, ticket);
+    return c.json({ ok: true });
+  });
+
+  routes.post('/api/work-items/:ticket/prs/:repo/approve', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    await approvePr(deps, uid, ticket, c.req.param('repo'));
+    return c.json({ ok: true });
+  });
+
+  // The factory never merges: a person does, here when the forge has a merge tool, in the forge otherwise.
+  routes.post('/api/work-items/:ticket/prs/:repo/merge', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    const repo = repoOf(uid, ticket, c.req.param('repo'));
+    if (repo.stage !== 'ready') throw new HttpError(409, 'that PR is not ready to merge');
+    const link = workItems.links(uid, ticket).find((l) => l.kind === 'impl' && l.state === 'OPEN' && l.repo.toLowerCase() === repo.name.toLowerCase());
+    if (!link) throw new HttpError(404, 'there is no open implementation PR for that repo');
+    const ref = parseRepo(repo.name);
+    if (!ref) throw new HttpError(400, 'repo must look like workspace/repo');
+    const merged = await mergePrInForge(deps, uid, ref, link.prId);
+    if ('url' in merged) return c.json({ error: 'merge in the forge', url: merged.url }, 409);
+    return c.json({ ok: true });
+  });
+
+  routes.post('/api/work-items/:ticket/request-spec-changes', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    const { comment } = parse(commentSchema, await readBody(c));
+    await requestSpecChanges(deps, uid, ticket, comment);
+    return c.json({ ok: true });
+  });
+
+  routes.post('/api/work-items/:ticket/prs/:repo/request-changes', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    const { comment } = parse(commentSchema, await readBody(c));
+    await requestPrChanges(deps, uid, ticket, c.req.param('repo'), comment);
+    return c.json({ ok: true });
+  });
 
   return routes;
 }

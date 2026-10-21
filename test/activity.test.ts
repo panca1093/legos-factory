@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +21,27 @@ function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
 }
 
 describe('ActivityLog', () => {
+  it('persists task and persona on insert and preserves them across updates', async () => {
+    const root = tmp();
+    const db = openDb(join(root, 'factory.db'));
+    try {
+      const log = new ActivityLog(db);
+      const stored = () => db.prepare('select task, persona from runs where run_id = ?').get('r1');
+      await log.record(run({ task: 'T1', persona: 'builder' }), 'u1');
+      expect(stored()).toEqual({ task: 'T1', persona: 'builder' });
+      expect(await log.record(run({ task: 'T2', persona: 'inspector' }), 'u1')).not.toBeNull();
+      expect(stored()).toEqual({ task: 'T2', persona: 'inspector' });
+      await log.record(run({ task: 'T2', persona: 'inspector', status: 'completed' }), 'u1');
+      expect(stored()).toEqual({ task: 'T2', persona: 'inspector' });
+      expect(await log.record(run({ task: 'T2', persona: 'inspector', status: 'completed' }), 'u1')).toBeNull();
+      new ActivityLog(db);
+      expect(stored()).toEqual({ task: 'T2', persona: 'inspector' });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('records only real changes and survives a restart', async () => {
     const path = join(tmp(), 'factory.db');
     const log = new ActivityLog(openDb(path));

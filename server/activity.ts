@@ -44,15 +44,15 @@ export class ActivityLog {
   // Returns the item when it was written (a real change), else null.
   async record(run: Omit<Run, 'events'>, owner: string): Promise<ActivityItem | null> {
     const item = toItem(run);
-    const sig = [item.status, item.turns, item.endedAt, item.ticket, item.model, item.kind, item.sessionId].join('|');
+    const sig = [item.status, item.turns, item.endedAt, item.ticket, item.model, item.kind, item.sessionId, run.task, run.persona].join('|');
     if (this.lastSig.get(item.runId) === sig) return null;
     this.lastSig.set(item.runId, sig);
     this.db
       .prepare(
-        `insert into runs (run_id, owner, session_id, item, started_at, last_event_at) values (?, ?, ?, ?, ?, ?)
-         on conflict (run_id) do update set session_id = excluded.session_id, item = excluded.item, last_event_at = excluded.last_event_at`,
+        `insert into runs (run_id, owner, session_id, item, started_at, last_event_at, task, persona) values (?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict (run_id) do update set session_id = excluded.session_id, item = excluded.item, last_event_at = excluded.last_event_at, task = excluded.task, persona = excluded.persona`,
       )
-      .run(item.runId, owner, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt);
+      .run(item.runId, owner, item.sessionId, JSON.stringify(item), item.startedAt, item.lastEventAt, run.task ?? null, run.persona ?? null);
     return item;
   }
 

@@ -167,3 +167,36 @@ describe('automation settings', () => {
     expect((await put({ ...defaults, parallelBuilders: 4 })).status).toBe(200);
   });
 });
+
+describe('routing rule validation', () => {
+  it.each([
+    ['paths', '/auth/**'], ['paths', '../auth/**'], ['paths', 'auth/../secrets'], ['paths', 'auth/?'], ['paths', '!auth/**'], ['paths', 'auth/[ab]'], ['paths', 'auth/**,'],
+    ['lines', '0'], ['lines', '-1'], ['lines', '1.5'], ['lines', '>400'], ['lines', '400,500'], ['lines', ''],
+    ['jira', 'Security'], ['jira', 'type:'], ['jira', 'label:security,'], ['jira', 'other:security'],
+    ['repo', 'acme'], ['repo', '*/api'], ['repo', 'acme/api/**'], ['repo', 'acme/api?'], ['repo', '!acme/api'],
+  ])('rejects invalid %s value %s and names the rule', async (kind, value) => {
+    const res = await put({ ...defaults, routing: [{ id: 'risk-rule', kind, value, on: true }] });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('risk-rule');
+    expect(await readFile(path, 'utf8').catch(() => null)).toBeNull();
+  });
+
+  it('accepts the routing grammar for every kind', async () => {
+    const routing = [
+      { id: 'paths', kind: 'paths', value: ' db/migrations/**, AUTH/** ', on: true },
+      { id: 'lines', kind: 'lines', value: ' 400 ', on: true },
+      { id: 'jira', kind: 'jira', value: ' type:Security, label:security ', on: true },
+      { id: 'repo', kind: 'repo', value: ' acme/api, ACME/payments-* ', on: false },
+    ];
+    expect((await put({ ...defaults, routing })).status).toBe(200);
+    expect((await loadSettings()).automation.routing).toEqual(routing);
+  });
+
+  it('skips an invalid stored rule while preserving valid sibling rules and settings', async () => {
+    const valid = { id: 'keep', kind: 'repo', value: 'acme/api', on: true };
+    await writeFile(path, JSON.stringify({ automation: { ...defaults, allowlist: ['go vet'], routing: [valid, { id: 'bad-threshold', kind: 'lines', value: '>400', on: true }] } }));
+    const settings = await loadSettings();
+    expect(settings.automation).toEqual({ ...defaults, allowlist: ['go vet'], routing: [valid] });
+    expect(settings.automationErrors).toEqual([expect.stringContaining('bad-threshold')]);
+  });
+});
