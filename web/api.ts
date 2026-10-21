@@ -3,6 +3,7 @@ import type { ActivityItem, AutomationSettings, DecisionAnswer, FixQueue, ModelO
 
 export type Me = {
   authEnabled: boolean;
+  isOwner?: boolean;
   // "Sign in with workbench" is configured
   workbenchLogin: boolean;
   // local (PIN) users, for the sign-in screen
