@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home on a phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f7fb}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 14px;border-radius:12px;border:1px solid rgba(31,42,72,.14);background:#fff;color:#151a29;font:600 14px Inter,sans-serif;flex:1;text-decoration:none}
+.btn.p{background:#6259db;border-color:#6259db;color:#fff}
+.chip{font:600 11.5px ui-monospace,Menlo,monospace;color:#3c348e;background:#efedff;border-radius:6px;padding:2px 7px}
+.meta{font-size:12.5px;color:#5b6479}
+.card{background:#fff;border:1px solid rgba(31,42,72,.1);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px}
+.tag{font-size:11px;font-weight:700;border-radius:99px;padding:2px 9px}
+code{font:12px ui-monospace,Menlo,monospace;background:#f6f7fb;border:1px solid rgba(31,42,72,.08);border-radius:6px;padding:2px 6px;color:#485266;word-break:break-all}
+.tile{flex:1;display:flex;flex-direction:column;padding:10px 12px;border-radius:14px;background:#fff;border:1px solid rgba(31,42,72,.1);text-decoration:none;color:#151a29}
+.tile b{font-size:20px;line-height:1.2;font-weight:800}
+.tile span{font-size:11.5px;color:#5b6479}
+.tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;font-weight:650;color:#5b6479;flex:1;min-height:52px;justify-content:center;text-decoration:none}
+.tab.on{color:#5148c7}
+</style>
+</helmet>
+<div style="width:390px;height:844px;box-sizing:border-box;display:flex;flex-direction:column;font-family:Inter,ui-sans-serif,-apple-system,sans-serif;color:#151a29;font-size:14px;line-height:1.5;background:#f6f7fb">
+<header style="display:flex;align-items:center;gap:10px;padding:18px 16px 10px">
+<span style="width:30px;height:30px;border-radius:8px;background:#6259db;color:#fff;display:grid;place-items:center;font-weight:800;font-size:13px">L</span>
+<b style="font-size:17px">Home</b>
+<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:650;color:#17654f;background:#e9f6ee;border-radius:99px;padding:3px 10px"><span style="width:7px;height:7px;border-radius:50%;background:#2f9c74"></span>Live</span>
+</header>
+<div style="flex:1;overflow:auto;padding:4px 16px 16px;display:flex;flex-direction:column;gap:12px">
+<div style="display:flex;gap:8px">
+<a class="tile" href="Mobile.dc.html" style="border-color:#f0dcc2;background:#fff9f1"><b style="color:#875219">5</b><span>need you</span></a>
+<a class="tile" href="Mobile.dc.html"><b>3</b><span>working</span></a>
+<a class="tile" href="Mobile.dc.html"><b>1</b><span>to merge</span></a>
+</div>
+<span class="meta" style="font-weight:650">Needs you · paused runs first</span>
+<div class="card" style="border-color:#f0dcc2">
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tag" style="background:#fff3e2;color:#875219">Run paused</span><span class="chip">PROJ-142</span><span class="meta">acme/web · 4 min</span></div>
+<b>Wants to run a command outside the allowlist</b>
+<code>docker compose up -d db</code>
+<div style="display:flex;gap:8px"><button class="btn" type="button">Stop</button><button class="btn p" type="button">Allow once</button></div>
+</div>
+<div class="card" style="border-color:#d9d5ff">
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tag" style="background:#efedff;color:#3c348e">Spec review</span><span class="chip">PROJ-151</span><span class="meta">1 h</span></div>
+<b>Archive a workspace</b>
+<span class="meta">Owners archive; data kept 30 days. 4 tests planned.</span>
+<div style="display:flex;gap:8px"><button class="btn" type="button">Changes</button><button class="btn p" type="button">Approve</button></div>
+</div>
+<div class="card">
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tag" style="background:#e9f6ee;color:#17654f">Ready to merge</span><span class="chip">PROJ-127</span><span class="meta">acme/web #305</span></div>
+<b>Show loan purpose on the summary card</b>
+<span class="meta">Low risk · agent review passed · checks passed</span>
+<div style="display:flex;gap:8px"><a class="btn" href="Mobile.dc.html">Look first</a><button class="btn p" type="button">Merge</button></div>
+</div>
+<div class="card">
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="tag" style="background:#fff3e2;color:#875219">PR review</span><span class="chip">PROJ-127</span><span class="meta">acme/api #476</span></div>
+<b>Routed to you: touches db/migrations</b>
+<span class="meta">Diffs read better on a bigger screen</span>
+</div>
+</div>
+<nav aria-label="Main" style="display:flex;border-top:1px solid rgba(31,42,72,.1);background:#fff;padding:0 6px 14px">
+<a class="tab on" href="Mobile.dc.html" aria-current="page"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"></path><path d="M5 10v10h14V10"></path></svg>Home</a>
+<a class="tab" href="Mobile.dc.html"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1.5"></rect><rect x="10" y="4" width="5" height="11" rx="1.5"></rect><rect x="17" y="4" width="4" height="7" rx="1.5"></rect></svg>Work</a>
+<a class="tab" href="Mobile.dc.html"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><path d="M6 8.5V15a3 3 0 0 0 3 3h6.5M18 15.5V9a3 3 0 0 0-3-3h-2"></path></svg>Reviews</a>
+<a class="tab" href="Mobile.dc.html"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>Activity</a>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

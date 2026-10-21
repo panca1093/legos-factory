@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f7fb}
+a{color:#6259db;text-decoration:none}a:hover{color:#5148c7}
+.panel{border:1px solid rgba(31,42,72,.09);background:#fff;box-shadow:0 2px 12px #232b4b08;border-radius:16px}
+.eyebrow{font-size:10px;color:#687187;font-weight:760;letter-spacing:.13em;text-transform:uppercase;margin:16px 11px 8px}
+.navrow{display:flex;align-items:center;gap:11px;padding:10px 11px;border-radius:12px;color:#626b7f;font-size:13px;font-weight:650}
+.navrow:hover{background:#f2f1fc}
+.navrow.active{background:#efedff;color:#3c348e}
+.navrow .count{margin-left:auto;background:#6259db;color:#fff;border-radius:99px;font-size:10px;padding:1px 7px;font-weight:750}
+.navrow .later{margin-left:auto;font-size:11px;color:#5148c7;font-weight:650}
+.sessrow{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:12px;font-size:12.5px;font-weight:650;color:#151a29}
+.sdot{width:7px;height:7px;border-radius:50%;flex:none;background:#929bad}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;border-radius:10px;border:1px solid rgba(31,42,72,.14);background:#fff;color:#151a29;font:650 12.5px Inter,sans-serif;cursor:pointer}
+.btn:hover{background:#f2f1fc}
+.btn.primary{background:#6259db;border-color:#6259db;color:#fff}
+.btn.primary:hover{background:#5148c7;color:#fff}
+.text-action{border:0;background:none;color:#6259db;font:750 11.5px Inter,sans-serif;padding:7px 0;cursor:pointer}
+.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:8px;background:#efedff;color:#6259db;font-size:10.5px;font-weight:700;letter-spacing:0;text-transform:none}
+.page-eyebrow{display:flex;align-items:center;gap:9px;font-size:10px;color:#687187;font-weight:760;letter-spacing:.13em;text-transform:uppercase;margin-bottom:8px}
+.glance{width:min(420px,100%);flex:none;padding:8px 10px 7px;border:1px solid rgba(31,42,72,.09);border-radius:13px;background:#fff;box-shadow:0 3px 12px #292d5310;box-sizing:border-box}
+.gsw{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:2px;background:#efedff;border-radius:9px}
+.gtab{display:flex;justify-content:center;align-items:center;gap:5px;min-height:31px;border:1px solid transparent;border-radius:7px;background:transparent;color:#687187;font:600 10.5px Inter,sans-serif;white-space:nowrap;cursor:pointer}
+.gtab b{font-size:12px;color:inherit}
+.gtab.on{background:#fff;color:#151a29;box-shadow:0 2px 6px #1c214218;border-color:rgba(31,42,72,.09)}
+.sectionbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:30px 0 12px}
+.sectionbar h2{margin:0;font-size:16px;letter-spacing:-.02em}
+.sectionbar h2 small{font-size:13px;color:#687187;font-weight:600;margin-left:4px}
+.sectionbar .meta{font-size:11.5px;color:#687187}
+.rail-headline{display:flex;justify-content:space-between;align-items:center;margin:0 2px 9px;color:#687187;font-size:10px;letter-spacing:.09em;font-weight:750;text-transform:uppercase}
+.rail-headline b{color:#151a29;font-size:11px;letter-spacing:0;font-weight:650;text-transform:none}
+.tone-watch{--tint:#fff5e8;--edge:#f0dcc2;--tone:#855019}
+.tone-run{--tint:#f4f3ff;--edge:#d9d5ff;--tone:#5148c7}
+.tone-good{--tint:#eff8f4;--edge:#c8e2d5;--tone:#196751}
+.tone-alert{--tint:#fff2f0;--edge:#edcfcc;--tone:#a03e4b}
+.run-tab{display:block;width:100%;min-height:78px;text-align:left;padding:11px 13px;border:1px solid var(--edge);background:var(--tint);border-radius:13px;color:#151a29;font:inherit;cursor:pointer;box-sizing:border-box;box-shadow:0 2px 5px #263c5c08}
+.run-tab:hover{box-shadow:0 8px 16px #2c375714}
+.run-tab.sel{border-color:var(--tone);box-shadow:0 6px 17px #25375c18,0 0 0 2px #6259db26;transform:translateX(2px)}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-ident{display:flex;align-items:center;gap:9px;min-width:0}
+.card-avatar{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:8px;color:#fff;font-size:13px;font-weight:760;background:var(--tone)}
+.card-name{font-size:13px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.015em}
+.card-state{font-size:11px;font-weight:750;white-space:nowrap;color:var(--tone)}
+.card-foot{display:flex;justify-content:space-between;gap:8px;margin-top:9px;font-size:11px;font-weight:560;white-space:nowrap}
+.kicker{font-size:10px;color:#687187;letter-spacing:.11em;text-transform:uppercase;font-weight:700}
+.callout{display:flex;gap:12px;align-items:center;padding:14px;border:1px solid var(--edge);background:var(--tint);border-radius:13px}
+.callout .ic{width:28px;height:28px;flex:none;border-radius:8px;display:grid;place-items:center;color:#fff;background:var(--tone);font-weight:800}
+.callout b{display:block;font-size:13px;color:var(--tone)}
+.callout span{display:block;font-size:11.5px;color:#151a29}
+.ev{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;align-items:center;min-height:41px;border-bottom:1px solid rgba(31,42,72,.09);font-size:11.5px}
+.ev span{color:#687187}
+.chipt{font:650 11px ui-monospace,Menlo,monospace;color:#3c348e;background:#efedff;border-radius:6px;padding:1px 6px}
+.section-list{border-top:1px solid rgba(31,42,72,.09);border-bottom:1px solid rgba(31,42,72,.09);padding:0 4px}
+.row{display:flex;gap:11px;align-items:center;padding:14px 0;border-bottom:1px solid rgba(31,42,72,.09);min-width:0}
+.row:last-child{border-bottom:0}
+.marker{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:800}
+.copy{min-width:0;flex:1}
+.copy b{display:block;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.copy span{display:block;color:#687187;font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tone-off{--tint:#f6f7fa;--edge:#e3e5ec;--tone:#6b7385}
+.ncard{display:flex;flex-direction:column;gap:8px;padding:13px 14px;border:1px solid var(--edge);background:var(--tint);border-radius:13px;min-width:0}
+.ncard b{font-size:13px;letter-spacing:-.01em}
+.nh{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.ntag{font-size:11px;font-weight:750;color:var(--tone)}
+.nm{font-size:11px;color:#687187}
+.na{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+code{font:11.5px ui-monospace,Menlo,monospace;background:#fff;border:1px solid rgba(31,42,72,.1);border-radius:6px;padding:1px 5px;color:#485266}
+.npanel{border:1px solid rgba(31,42,72,.09);border-radius:14px;background:#fff;overflow:hidden}
+.nrow{display:flex;gap:12px;align-items:center;padding:12px 16px;border-top:1px solid rgba(31,42,72,.08);flex-wrap:wrap}
+.nrow:first-child{border-top:0}
+.ndot{width:8px;height:8px;border-radius:50%;flex:none}
+.nbody{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.nbody .nh{display:flex;gap:8px;align-items:center}
+.nbody .ntag{font-size:11px;font-weight:700;border-radius:99px;padding:1px 9px}
+.ncount{font-size:13px}
+.nsub{font-size:11.5px;color:#687187;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:12px}
+.kpi{border:1px solid rgba(31,42,72,.09);border-radius:13px;padding:12px 14px}
+.kpi .l{font-size:10.5px;color:#687187;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.kpi strong{display:block;font-size:22px;margin:2px 0}
+.kpi small{color:#687187;font-size:11px}
+</style>
+</helmet>
+<div style="box-sizing:border-box;width:100%;min-height:1400px;padding:14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;font-family:Inter,ui-sans-serif,-apple-system,sans-serif;color:#151a29;font-size:14px;line-height:1.5">
+
+<nav class="panel" aria-label="Main" style="flex:1 1 230px;max-width:260px;box-sizing:border-box;padding:15px 10px 10px;display:flex;flex-direction:column;min-height:1340px">
+<a href="NeedsYou.dc.html" style="display:flex;gap:10px;align-items:center;padding:0 8px 6px;color:#151a29">
+<span style="width:33px;height:33px;border-radius:8px;background:#6259db;color:#fff;display:grid;place-items:center;font-weight:800;letter-spacing:-.08em">L</span>
+<span style="display:flex;flex-direction:column;line-height:1.25"><b style="font-size:14px">legos<span style="color:#687187;font-weight:600"> / factory</span></b><span style="font-size:11px;color:#687187">Mission control</span></span>
+</a>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:12px 6px 6px">
+<a class="btn" href="StartWork.dc.html">New chat</a>
+<a class="btn" href="StartWork.dc.html">New task</a>
+</div>
+<div class="eyebrow">Workspace</div>
+<a class="navrow active" href="NeedsYou.dc.html" aria-current="page">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8l9 5 9-5Z"></path><path d="M3 8v8l9 5 9-5V8"></path></svg>
+Overview<span class="count">{{needCount}}</span></a>
+<a class="navrow" href="Work.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1.5"></rect><rect x="10" y="4" width="5" height="11" rx="1.5"></rect><rect x="17" y="4" width="4" height="7" rx="1.5"></rect></svg>
+Work<span class="later">3 running</span></a>
+<a class="navrow" href="Reviews.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m5 12 5 5L20 7"></path></svg>
+Reviews</a>
+<a class="navrow" href="Activity.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+Activity</a>
+<a class="navrow" href="Automation.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg>
+Settings</a>
+<div class="eyebrow">Chats</div>
+<a class="sessrow" href="Activity.dc.html"><span class="sdot" style="background:#5148c7"></span>Pagination API design</a>
+<a class="sessrow" href="Activity.dc.html"><span class="sdot"></span>Why is the payout job slow?</a>
+<div style="margin-top:auto;padding:12px 7px 2px;border-top:1px solid rgba(31,42,72,.09);display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid rgba(31,42,72,.09);border-radius:12px">
+<span style="width:28px;height:28px;border-radius:8px;background:#efedff;color:#3c348e;display:grid;place-items:center;font-weight:750;font-size:12px">C</span>
+<span style="display:flex;flex-direction:column;line-height:1.25;min-width:0"><span style="font-size:9.5px;font-weight:750;letter-spacing:.1em;color:#687187">RUNTIME</span><b style="font-size:12.5px">Claude Code</b></span>
+<span style="margin-left:auto;width:7px;height:7px;border-radius:50%;background:#2f9c74"></span>
+</div>
+<div style="display:flex;padding:2px;background:#f0f1f5;border-radius:9px;font-size:11px;font-weight:650">
+<span style="flex:1;text-align:center;padding:5px;border-radius:7px;background:#fff">System</span><span style="flex:1;text-align:center;padding:5px;color:#687187">Light</span><span style="flex:1;text-align:center;padding:5px;color:#687187">Dark</span>
+</div>
+</div>
+</nav>
+
+<main class="panel" style="flex:999 1 560px;min-width:0;box-sizing:border-box;min-height:1340px;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid rgba(31,42,72,.08);flex-wrap:wrap;font-size:12.5px">
+<span style="color:#687187">Workspace / <b style="color:#151a29">Overview</b></span>
+<span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid rgba(31,42,72,.09);border-radius:99px;font-weight:650"><span style="width:16px;height:16px;border-radius:5px;background:#efedff;color:#3c348e;display:grid;place-items:center;font-size:10px;font-weight:800">C</span>Claude Code</span>
+<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid rgba(31,42,72,.09);border-radius:99px;font-weight:650"><span style="width:7px;height:7px;border-radius:50%;background:#2f9c74"></span>Live</span>
+<label style="display:flex;align-items:center;gap:8px;min-height:32px;padding:0 10px;border:1px solid rgba(31,42,72,.12);border-radius:10px;background:#f5f6fb;min-width:200px">
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#687187" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<input type="search" aria-label="Search sessions" placeholder="Search sessions…" style="border:0;background:transparent;font:12.5px Inter,sans-serif;outline:none;flex:1">
+<span style="font-size:10.5px;color:#687187">⌘K</span>
+</label>
+</div>
+
+<div style="width:100%;max-width:1100px;margin:0 auto;box-sizing:border-box;padding:36px clamp(22px,6%,70px) 40px">
+
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:26px;flex-wrap:wrap">
+<div style="min-width:0;flex:1 1 320px">
+<div class="page-eyebrow">Tuesday, 21 October <span class="badge">Live data</span></div>
+<h1 style="letter-spacing:-.045em;font-size:31px;line-height:1.15;margin:0 0 6px">{{greeting}}, Alex</h1>
+<p style="margin:0;color:#687187">{{lead}}</p>
+</div>
+<div class="glance">
+<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px"><h2 style="margin:0;font-size:11px;font-weight:750">Right now</h2><span style="font-size:10px;color:#687187;font-weight:650">Live</span></div>
+<div class="gsw" role="tablist" aria-label="Right now">
+<button type="button" role="tab" class="{{g0}}" onClick="{{glance0}}">Needs you <b>{{needCount}}</b></button>
+<button type="button" role="tab" class="{{g1}}" onClick="{{glance1}}">Working <b>3</b></button>
+<button type="button" role="tab" class="{{g2}}" onClick="{{glance2}}">To merge <b>{{mergeCount}}</b></button>
+</div>
+<div style="min-height:20px;padding-top:3px;color:#687187;font-size:10.5px">{{glanceDetail}}</div>
+</div>
+</div>
+
+<div class="sectionbar" style="margin-top:0"><h2>Runs</h2><span class="meta">{{runsMeta}}</span></div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px;align-items:start">
+<div style="min-width:0">
+<div class="rail-headline">Runs <b>3 live · 1 queued</b></div>
+<div style="display:grid;gap:8px">
+<sc-for list="{{cards}}" as="c" hint-placeholder-count="5">
+<button type="button" role="tab" aria-selected="{{c.sel}}" class="{{c.cls}}" onClick="{{c.pick}}">
+<div class="card-head"><div class="card-ident"><span class="card-avatar">{{c.av}}</span><span class="card-name">{{c.name}}</span></div><span class="card-state">{{c.state}}</span></div>
+<div class="card-foot"><span style="overflow:hidden;text-overflow:ellipsis">{{c.foot}}</span><span aria-hidden="true" style="color:var(--tone)">→</span></div>
+</button>
+</sc-for>
+</div>
+<p style="font-size:11px;color:#687187;margin:9px 2px 0">Select to inspect · double-click to open</p>
+</div>
+
+<div class="{{d.box}}" style="min-width:0">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin:1px 0 12px">
+<div style="min-width:0">
+<div class="kicker">Inspecting · {{d.kind}}</div>
+<h3 style="font-size:22px;letter-spacing:-.04em;margin:2px 0 0">{{d.title}}</h3>
+<p style="font-size:11px;color:#687187;margin:2px 0 0;font-family:ui-monospace,Menlo,monospace">{{d.where}}</p>
+<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><span class="chipt">{{d.ticket}}</span><span style="font-size:11px;font-weight:700;color:#4d5568;background:#f0f1f5;border-radius:6px;padding:1px 7px">{{d.stage}}</span></div>
+</div>
+<span style="font-size:11px;font-weight:750;white-space:nowrap;color:var(--tone);display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--tone)"></span>{{d.state}}</span>
+</div>
+<div class="callout">
+<span class="ic" aria-hidden="true">!</span>
+<div style="min-width:0"><b>{{d.calloutTitle}}</b><span>{{d.calloutText}}</span></div>
+</div>
+<div style="margin-top:12px;border-top:1px solid rgba(31,42,72,.09)">
+<div class="ev"><span>Last event</span><b>{{d.last}}</b></div>
+<div class="ev"><span>Run</span><b>{{d.run}}</b></div>
+<div class="ev"><span>Pipeline</span><b>{{d.pipeline}}</b></div>
+<div class="ev"><span>Model</span><b>{{d.model}}</b></div>
+<div class="ev"><span>Cost</span><b>{{d.cost}}</b></div>
+</div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">
+<sc-if value="{{d.paused}}" hint-placeholder-val="{{ true }}">
+<button type="button" class="btn primary" onClick="{{resolve}}">Allow once</button>
+<button type="button" class="btn" onClick="{{resolve}}">Add to allowlist</button>
+<button type="button" class="btn" onClick="{{resolve}}">Stop</button>
+</sc-if>
+<sc-if value="{{d.merge}}" hint-placeholder-val="{{ false }}">
+<button type="button" class="btn primary">Merge</button>
+</sc-if>
+<a class="btn" href="WorkItem.dc.html">Open work item →</a>
+<a class="text-action" href="Activity.dc.html">Full transcript →</a>
+</div>
+</div>
+</div>
+
+<details style="margin-top:30px">
+<summary style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;list-style:none;gap:12px;flex-wrap:wrap"><h2 style="margin:0;font-size:16px;letter-spacing:-.02em">Workspace usage</h2><span style="font-size:11.5px;color:#687187">23 runs this week · 1.2M measured tokens ▾</span></summary>
+<div class="kpis">
+<div class="kpi"><div class="l">Runs</div><strong>23</strong><small>this week · 4 tickets shipped</small></div>
+<div class="kpi"><div class="l">Measured tokens</div><strong>1.2M</strong><small>21 of 23 runs report usage</small></div>
+<div class="kpi"><div class="l">Run cost (est.)</div><strong>~$31.20</strong><small>API-equivalent estimate · not an invoice</small></div>
+</div>
+</details>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:24px;align-items:start">
+<div style="min-width:0">
+<div class="sectionbar"><h2>Needs you <small>{{needCount}}</small></h2><span class="meta">only you can unblock these</span></div>
+<div class="npanel">
+<sc-if value="{{paused}}" hint-placeholder-val="{{ true }}">
+<div class="nrow" style="background:#fff9f1">
+<span class="ndot" style="background:#c98a2e"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#fff3e2;color:#875219">Run paused</span><b class="ncount">1</b></div><span class="nsub">PROJ-142 · acme/web wants <code>docker compose up -d db</code> · 4 min</span></div>
+<button type="button" class="btn" onClick="{{resolve}}">Deny</button><button type="button" class="btn primary" onClick="{{resolve}}">Allow once</button>
+</div>
+</sc-if>
+<div class="nrow">
+<span class="ndot" style="background:#6259db"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#efedff;color:#3c348e">To review</span><b class="ncount">2</b></div><span class="nsub">1 spec (PROJ-151) · 1 PR routed to you (PROJ-127, db/migrations)</span></div>
+<a class="btn primary" href="Reviews.dc.html">Review</a>
+</div>
+<sc-if value="{{toMerge}}" hint-placeholder-val="{{ true }}">
+<div class="nrow">
+<span class="ndot" style="background:#2f9c74"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#e9f6ee;color:#17654f">To merge</span><b class="ncount">1</b></div><span class="nsub">PROJ-127 · acme/web #305 · low risk, checks passed</span></div>
+<button type="button" class="btn primary" onClick="{{merge}}">Merge</button>
+</div>
+</sc-if>
+<div class="nrow">
+<span class="ndot" style="background:#c0485a"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#fff2f0;color:#9b3c49">Escalated</span><b class="ncount">1</b></div><span class="nsub">PROJ-131 · acme/worker · agent review failed 3 times</span></div>
+<a class="btn" href="WorkItem.dc.html">Decide</a>
+</div>
+<div class="nrow">
+<span class="ndot" style="background:#a6adbd"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#f0f1f5;color:#4d5568">Brainstorm</span><b class="ncount">1</b></div><span class="nsub">PROJ-149 · your turn · 12 min</span></div>
+<a class="btn" href="WorkItem.dc.html">Reply</a>
+</div>
+</div>
+</div>
+<div style="min-width:0">
+<div class="sectionbar"><h2>Reviews <small>3</small></h2><a class="text-action" href="Reviews.dc.html">All reviews →</a></div>
+<div class="npanel">
+<div class="nrow">
+<span class="ndot" style="background:#6259db"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#efedff;color:#3c348e">Teammate PR</span></div><span class="nsub">acme/web #311 · Sam · factory draft ready</span></div>
+<a class="btn" href="Reviews.dc.html">Open draft</a>
+</div>
+<div class="nrow">
+<span class="ndot" style="background:#a6adbd"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#f0f1f5;color:#4d5568">Mentioned you</span></div><span class="nsub">acme/worker #97 · Alex · yesterday</span></div>
+<a class="btn" href="Reviews.dc.html">Reply</a>
+</div>
+<div class="nrow">
+<span class="ndot" style="background:#6259db"></span>
+<div class="nbody"><div class="nh"><span class="ntag" style="background:#efedff;color:#3c348e">On your PR</span><b class="ncount">2</b></div><span class="nsub">acme/api #482 · PROJ-142 · new comments from Sam</span></div>
+<a class="btn" href="Reviews.dc.html">Ask factory</a>
+</div>
+</div>
+</div>
+</div>
+
+<div class="sectionbar"><h2>Recent sessions</h2><a class="text-action" href="Activity.dc.html">All activity →</a></div>
+<div class="section-list">
+<a class="row" href="Activity.dc.html" style="color:#151a29"><div class="copy"><b>Upgrade lint rules</b><span>acme/web · task · done · 1 h</span></div><span class="text-action">Open →</span></a>
+<a class="row" href="Activity.dc.html" style="color:#151a29"><div class="copy"><b>Pagination API design</b><span>acme/api · 6 prompts · 12 min</span></div><span class="text-action">Open →</span></a>
+<a class="row" href="Activity.dc.html" style="color:#151a29"><div class="copy"><b>Brainstorm: archive a workspace</b><span>PROJ-151 · acme/api · brief saved · yesterday</span></div><span class="text-action">Open →</span></a>
+</div>
+<p style="margin-top:18px;color:#687187;font-size:11px">Statuses come from live runs, PR state and Jira. Costs are Claude Code's own API-equivalent estimates.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { sel: 'web', glance: 0, paused: true, merged: false };
+}
+renderVals() {
+const s = this.state;
+const runs = {
+web: { av: 'W', name: 'PROJ-142 · acme/web', state: s.paused ? 'Paused' : 'Building', tone: s.paused ? 'tone-watch' : 'tone-run', foot: 'Build · turn 4 · ' + (s.paused ? 'paused 4 min' : 'last event 5 s'),
+d: { kind: 'build', title: 'Retry failed payout webhooks with backoff', where: 'acme/web · proj-142-retry-banner', ticket: 'PROJ-142', stage: 'Build 1',
+calloutTitle: s.paused ? 'Paused: command outside the allowlist' : 'Working', calloutText: s.paused ? 'docker compose up -d db · nothing runs until you answer' : 'Last event 5 s ago · turn 5',
+last: s.paused ? '4 min ago' : '5 s ago', run: (s.paused ? 'Paused' : 'Working') + ' · 4 turns', pipeline: 'Spec approved → Build → Agent review → Route', model: 'Sonnet', cost: '~$0.40 · API-equivalent est.', paused: s.paused, merge: false } },
+api: { av: 'A', name: 'PROJ-142 · acme/api', state: 'Agent review', tone: 'tone-run', foot: 'Agent review 2 of 3 · 1 min',
+d: { kind: 'agent review', title: 'Retry failed payout webhooks with backoff', where: 'acme/api · PR #482', ticket: 'PROJ-142', stage: 'Agent review 2/3',
+calloutTitle: 'Reviewing the second build', calloutText: 'Attempt 1 asked to cap the backoff at 10 min; build 2 addressed it',
+last: '8 s ago', run: 'Working · 6 turns', pipeline: 'Build 2 done → Agent review → Route', model: 'Opus', cost: 'Unknown until the first turn ends', paused: false, merge: false } },
+merge: { av: 'W', name: 'PROJ-127 · acme/web', state: 'Ready to merge', tone: 'tone-good', foot: 'PR #305 · low risk · checks passed',
+d: { kind: 'pull request', title: 'Show loan purpose on the summary card', where: 'acme/web · PR #305', ticket: 'PROJ-127', stage: 'Ready to merge',
+calloutTitle: 'Passed agent review; no rule matched', calloutText: '+48 −12 · 3 files · nothing sensitive touched', last: '20 min ago', run: 'Done · 9 turns', pipeline: 'Build → Agent review passed → Ready', model: 'Sonnet', cost: '~$0.90 · API-equivalent est.', paused: false, merge: true } },
+fail: { av: 'K', name: 'PROJ-131 · acme/worker', state: 'Escalated', tone: 'tone-alert', foot: 'Agent review 3 of 3 · 40 min',
+d: { kind: 'escalation', title: 'Speed up the nightly reconciliation', where: 'acme/worker · PR #95', ticket: 'PROJ-131', stage: 'Escalated',
+calloutTitle: 'Agent review asked for changes 3 times', calloutText: 'A person decides: retry with a note, take over, or drop', last: '40 min ago', run: 'Ended · 3 builds', pipeline: 'Build ↔ Agent review ×3 → you', model: 'Sonnet / Opus', cost: '~$2.40 · API-equivalent est.', paused: false, merge: false } },
+lint: { av: 'L', name: 'Upgrade lint rules', state: 'Working', tone: 'tone-run', foot: 'Task · acme/web · turn 3',
+d: { kind: 'task', title: 'Upgrade lint rules', where: 'acme/web · fresh clone of main', ticket: 'no ticket', stage: 'Task',
+calloutTitle: 'Working', calloutText: 'Last event 12 s ago · turn 3', last: '12 s ago', run: 'Working · 3 turns', pipeline: 'Task, no gates', model: 'Sonnet', cost: '~$0.30 · API-equivalent est.', paused: false, merge: false } }
+};
+const order = ['web', 'api', 'merge', 'fail', 'lint'];
+const cur = runs[s.sel];
+const details = ['Paused runs and gates waiting on you', 'Runs executing a stage on their own', 'Passed agent review, no rule matched; one click to merge'];
+const cls = (g) => (s.glance === g ? 'gtab on' : 'gtab');
+return {
+cards: order.map((k) => ({ ...runs[k], sel: k === s.sel, cls: 'run-tab ' + runs[k].tone + (k === s.sel ? ' sel' : ''), pick: () => this.setState({ sel: k }) })),
+d: { ...cur.d, state: cur.state, box: cur.tone },
+needCount: 4 + (s.paused ? 1 : 0) + (s.merged ? 0 : 1),
+greeting: 'Good morning',
+paused: s.paused,
+toMerge: !s.merged,
+merge: () => this.setState({ merged: true }),
+lead: (s.paused ? '1 run is paused for you, ' : '') + (s.merged ? '4' : '5') + ' things wait on your call. The rest runs on its own.',
+runsMeta: (s.paused ? '1 paused · ' : '') + '1 ready to merge · 1 escalated',
+g0: cls(0), g1: cls(1), g2: cls(2),
+glance0: () => this.setState({ glance: 0 }), glance1: () => this.setState({ glance: 1 }), glance2: () => this.setState({ glance: 2 }),
+glanceDetail: details[s.glance],
+mergeCount: s.merged ? 0 : 1,
+resolve: () => this.setState({ paused: false })
+};
+}
+}
+</script>
+</body>
+</html>

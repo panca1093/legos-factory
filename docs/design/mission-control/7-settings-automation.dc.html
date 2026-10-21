@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Automation settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f7fb}
+a{color:#5148c7;text-decoration:none}a:hover{color:#3c348e}
+.panel{background:#fff;border:1px solid rgba(31,42,72,.09);border-radius:16px;box-shadow:0 2px 12px #232b4b08}
+.nav{display:flex;align-items:center;gap:11px;padding:10px 11px;border-radius:12px;color:#5b6479;font-size:13px;font-weight:650}
+.nav:hover{background:#f2f1fc;color:#151a29}
+.nav.on{background:#efedff;color:#3c348e}
+.count{margin-left:auto;background:#6259db;color:#fff;border-radius:99px;font-size:11px;padding:1px 8px;font-weight:750}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 14px;border-radius:10px;border:1px solid rgba(31,42,72,.14);background:#fff;color:#151a29;font:600 13px Inter,sans-serif;cursor:pointer}
+.btn:hover{background:#f2f1fc}
+.btn.p{background:#6259db;border-color:#6259db;color:#fff}
+.meta{font-size:12.5px;color:#5b6479}
+.sub{display:flex;padding:9px 12px;border-radius:10px;font-size:13.5px;font-weight:650;color:#5b6479}
+.sub.on{background:#efedff;color:#3c348e}
+.card{padding:20px 22px;display:flex;flex-direction:column;gap:14px}
+.card h2{margin:0;font-size:16px;font-weight:750}
+.line{display:flex;gap:14px;align-items:center;padding:12px 0;border-top:1px solid rgba(31,42,72,.08);flex-wrap:wrap}
+.sw{width:40px;height:24px;border-radius:99px;border:0;padding:3px;cursor:pointer;display:flex;flex:none}
+.sw span{width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0003}
+.sw.on{background:#6259db;justify-content:flex-end}
+.sw.off{background:#cdd1dc;justify-content:flex-start}
+code{font:12.5px ui-monospace,Menlo,monospace;background:#f6f7fb;border:1px solid rgba(31,42,72,.1);border-radius:6px;padding:2px 7px;color:#485266}
+.cmd{display:inline-flex;align-items:center;gap:6px;font:12.5px ui-monospace,Menlo,monospace;background:#f6f7fb;border:1px solid rgba(31,42,72,.12);border-radius:8px;padding:5px 8px 5px 10px;color:#151a29}
+.cmd button{border:0;background:transparent;color:#5b6479;cursor:pointer;width:22px;height:22px;border-radius:6px;font-size:14px;line-height:1}
+.pav{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:#fff;font-size:13px;font-weight:800;flex:none}
+.lock{font-size:11px;font-weight:700;color:#4d5568;background:#f0f1f5;border-radius:6px;padding:1px 7px}
+.field{min-height:38px;box-sizing:border-box;border:1px solid rgba(31,42,72,.16);border-radius:10px;padding:0 12px;font:13.5px Inter,sans-serif;background:#fff;color:#151a29}
+</style>
+</helmet>
+<div style="box-sizing:border-box;width:100%;min-height:1700px;padding:14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;font-family:Inter,ui-sans-serif,-apple-system,sans-serif;color:#151a29;font-size:14px;line-height:1.5">
+
+<nav class="panel" aria-label="Main" style="flex:1 1 230px;max-width:260px;box-sizing:border-box;padding:14px;display:flex;flex-direction:column;gap:4px;min-height:1640px">
+<a href="NeedsYou.dc.html" style="display:flex;gap:10px;align-items:center;padding:4px 6px 14px;color:#151a29">
+<span style="width:33px;height:33px;border-radius:8px;background:#6259db;color:#fff;display:grid;place-items:center;font-weight:800">L</span>
+<span style="display:flex;flex-direction:column;line-height:1.2"><b style="font-size:14px">legos <span style="color:#6259db">/ factory</span></b><span class="meta" style="font-size:12px">Mission control</span></span>
+</a>
+<a class="btn p" href="StartWork.dc.html" style="margin-bottom:12px">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+New
+<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" style="margin-left:auto"><path d="m6 9 6 6 6-6"></path></svg>
+</a>
+<a class="nav" href="NeedsYou.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"></path><path d="M5 10v10h14V10"></path></svg>
+Home<span class="count" title="Needs you">5</span>
+</a>
+<a class="nav" href="Work.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1.5"></rect><rect x="10" y="4" width="5" height="11" rx="1.5"></rect><rect x="17" y="4" width="4" height="7" rx="1.5"></rect></svg>
+Work
+</a>
+<a class="nav" href="Reviews.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="18" r="2.5"></circle><path d="M6 8.5V15a3 3 0 0 0 3 3h6.5M18 15.5V9a3 3 0 0 0-3-3h-2"></path></svg>
+Reviews
+</a>
+<a class="nav" href="Activity.dc.html">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+Activity
+</a>
+<a class="nav on" href="Automation.dc.html" aria-current="page">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg>
+Settings
+</a>
+</nav>
+
+<main class="panel" style="flex:999 1 560px;min-width:0;box-sizing:border-box;min-height:1640px;display:flex;flex-direction:column">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid rgba(31,42,72,.08)">
+<span class="meta">Settings / <b style="color:#151a29">Automation</b></span>
+</div>
+<div style="padding:26px clamp(16px,3vw,36px) 40px;display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">
+
+<nav aria-label="Settings" style="flex:0 1 180px;display:flex;flex-direction:column;gap:2px">
+<a class="sub" href="Automation.dc.html">Workspace</a>
+<a class="sub" href="Automation.dc.html">Members</a>
+<a class="sub" href="Automation.dc.html">Connections</a>
+<a class="sub" href="Automation.dc.html">Repositories</a>
+<a class="sub on" href="Automation.dc.html" aria-current="page">Automation</a>
+</nav>
+
+<div style="flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:18px">
+<div style="display:flex;flex-direction:column;gap:4px">
+<h1 style="margin:0;font-size:28px;font-weight:800;letter-spacing:-.02em">Automation</h1>
+<p style="margin:0;color:#5b6479">Runs go on their own. These settings decide where they stop for a person. Owners can change them; members see them.</p>
+</div>
+
+<section class="panel card" aria-labelledby="h-gates">
+<h2 id="h-gates">Gates</h2>
+<div class="line" style="border-top:0;padding-top:0">
+<div style="flex:1 1 320px"><b>Brainstorm</b><br><span class="meta">Offer a brainstorm chat before the spec</span></div>
+<select class="field" aria-label="Brainstorm"><option>Optional, I choose per ticket</option><option>Always first</option></select>
+</div>
+<div class="line">
+<div style="flex:1 1 320px"><b>Spec review</b><br><span class="meta">A person approves every spec PR before build starts</span></div>
+<span class="lock">Always on</span>
+</div>
+<div class="line">
+<div style="flex:1 1 320px"><b>Agent review attempts</b><br><span class="meta">Build runs again on requested changes; after this many, a person decides</span></div>
+<input class="field" type="number" value="3" min="1" max="5" aria-label="Agent review attempts" style="width:80px">
+</div>
+<div class="line">
+<div style="flex:1 1 320px"><b>Merge</b><br><span class="meta">PRs that need no review wait as Ready to merge; a member merges in one click. The factory never merges.</span></div>
+<span class="lock">Always a person</span>
+</div>
+</section>
+
+<section class="panel card" aria-labelledby="h-personas">
+<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><h2 id="h-personas">Personas</h2><span class="meta" style="margin-left:auto">defaults; a task can override the model in More options</span></div>
+<div class="line" style="border-top:0;padding-top:0">
+<span class="pav" style="background:#8f6ad8">F</span>
+<div style="flex:1 1 260px;min-width:0"><b>Foreman</b><br><span class="meta">Brainstorm and spec, including the plan and its task graph</span></div>
+<select class="field" aria-label="Foreman model"><option>Opus</option><option>Sonnet</option><option>Account default</option></select>
+</div>
+<div class="line" style="align-items:flex-start">
+<span class="pav" style="background:#5148c7">B</span>
+<div style="flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:10px">
+<div><b>Builder</b><br><span class="meta">Builds the plan's tasks, merges their branches per repo and runs the full suite. Every Builder run uses this model.</span></div>
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+<button type="button" role="switch" aria-checked="{{parallel}}" aria-label="Parallel builders" class="{{parCls}}" onClick="{{togglePar}}"><span></span></button>
+<span style="font-size:13px;flex:1 1 220px"><b>Run independent tasks in parallel</b><br><span class="meta">Only for tasks the approved plan marks independent and that touch different files. Each gets its own worktree.</span></span>
+</div>
+<sc-if value="{{parallel}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;gap:12px;flex-wrap:wrap">
+<label style="display:flex;flex-direction:column;gap:4px"><span class="meta">Builders at once</span><input class="field" type="number" value="2" min="1" max="4" style="width:90px"></label>
+<span class="meta" style="align-self:flex-end;max-width:260px">Each takes a run slot (3 per runner).</span>
+</div>
+</sc-if>
+</div>
+<select class="field" aria-label="Builder model"><option>Sonnet</option><option>Opus</option><option>Account default</option></select>
+</div>
+<div class="line">
+<span class="pav" style="background:#2c7a8c">I</span>
+<div style="flex:1 1 260px;min-width:0"><b>Inspector</b><br><span class="meta">Read-only review against the plan, task by task</span></div>
+<select class="field" aria-label="Inspector model"><option>Opus</option><option>Sonnet</option><option>Account default</option></select>
+</div>
+<div style="padding:10px 12px;border-radius:10px;background:#fff9f1;border:1px solid #f0dcc2;font-size:12.5px;color:#875219;margin-top:-4px">Use a different model for the Inspector than for the Builder. The same model reviewing its own work tends to agree with itself.</div>
+<div class="line">
+<span class="pav" style="background:#6b7385">C</span>
+<div style="flex:1 1 260px;min-width:0"><b>Cataloger</b><br><span class="meta">After merge: docs, changelog, what this ticket taught us</span></div>
+<select class="field" aria-label="Cataloger model"><option>Haiku</option><option>Sonnet</option><option>Off</option></select>
+</div>
+</section>
+
+<section class="panel card" aria-labelledby="h-rules">
+<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><h2 id="h-rules">Send a PR to a person when any of these match</h2><span class="meta" style="margin-left:auto">checked after the agent review passes</span></div>
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="3">
+<div class="line">
+<button type="button" role="switch" aria-checked="{{r.on}}" aria-label="{{r.name}}" class="{{r.cls}}" onClick="{{r.toggle}}"><span></span></button>
+<div style="flex:1 1 320px;min-width:0"><b>{{r.name}}</b><br><span class="meta">{{r.detail}}</span></div>
+<span class="meta">{{r.hits}}</span>
+<button class="btn" type="button">Edit</button>
+</div>
+</sc-for>
+<div class="line">
+<button class="btn" type="button">+ Add rule</button>
+<span class="meta">Kinds: changed paths, changed lines, Jira type or label, repo</span>
+</div>
+<div style="padding:12px 14px;border-radius:12px;background:#f6f7fb;font-size:13px;color:#485266">The agent reviewer can also send a PR to a person, with its reason shown on the PR. It can never skip a rule that matched.</div>
+</section>
+
+<section class="panel card" aria-labelledby="h-allow">
+<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap"><h2 id="h-allow">Commands runs may use without asking</h2><span class="meta" style="margin-left:auto">anything else pauses the run and shows on Home</span></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<sc-for list="{{allow}}" as="c" hint-placeholder-count="6">
+<span class="cmd">{{c.text}}<button type="button" aria-label="Remove {{c.text}}" onClick="{{c.remove}}">×</button></span>
+</sc-for>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+<input class="field" type="text" aria-label="New command" placeholder="e.g. make lint, or a prefix like go test" style="flex:1 1 280px">
+<button class="btn" type="button">Add</button>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<b style="font-size:13px">Paused runs asked for these lately</b>
+<div class="line" style="border-top:0"><code>docker compose up -d db</code><span class="meta" style="flex:1">PROJ-142 · acme/web · today · allowed once</span><button class="btn" type="button" onClick="{{addDocker}}">Add to allowlist</button></div>
+<div class="line"><code>curl https://api.example.com/health</code><span class="meta" style="flex:1">PROJ-131 · acme/worker · yesterday · stopped</span><button class="btn" type="button">Add to allowlist</button></div>
+</div>
+<span class="meta">Edits and git commits on the run's own branch are always allowed. Pushing to any other branch, and anything that deletes outside the clone, always pauses.</span>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { parallel: true, rules: { paths: true, size: true, security: true, deps: false }, allow: ['npm test', 'npm run build', 'npm run lint', 'go test ./...', 'go vet ./...', 'make'] };
+}
+renderVals() {
+const s = this.state;
+const defs = [
+['paths', 'Sensitive paths', 'db/migrations/**, auth/**, .github/**', 'matched 3 PRs this week'],
+['size', 'Large change', 'more than 400 changed lines', 'matched 1'],
+['security', 'Security tickets', 'Jira type is Security, or label security', 'matched 0'],
+['deps', 'Dependency changes', 'package.json, go.mod, lock files', 'off']
+];
+return {
+parallel: s.parallel,
+parCls: s.parallel ? 'sw on' : 'sw off',
+togglePar: () => this.setState({ parallel: !s.parallel }),
+rules: defs.map(([id, name, detail, hits]) => ({
+name, detail, hits, on: s.rules[id], cls: s.rules[id] ? 'sw on' : 'sw off',
+toggle: () => this.setState({ rules: { ...s.rules, [id]: !s.rules[id] } })
+})),
+allow: s.allow.map((text) => ({ text, remove: () => this.setState({ allow: s.allow.filter((x) => x !== text) }) })),
+addDocker: () => s.allow.includes('docker compose up') ? null : this.setState({ allow: s.allow.concat('docker compose up') })
+};
+}
+}
+</script>
+</body>
+</html>

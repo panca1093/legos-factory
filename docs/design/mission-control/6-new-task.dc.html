@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Start work dialog</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f7fb}
+a{color:#5148c7;text-decoration:none}a:hover{color:#3c348e}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:0 16px;border-radius:10px;border:1px solid rgba(31,42,72,.14);background:#fff;color:#151a29;font:600 13.5px Inter,sans-serif;cursor:pointer}
+.btn:hover{background:#f2f1fc}
+.btn.p{background:#6259db;border-color:#6259db;color:#fff}
+.btn.p:hover{background:#5148c7}
+.meta{font-size:12.5px;color:#5b6479}
+.lbl{font-size:13px;font-weight:700}
+.intent{flex:1 1 150px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:12px 14px;border-radius:12px;border:1px solid rgba(31,42,72,.14);background:#fff;cursor:pointer;font:inherit;color:#151a29}
+.intent.on{border-color:#6259db;background:#f4f3ff;box-shadow:0 0 0 3px #6259db22}
+.field{min-height:42px;box-sizing:border-box;width:100%;border:1px solid rgba(31,42,72,.16);border-radius:10px;padding:0 12px;font:14px Inter,sans-serif;background:#fff;color:#151a29}
+.repo{display:flex;align-items:center;gap:12px;min-height:48px;padding:0 14px;border-radius:10px;border:1px solid rgba(31,42,72,.12);cursor:pointer;font:500 13.5px ui-monospace,Menlo,monospace;color:#151a29;background:#fff;text-align:left;width:100%}
+.repo.on{border-color:#d9d5ff;background:#faf9ff}
+.box{width:18px;height:18px;border-radius:5px;border:1.5px solid #a6adbd;display:grid;place-items:center;flex:none;background:#fff}
+.repo.on .box{background:#6259db;border-color:#6259db}
+.src{margin-left:auto;font:600 11px Inter,sans-serif;color:#5b6479}
+</style>
+</helmet>
+<div style="position:relative;width:1440px;height:1040px;overflow:hidden;font-family:Inter,ui-sans-serif,-apple-system,sans-serif;color:#151a29;font-size:14px;line-height:1.5;background:#f6f7fb">
+
+<div aria-hidden="true" style="position:absolute;inset:14px;display:flex;gap:14px;filter:saturate(.7)">
+<div style="width:248px;background:#fff;border-radius:16px;border:1px solid rgba(31,42,72,.09)"></div>
+<div style="flex:1;background:#fff;border-radius:16px;border:1px solid rgba(31,42,72,.09);padding:40px;display:flex;flex-direction:column;gap:18px">
+<div style="width:180px;height:30px;border-radius:8px;background:#eceef4"></div>
+<div style="display:flex;gap:12px">
+<div style="width:272px;height:620px;border-radius:14px;background:#f3f4f8"></div>
+<div style="width:272px;height:620px;border-radius:14px;background:#f3f4f8"></div>
+<div style="width:272px;height:620px;border-radius:14px;background:#f3f4f8"></div>
+<div style="width:272px;height:620px;border-radius:14px;background:#f3f4f8"></div>
+</div>
+</div>
+</div>
+<div aria-hidden="true" style="position:absolute;inset:0;background:rgba(10,12,24,.32)"></div>
+
+<div role="dialog" aria-modal="true" aria-labelledby="dlg-title" style="position:absolute;left:50%;top:64px;transform:translateX(-50%);width:640px;max-width:calc(100% - 32px);background:#fff;border-radius:18px;box-shadow:0 24px 64px rgba(10,12,40,.28);display:flex;flex-direction:column;max-height:912px">
+<div style="display:flex;align-items:center;padding:20px 24px 4px">
+<h2 id="dlg-title" style="margin:0;font-size:19px;font-weight:800">Start something</h2>
+<a href="Work.dc.html" aria-label="Close" style="margin-left:auto;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:#5b6479">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></a>
+</div>
+
+<div style="padding:12px 24px 20px;display:flex;flex-direction:column;gap:20px;overflow:auto">
+<div style="display:flex;gap:10px;flex-wrap:wrap" role="radiogroup" aria-label="What do you want to do">
+<button type="button" role="radio" aria-checked="{{isChat}}" class="{{chatCls}}" onClick="{{pickChat}}"><b style="font-size:14px">Chat</b><span class="meta">Think it through together</span></button>
+<button type="button" role="radio" aria-checked="{{isTask}}" class="{{taskCls}}" onClick="{{pickTask}}"><b style="font-size:14px">Task</b><span class="meta">Runs on its own to the end</span></button>
+</div>
+
+<sc-if value="{{isTask}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:baseline"><label class="lbl" for="tk">Ticket</label><span class="meta" style="margin-left:auto">optional · attaching one makes it tracked work</span></div>
+<sc-if value="{{hasTicket}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #d9d5ff;border-radius:12px;background:#faf9ff">
+<span style="font:600 12px ui-monospace,Menlo,monospace;color:#3c348e;background:#efedff;border-radius:6px;padding:2px 8px">PROJ-142</span>
+<span style="flex:1;min-width:0;font-weight:600">Retry failed payout webhooks with backoff</span>
+<button type="button" onClick="{{dropTicket}}" style="border:0;background:transparent;color:#5148c7;font:650 13px Inter,sans-serif;cursor:pointer;min-height:36px">Remove</button>
+</div>
+</sc-if>
+<sc-if value="{{noTicket}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;gap:8px"><input id="tk" class="field" type="search" placeholder="Search Jira by key or title"><button type="button" class="btn" onClick="{{addTicket}}">Attach PROJ-142</button></div>
+<label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">What should it do?</span>
+<textarea class="field" rows="4" style="padding:10px 12px;resize:vertical" placeholder="e.g. Upgrade the lint rules and fix what breaks"></textarea></label>
+</sc-if>
+</div>
+
+<sc-if value="{{hasTicket}}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;flex-direction:column;gap:8px">
+<span class="lbl">Start with</span>
+<div style="display:flex;gap:10px;flex-wrap:wrap" role="radiogroup" aria-label="Start with">
+<button type="button" role="radio" class="{{specCls}}" onClick="{{pickSpec}}"><b style="font-size:13.5px">Spec</b><span class="meta">Agent writes the spec PR; you review it</span></button>
+<button type="button" role="radio" class="{{brainCls}}" onClick="{{pickBrain}}"><b style="font-size:13.5px">Brainstorm first</b><span class="meta">Talk it through, then the spec</span></button>
+</div>
+</div>
+</sc-if>
+
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;align-items:baseline"><span class="lbl">Repos</span><span class="meta" style="margin-left:auto">{{repoHint}}</span></div>
+<sc-for list="{{repos}}" as="r" hint-placeholder-count="3">
+<button type="button" role="checkbox" aria-checked="{{r.on}}" class="{{r.cls}}" onClick="{{r.toggle}}">
+<span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" aria-hidden="true"><path d="m5 12 5 5 9-10"></path></svg></span>
+{{r.name}}<span class="src">{{r.src}}</span>
+</button>
+</sc-for>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-radius:12px;background:#f6f7fb">
+<b style="font-size:13.5px">{{summary}}</b>
+<span class="meta">{{fine}}</span>
+</div>
+
+<details style="border-top:1px solid rgba(31,42,72,.09);padding-top:14px">
+<summary style="cursor:pointer;font-weight:650;font-size:13.5px;color:#4d5568">More options · model, base branch</summary>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px">
+<label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">Model</span><select class="field"><option>Account default</option><option>Opus</option><option>Sonnet</option></select></label>
+<label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">Base branch</span><input class="field" type="text" value="main"></label>
+</div>
+</details>
+</div>
+</sc-if>
+
+<sc-if value="{{isChat}}" hint-placeholder-val="{{ false }}">
+<div style="display:flex;flex-direction:column;gap:16px">
+<label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">Start the conversation</span>
+<textarea class="field" rows="5" style="padding:10px 12px;resize:vertical" placeholder="Ask anything, or paste a ticket key to brief on it"></textarea></label>
+<label style="display:flex;flex-direction:column;gap:6px"><span class="lbl">Folder</span><select class="field"><option>No folder, just talk</option><option>acme/web</option></select></label>
+</div>
+</sc-if>
+</div>
+
+<div style="display:flex;gap:10px;align-items:center;padding:16px 24px;border-top:1px solid rgba(31,42,72,.09)">
+<span class="meta">⌘↵ to start</span>
+<a class="btn" href="Work.dc.html" style="margin-left:auto">Cancel</a>
+<a class="btn p" href="WorkItem.dc.html">{{cta}}</a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { intent: 'task', ticket: true, start: 'spec', picked: { 'acme/api': true, 'acme/web': true, 'acme/worker': false } };
+}
+renderVals() {
+const s = this.state;
+const src = { 'acme/api': 'from PROJ → repo mapping', 'acme/web': 'from PROJ → repo mapping', 'acme/worker': 'in My repos' };
+const repos = Object.keys(s.picked).map((name) => ({
+name, on: s.picked[name], cls: s.picked[name] ? 'repo on' : 'repo', src: s.ticket ? src[name] : 'in My repos',
+toggle: () => this.setState({ picked: { ...s.picked, [name]: !s.picked[name] } })
+}));
+const n = repos.filter((r) => r.on).length;
+const names = repos.filter((r) => r.on).map((r) => r.name).join(', ');
+let cta, summary, fine;
+if (s.intent === 'chat') { cta = 'Start chat'; summary = ''; fine = ''; }
+else if (!s.ticket) { cta = n ? 'Start task' : 'Pick a repo'; summary = n ? 'One task in ' + names + ', in auto mode' : 'Pick a repo'; fine = 'Runs to the end on its own. A command outside the allowlist pauses it and comes to Home.'; }
+else if (s.start === 'brain') { cta = 'Start brainstorm'; summary = 'A brainstorm chat on PROJ-142, then a spec for ' + (n || 'no') + ' repo' + (n === 1 ? '' : 's'); fine = 'Spec, build and agent review then run on their own. You are asked at spec review, at PR review if rules route it, and to merge.'; }
+else { cta = n ? 'Start · ' + n + ' repo' + (n === 1 ? '' : 's') : 'Pick a repo'; summary = 'Spec PR for ' + (names || 'no repo') + ', then build and agent review on their own'; fine = 'You are asked at spec review, at PR review if rules route it, and to merge. Jira follows each step.'; }
+return {
+repos, cta, summary, fine,
+repoHint: s.ticket ? 'one pipeline each, in parallel' : 'where the task runs',
+isChat: s.intent === 'chat', isTask: s.intent === 'task',
+hasTicket: s.ticket, noTicket: !s.ticket,
+chatCls: s.intent === 'chat' ? 'intent on' : 'intent', taskCls: s.intent === 'task' ? 'intent on' : 'intent',
+specCls: s.start === 'spec' ? 'intent on' : 'intent', brainCls: s.start === 'brain' ? 'intent on' : 'intent',
+pickChat: () => this.setState({ intent: 'chat' }), pickTask: () => this.setState({ intent: 'task' }),
+pickSpec: () => this.setState({ start: 'spec' }), pickBrain: () => this.setState({ start: 'brain' }),
+dropTicket: () => this.setState({ ticket: false }), addTicket: () => this.setState({ ticket: true })
+};
+}
+}
+</script>
+</body>
+</html>

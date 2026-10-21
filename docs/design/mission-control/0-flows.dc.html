@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission control user flows</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f7fb}
+a{color:#5148c7}a:hover{color:#3c348e}
+.k{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#5b6479}
+.box{background:#fff;border:1px solid rgba(31,42,72,.12);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:5px}
+.who{align-self:flex-start;font-size:11px;font-weight:700;border-radius:99px;padding:2px 9px}
+.you{background:#efedff;color:#3c348e}
+.agent{background:#e9f6ee;color:#17654f}
+.fac{background:#f0f1f5;color:#4d5568}
+.arrow{align-self:center;color:#8a93a6;font-size:20px;flex:none}
+.where{font-size:12px;color:#5b6479;line-height:1.45}
+.where b{color:#151a29;font-weight:650}
+.flow{display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:18px;background:#fff;border:1px solid rgba(31,42,72,.09)}
+.flow .box{background:#f9fafc;flex:1 1 150px}
+.fh{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.fl{font:800 13px Inter,sans-serif;color:#fff;background:#6259db;border-radius:8px;padding:2px 9px}
+.steps{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
+.pg{display:inline-block;font-size:11px;font-weight:700;color:#3c348e;background:#efedff;border-radius:6px;padding:1px 7px;margin-top:2px;align-self:flex-start}
+.q{display:flex;flex-direction:column;gap:6px}
+.tr{display:grid;grid-template-columns:140px 1fr 1.3fr 1.2fr;gap:16px;padding:14px 18px;border-top:1px solid rgba(31,42,72,.08);font-size:13.5px;align-items:start}
+</style>
+</helmet>
+<div style="box-sizing:border-box;width:100%;min-height:2260px;padding:56px clamp(16px,5vw,72px);font-family:Inter,ui-sans-serif,-apple-system,sans-serif;color:#151a29;display:flex;flex-direction:column;gap:40px">
+
+<div style="display:flex;flex-direction:column;gap:10px;max-width:920px">
+<div class="k">legos / factory · redesign on main</div>
+<h1 style="margin:0;font-size:40px;line-height:1.1;font-weight:800;letter-spacing:-.02em">Five pages, each answering one question</h1>
+<p style="margin:0;font-size:16px;color:#5b6479;line-height:1.55">Home is the summary you land on. Work is what your factory is producing. Reviews is other people's code that waits on you. Activity is what already happened, yours and the team's. New starts a chat or a task; attaching a ticket is what turns a task into tracked work.</p>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:12px">
+<div class="k">Pages and their jobs</div>
+<div style="background:#fff;border:1px solid rgba(31,42,72,.09);border-radius:16px;overflow:hidden;min-width:0">
+<div class="tr" style="border-top:0;background:#f9fafc;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5b6479"><span>Page</span><span>Question</span><span>What it shows</span><span>Main actions</span></div>
+<div class="tr"><b>Home</b><span>“What is going on, and what needs me now?” <span class="where">· now</span></span><span class="where">Summary tiles, the Needs you section (gates and escalations), work in flight, reviews waiting, what just happened, team pulse</span><span class="where">Answer an agent inline, jump to any page from its tile</span></div>
+<div class="tr"><b>Work</b><span>“How is what I asked the factory to build going?” <span class="where">· in flight, outbound</span></span><span class="where">Board of tickets in factory-state columns, Jira tickets not started yet, a work item page per ticket</span><span class="where">Work on a ticket, open its runs and PRs, add a repo, run again</span></div>
+<div class="tr"><b>Reviews</b><span>“Whose code do I need to look at?” <span class="where">· inbound</span></span><span class="where">PRs where you are reviewer or mentioned, and comments left on PRs the factory opened for you</span><span class="where">Review with factory (draft), post, Ask factory to fix comments</span></div>
+<div class="tr"><b>Activity</b><span>“What happened?” <span class="where">· past, mine and team</span></span><span class="where">Day-by-day history of every chat and task with outcome and est. cost; Team tab with status per person</span><span class="where">Open a transcript, continue a chat, filter by ticket or person</span></div>
+<div class="tr"><b>New ▾</b><span>“I want to start something.”</span><span class="where">Chat to discuss, or Task to get it done. A task with a ticket attached runs once per repo and Jira follows it</span><span class="where">Start</span></div>
+</div>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+<div class="k">Five flows</div>
+<div style="display:flex;gap:8px;font-size:12px"><span class="who you">You</span><span class="who agent">Agent</span><span class="who fac">Factory, on its own</span></div>
+</div>
+
+<section class="flow" aria-label="Flow A">
+<div class="fh"><span class="fl">A</span><b style="font-size:17px">Ship a ticket on autopilot</b><span class="where">the runner works in auto mode; people only at the three gates</span></div>
+<div class="steps">
+<div class="box" style="background:#f4f3ff;border-color:#d9d5ff"><span class="who you">You + Agent</span><b>Brainstorm <span style="font-weight:500;color:#5b6479">(optional)</span></b><span class="where">A chat on the ticket that ends in a brief</span><span class="pg">Work item · chat</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Spec PR</b><span class="where">Written in each repo's own spec conventions</span><span class="pg">Work</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>Spec review</b><span class="where">Approve, or ask for changes and the agent revises</span><span class="pg">Home · Reviews</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Build per repo</b><span class="where">No prompts. A command outside the allowlist pauses the run and escalates</span><span class="pg">Work</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Gate · Agent</span><b>Agent review</b><span class="where">Changes requested → Build again, at most 3 times, then a person decides</span><span class="pg">Work item</span></div>
+</div>
+<div class="steps">
+<div class="box"><span class="who fac">Factory</span><b>Route by rules</b><span class="where">Workspace rules decide: diff size, sensitive paths, ticket type. The agent may raise to human, never lower</span><span class="pg">Work item · why</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">Gate · You</span><b>PR review <span style="font-weight:500;color:#5b6479">(high risk)</span></b><span class="where">With the agent's review beside the diff</span><span class="pg">Home · Reviews</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#f4f3ff;border-color:#d9d5ff"><span class="who you">You</span><b>Merge, one click</b><span class="where">Low-risk PRs skip review and wait as “Ready to merge”. The factory never merges</span><span class="pg">Home · Work</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#eff8f4;border-color:#c8e2d5"><span class="who fac">Factory</span><b>Ready for QA</b><span class="where">Jira moves on its own at each step; done when every repo is merged</span><span class="pg">Work · Done</span></div>
+</div>
+</section>
+
+<section class="flow" aria-label="Flow B">
+<div class="fh"><span class="fl">B</span><b style="font-size:17px">Review a teammate's PR</b><span class="where">inbound · the agent drafts, you decide what gets posted</span></div>
+<div class="steps">
+<div class="box"><span class="who fac">Factory</span><b>Finds PRs waiting on you</b><span class="where">You are a reviewer, or someone @-mentioned you</span><span class="pg">Reviews · Home tile</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Open the PR</b><span class="where">Diff with line numbers, existing comments, checks</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Review with factory</b><span class="where">A read-only run drafts comments on lines</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#f4f3ff;border-color:#d9d5ff"><span class="who you">You</span><b>Keep, edit or drop each draft</b><span class="where">Nothing is posted without you</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Post and decide</b><span class="where">Comments posted under your name; approve or request changes</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who fac">Factory</span><b>Leaves the list</b><span class="where">Back only if you are asked again or mentioned</span><span class="pg">Reviews</span></div>
+</div>
+</section>
+
+<section class="flow" aria-label="Flow C">
+<div class="fh"><span class="fl">C</span><b style="font-size:17px">Fix comments on your PR with Ask factory</b><span class="where">inbound on outbound work · one comment at a time</span></div>
+<div class="steps">
+<div class="box"><span class="who fac">Factory</span><b>Comment lands</b><span class="where">On a PR the factory opened for you</span><span class="pg">Reviews · On your PRs</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Tick comments, Ask factory</b><span class="where">Pick which ones the agent should handle</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Proposes a fix</b><span class="where">Read-only run on its own clone of the branch</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box" style="background:#fff5e8;border-color:#f0dcc2"><span class="who you">You</span><b>Approve, edit or skip</b><span class="where">Your call on what is said to a reviewer; shown in Needs you</span><span class="pg">PR page · Home</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Commits and pushes</b><span class="where">Auto mode, same allowlist as Build</span><span class="pg">PR page</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who fac">Factory</span><b>Replies with the commit</b><span class="where">Then moves to the next comment</span><span class="pg">PR page</span></div>
+</div>
+</section>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(520px,1fr));gap:16px">
+<section class="flow" aria-label="Flow D">
+<div class="fh"><span class="fl">D</span><b style="font-size:17px">Chat, or a task without a ticket</b><span class="where">same dialog as flow A, ticket left empty</span></div>
+<div class="steps">
+<div class="box"><span class="who you">You</span><b>New → Chat</b><span class="where">Discuss, reply between turns</span><span class="pg">New · rail</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Finishes a turn</b><span class="where">“Your turn” on Home</span><span class="pg">Home</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Continue later</b><span class="where">Idle 30 min closes it; reopen from history</span><span class="pg">Activity</span></div>
+</div>
+<div class="steps">
+<div class="box"><span class="who you">You</span><b>New → Task</b><span class="where">One prompt, permissions chosen up front</span><span class="pg">New</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who agent">Agent</span><b>Runs to the end</b><span class="where">Done or failed shows on Home</span><span class="pg">Home</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Discuss in chat</b><span class="where">Follow up on the result</span><span class="pg">Run page</span></div>
+</div>
+</section>
+
+<section class="flow" aria-label="Flow E">
+<div class="fh"><span class="fl">E</span><b style="font-size:17px">Look back, keep the team in view</b><span class="where">standup, weekly review, a lead checking progress</span></div>
+<div class="steps">
+<div class="box"><span class="who you">You</span><b>Activity · Mine</b><span class="where">Runs per day, outcome, tickets touched, est. cost</span><span class="pg">Activity</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Open a transcript</b><span class="where">Read what the agent did; continue a chat</span><span class="pg">Session page</span></div>
+</div>
+<div class="steps">
+<div class="box"><span class="who fac">Factory</span><b>Shares status to the hub</b><span class="where">Status only; private folders never leave the machine</span><span class="pg">Settings · sharing</span></div>
+<span class="arrow" aria-hidden="true">→</span>
+<div class="box"><span class="who you">You</span><b>Activity · Team</b><span class="where">Who is working on what, who is waiting</span><span class="pg">Activity</span></div>
+</div>
+</section>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:28px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<div class="k">Navigation, before → after</div>
+<div class="box" style="padding:0;gap:0;overflow:hidden">
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Overview</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Home <span style="font-weight:400;color:#5b6479">(summary, Needs you is one section)</span></b></div>
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Tasks + its Jira tab, ticket modal</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Work <span style="font-weight:400;color:#5b6479">(board, tickets, work item page)</span></b></div>
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Reviews</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Reviews <span style="font-weight:400;color:#5b6479">(+ comments on your PRs)</span></b></div>
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;border-bottom:1px solid rgba(31,42,72,.09);font-size:14px"><span style="color:#5b6479">Sessions · My activity · Team activity</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>Activity <span style="font-weight:400;color:#5b6479">(Mine · Team)</span></b></div>
+<div style="display:grid;grid-template-columns:1fr 28px 1.3fr;padding:12px 18px;font-size:14px"><span style="color:#5b6479">New chat · New task · Work on this</span><span aria-hidden="true" style="color:#8a93a6">→</span><b>New ▾ <span style="font-weight:400;color:#5b6479">(chat · task, ticket optional)</span></b></div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:12px">
+<div class="k">Rules every screen follows</div>
+<div class="box" style="gap:12px;font-size:14px;line-height:1.5;padding:16px 18px">
+<div><b>Humans only at gates.</b> <span style="color:#5b6479">Brainstorm, spec review, high-risk PR review, merge. Everything else runs on its own and escalates when stuck.</span></div>
+<div><b>Blocking first.</b> <span style="color:#5b6479">A paused run beats a gate beats a review for a teammate beats an FYI.</span></div>
+<div><b>One primary action per row.</b> <span style="color:#5b6479">The next step is a button; the rest are links.</span></div>
+<div><b>Facts, not claims.</b> <span style="color:#5b6479">States change on run, PR and Jira facts, never on what the agent says.</span></div>
+<div><b>Unknown is not zero.</b> <span style="color:#5b6479">Missing data shows “—” with a reason. Cost is always “est.”.</span></div>
+<div><b>The agent drafts, you post.</b> <span style="color:#5b6479">Reviews, replies and fixes reach other people only after you say yes.</span></div>
+</div>
+</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2260}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
