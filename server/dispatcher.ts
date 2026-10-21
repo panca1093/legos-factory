@@ -54,6 +54,11 @@ export class Dispatcher {
     return runIds.filter((id) => Number(extend.run(this.now() + this.opts.leaseMs, id, runnerId).changes) === 0);
   }
 
+  // A job handed out in a response that never arrived goes back without costing an attempt.
+  giveBack(runId: string) {
+    this.db.prepare(`update jobs set state = 'queued', runner_id = null, lease_until = null, attempts = attempts - 1 where run_id = ? and state = 'leased'`).run(runId);
+  }
+
   holds(runnerId: string, runId: string): boolean {
     return !!this.db.prepare(`select 1 from jobs where run_id = ? and state = 'leased' and runner_id = ?`).get(runId, runnerId);
   }

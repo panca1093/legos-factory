@@ -161,6 +161,9 @@ export class Runs extends EventEmitter {
 
   private pollNow(runner: RunnerRef, req: PollRequest): PollResponse {
     const lost = this.dispatcher.heartbeat(runner.id, req.running);
+    // a runner with nothing running that still holds jobs no run has reported on never received them
+    if (!req.running.length)
+      for (const j of this.dispatcher.open()) if (j.state === 'leased' && j.runnerId === runner.id && this.runs.get(j.runId)?.status === 'queued') this.dispatcher.giveBack(j.runId);
     this.reap();
     const jobs = this.dispatcher.claim(runner, req.capacity).map((j) => this.materialize(j, runner));
     const commands: Command[] = [];

@@ -271,6 +271,15 @@ describe('remote runner', () => {
     return { deps, call, api, fetchFn: ((url: string, init: RequestInit) => call(String(url).slice(PUBLIC.length), init)) as unknown as typeof fetch };
   }
 
+  it('hands a job out again, without costing an attempt, when the runner never got the response', async () => {
+    const h = hub();
+    const run = await (await h.api('POST', '/api/runs', { repo: 'acme/api', prompt: 'hello' })).json();
+    const runner = { id: 'r1', workspaceId: 'local', embedded: false };
+    expect((await h.deps.runs.poll(runner, { capacity: 1, running: [] })).jobs).toEqual([expect.objectContaining({ runId: run.id, attempt: 1 })]);
+    expect((await h.deps.runs.poll(runner, { capacity: 1, running: [] })).jobs).toEqual([expect.objectContaining({ runId: run.id, attempt: 1 })]);
+    expect((await h.deps.runs.poll(runner, { capacity: 1, running: [run.id] })).jobs).toEqual([]);
+  });
+
   it('lets a report move a run along but never change whose run it is, where, or for which ticket', async () => {
     const h = hub();
     const run = await (await h.api('POST', '/api/runs', { repo: 'acme/api', prompt: 'hello' })).json();
