@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readdirSync, rmSync } from 'node:fs';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { lstatSync, readdirSync, rmSync } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +12,8 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const PART_RE = /^[\w.-]{1,100}$/;
 const CLONE_TIMEOUT_MS = 3 * 60_000;
+// written inside .git so only clones this module made are ever swept
+const MARKER = join('.git', 'legos-clone');
 
 export type RepoRef = { workspace: string; slug: string };
 
@@ -77,6 +79,7 @@ export async function createWorkspace(opts: {
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(token && { [TOKEN_ENV]: token }) },
     });
     if (token) await configure(opts.path, workspace, opts.author ?? {});
+    await writeFile(join(opts.path, MARKER), '');
   } catch (err: any) {
     await rm(opts.path, { recursive: true, force: true });
     const stderr = String(err?.stderr || err?.message || err);
@@ -103,21 +106,28 @@ export async function removeWorkspace(root: string, path: string) {
   await rm(path, { recursive: true, force: true });
 }
 
-// At startup: delete the clones no resumable run is going to use.
+// At startup: delete the clones no resumable run is going to use; never follows symlinks or touches unmarked directories.
 export function sweepWorkspaces(root: string, keep: Set<string>) {
-  const list = (dir: string) => {
+  const dirs = (dir: string) => {
     try {
-      return readdirSync(dir);
+      return readdirSync(dir).filter((n) => lstatSync(join(dir, n)).isDirectory());
     } catch {
       return [];
     }
   };
-  for (const a of list(root))
-    for (const b of list(join(root, a)))
-      for (const c of list(join(root, a, b)))
-        for (const d of list(join(root, a, b, c))) {
+  const marked = (path: string) => {
+    try {
+      return lstatSync(join(path, MARKER)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  for (const a of dirs(root))
+    for (const b of dirs(join(root, a)))
+      for (const c of dirs(join(root, a, b)))
+        for (const d of dirs(join(root, a, b, c))) {
           const path = join(root, a, b, c, d);
-          if (!keep.has(path)) rmSync(path, { recursive: true, force: true });
+          if (!keep.has(path) && marked(path)) rmSync(path, { recursive: true, force: true });
         }
 }
 

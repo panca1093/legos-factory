@@ -72,6 +72,11 @@ export function createApp(manager: RunManager, opts: AppOptions = {}, deps = bui
   return app;
 }
 
+// At process start: drop the clones no queued or leased job will come back to.
+export function sweepOrphans({ runs, wsRoot }: Deps) {
+  sweepWorkspaces(wsRoot, new Set(runs.openJobs().flatMap((j) => (j.request.clone ? [workspacePath(wsRoot, j.workspaceId, parseRepo(j.request.clone.repo)!, j.request.clone.key)] : []))));
+}
+
 export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   const users = opts.users ?? null;
   const db = opts.db ?? openDb(':memory:');
@@ -201,7 +206,6 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   runs.recover();
   const open = runs.openJobs();
   activity.failOrphans(new Set(open.map((j) => j.runId)));
-  sweepWorkspaces(wsRoot, new Set(open.flatMap((j) => (j.request.clone ? [workspacePath(wsRoot, j.workspaceId, parseRepo(j.request.clone.repo)!, j.request.clone.key)] : []))));
   setInterval(() => runs.reap(), 5000).unref();
   if (embedded) {
     new Runner({

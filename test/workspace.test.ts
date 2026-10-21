@@ -1,14 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { createApp } from '../server/app.ts';
+import { buildDeps, createApp, sweepOrphans } from '../server/app.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { MyRepos } from '../server/my-repos.ts';
 import { WorkItems } from '../server/work-items.ts';
-import { managedWorkspace, parseRepo } from '../server/workspace.ts';
+import { managedWorkspace, parseRepo, sweepWorkspaces, workspacePath } from '../server/workspace.ts';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
 
@@ -145,5 +145,58 @@ describe('repo workspaces', () => {
       mkdirSync(cwd, { recursive: true });
       expect((await post({ cwd, prompt: 'x' })).status).toBe(400);
     }
+  });
+});
+
+describe('boot sweep', () => {
+  const clone = (root: string, ...parts: string[]) => {
+    const dir = join(root, ...parts);
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    writeFileSync(join(dir, '.git', 'legos-clone'), '');
+    writeFileSync(join(dir, 'work.txt'), 'uncommitted');
+    return dir;
+  };
+
+  it('keeps the clone of a resumable job and removes an orphan', async () => {
+    const workspaces = mkdtempSync(join(tmpdir(), 'lf-sweep-'));
+    const db = openDb(':memory:');
+    new MyRepos(db).add('local', { name: 'acme/app', mainBranch: 'main' });
+    const manager = new RunManager(alive);
+    const deps = buildDeps(manager, { db, workspaces, embeddedRunner: false });
+    const app = createApp(manager, { db, workspaces, embeddedRunner: false }, deps);
+    const res = await app.request('http://localhost:4317/api/runs', {
+      method: 'POST',
+      headers: { host: 'localhost:4317', 'x-legos': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ repo: 'acme/app', prompt: 'x' }),
+    });
+    expect(res.status).toBe(201);
+    const job = deps.runs.openJobs()[0].request.clone!;
+    const kept = clone(workspaces, 'local', 'acme', 'app', job.key);
+    const orphan = clone(workspaces, 'local', 'acme', 'app', 'PROJ-2');
+    sweepOrphans(deps);
+    expect(existsSync(join(kept, 'work.txt'))).toBe(true);
+    expect(existsSync(orphan)).toBe(false);
+  });
+
+  it('ignores unmarked directories and never follows symlinks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lf-sweep-'));
+    const unmarked = join(root, 'a', 'b', 'c', 'd');
+    mkdirSync(unmarked, { recursive: true });
+    writeFileSync(join(unmarked, 'mine.txt'), 'x');
+    const outside = clone(mkdtempSync(join(tmpdir(), 'lf-outside-')), 'x');
+    mkdirSync(join(root, 'a', 'b', 'link'), { recursive: true });
+    symlinkSync(outside, join(root, 'a', 'b', 'link', 'd'));
+    symlinkSync(outside, join(root, 'a', 'b', 'c2'));
+    sweepWorkspaces(root, new Set());
+    expect(existsSync(join(unmarked, 'mine.txt'))).toBe(true);
+    expect(existsSync(join(outside, 'work.txt'))).toBe(true);
+    expect(workspacePath(root, 'a', { workspace: 'b', slug: 'c' }, 'd')).toBe(unmarked);
+  });
+
+  it('does not run when the app is built, so a second process cannot delete live clones', () => {
+    const workspaces = mkdtempSync(join(tmpdir(), 'lf-sweep-'));
+    const live = clone(workspaces, 'local', 'acme', 'app', 'PROJ-1');
+    buildDeps(new RunManager(alive), { db: openDb(':memory:'), workspaces });
+    expect(existsSync(join(live, 'work.txt'))).toBe(true);
   });
 });

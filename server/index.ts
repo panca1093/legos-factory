@@ -1,6 +1,6 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { buildDeps, createApp } from './app.ts';
+import { buildDeps, createApp, sweepOrphans } from './app.ts';
 import { RunManager } from './claude-runs.ts';
 import { openDb } from './db.ts';
 import { startSyncLoop } from './jira-sync.ts';
@@ -48,6 +48,7 @@ async function startApp() {
   const maxAttempts = Number(process.env.LEGOS_MAX_ATTEMPTS) || undefined;
   const opts = { users, db, selfUrl, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
   const deps = buildDeps(runs, opts);
+  sweepOrphans(deps);
   const app = createApp(runs, opts, deps);
   startSyncLoop(deps, Number(process.env.LEGOS_SYNC_MS ?? 120_000));
   // warm the model list so the first picker open isn't waiting on a CLI spawn
