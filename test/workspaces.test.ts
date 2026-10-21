@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
@@ -10,12 +10,9 @@ import { MyRepos } from '../server/my-repos.ts';
 import { allowed, Workspaces } from '../server/tenancy.ts';
 import { Users } from '../server/users.ts';
 import { WorkItems } from '../server/work-items.ts';
-import { alive, peer } from './fakes.ts';
+import { alive, peer, useEnv } from './fakes.ts';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 const cookieOf = (r: Response) => r.headers.get('set-cookie')!.split(';')[0];
 
@@ -90,6 +87,41 @@ describe('workspaces', () => {
     expect((await s.json(await s.req('/api/work-items', bob))).items).toEqual([]);
     expect((await s.put('/api/work-items/PROJ-1', bob, { repos: ['acme/api'] })).status).toBe(403);
     expect(bobId).not.toBe(adaId);
+  });
+
+  it("turns a non-member away from every workspace-scoped route that names another workspace's data", async () => {
+    const s = setup();
+    const [ada, eve] = [await s.signUp('Ada'), await s.signUp('Eve')];
+    const adaId = await s.me(ada);
+    new MyRepos(s.db).add(adaId, { name: 'acme/api', mainBranch: 'main' });
+    new WorkItems(s.db).create(adaId, 'PROJ-1');
+    new WorkItems(s.db).addRepo(adaId, 'PROJ-1', 'acme/api');
+    const runner = (await s.json(await s.post('/api/runners', ada, { name: 'laptop' }))).id;
+    const run = (await s.json(await s.post('/api/runs', ada, { cwd: tmpdir(), prompt: 'x' }))).id;
+    const pr = '/api/prs/acme/api/7';
+    const item = '/api/work-items/PROJ-1/repos/acme/api';
+    const routes: [string, string, object?][] = [
+      ['GET', pr],
+      ['GET', `${pr}/diff`],
+      ['POST', `${pr}/comments`, { text: 'x' }],
+      ['GET', `${pr}/fixes`],
+      ['POST', `${pr}/fixes`, { commentIds: [1] }],
+      ...['approve', 'skip', 'retry'].map((a): [string, string] => ['POST', `/api/fixes/nope/items/1/${a}`]),
+      ['POST', '/api/fixes/nope/cancel'],
+      ['POST', `${item}/start-build`],
+      ['POST', `${item}/approve`],
+      ['DELETE', `/api/runners/${runner}`],
+      ['GET', `/api/runs/${run}`],
+      ['POST', `/api/runs/${run}/messages`, { text: 'x' }],
+      ['POST', `/api/runs/${run}/model`, { model: 'opus' }],
+      ['POST', `/api/runs/${run}/interrupt`],
+      ['POST', `/api/runs/${run}/end`],
+    ];
+    for (const [method, path, body] of routes) {
+      const res = await s.req(path, eve, { method, ...(method !== 'GET' && { body: JSON.stringify(body ?? {}) }) });
+      expect([403, 404], `${method} ${path} -> ${res.status}`).toContain(res.status);
+    }
+    expect((await s.json(await s.req(`/api/runs/${run}`, ada))).id).toBe(run);
   });
 
   it('enforces roles on the server: viewers read, members run work, owners configure', async () => {

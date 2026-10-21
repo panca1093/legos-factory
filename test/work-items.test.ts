@@ -51,7 +51,8 @@ type Opts = { status?: string; transitions?: typeof TRANSITIONS; prs?: Record<st
 
 function setup(o: Opts = {}) {
   const jira = { status: o.status ?? 'To Do' };
-  const calls: { tool: string; args: any }[] = [];
+  const calls: { tool: string; args: any; cloneExists?: boolean }[] = [];
+  const hooks: { onListPrs?: () => boolean } = {};
   let inFlight = 0;
   let maxInFlight = 0;
   const srv = fakeServers({
@@ -77,6 +78,7 @@ function setup(o: Opts = {}) {
         return p;
       }
       if (tool === 'bitbucket_list_prs') {
+        call.cloneExists = hooks.onListPrs?.();
         return { prs: o.open?.[`${args.workspace}/${args.repoSlug}`] ?? [], hasMore: false };
       }
       if (tool === 'bitbucket_list_repos') return { repos: [], hasMore: false };
@@ -108,7 +110,7 @@ function setup(o: Opts = {}) {
   const items = new WorkItems(db);
   const item = async (ticket = 'PROJ-1') => ((await (await req('/api/work-items')).json()).items as any[]).find((i) => i.ticket === ticket);
   const tools = (name: string) => calls.filter((c) => c.tool === name);
-  return { jira, calls, tools, db, deps, runs, starts, req, post, put, patch, connectWorkbench, items, item, myRepos, max: () => maxInFlight };
+  return { jira, calls, tools, db, deps, runs, starts, req, post, put, patch, connectWorkbench, items, item, myRepos, hooks, max: () => maxInFlight };
 }
 
 const settle = async (cond: () => boolean) => {
@@ -539,16 +541,19 @@ describe('PR capture', () => {
     await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
     const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'design' })).json();
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: earlier');
+    s.hooks.onListPrs = () => existsSync(run.cwd);
     if (branch) git(run.cwd, 'checkout', '-qb', branch);
     await s.runs.end(run.id);
     await settle(() => !existsSync(run.cwd));
+    await settle(() => s.deps.runs.openJobs().length === 0);
     return { s, run };
   };
 
-  it('stores the open PR of the branch the run left its clone on as a link of the run stage', async () => {
+  it('finds the run branch although the clone is gone by the time the PR is listed: the runner read it first', async () => {
     const open = { 'acme/api': [pr(7, 'OPEN', 'other', 'feat/other'), pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1')] };
     const { s, run } = await launch({ open, prs: { 'acme/api#12': pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1') } }, 'feat/PROJ-1');
-    expect(s.tools('bitbucket_list_prs').map((c) => c.args.state)).toEqual(['OPEN']);
+    await settle(() => s.tools('bitbucket_list_prs').length === 1);
+    expect(s.tools('bitbucket_list_prs').map((c) => [c.args.state, c.cloneExists])).toEqual([['OPEN', false]]);
     const links = s.items.links('local', 'PROJ-1');
     expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'spec', branch: 'feat/PROJ-1', runId: run.id })]);
     expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();

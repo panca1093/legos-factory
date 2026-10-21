@@ -1,15 +1,13 @@
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ActivityLog } from '../server/activity.ts';
 import { createApp } from '../server/app.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import type { Run } from '../shared/types.ts';
+import { useEnv } from './fakes.ts';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 const idle = (() => {
   const it = (async function* () {})() as any;

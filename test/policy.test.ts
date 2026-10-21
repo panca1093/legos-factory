@@ -4,8 +4,9 @@ import { loadSettings, shareFor } from '../server/policy.ts';
 
 const fx = (f: string) => join(import.meta.dirname, 'fixtures/settings', f);
 
+const before = process.env.LEGOS_SETTINGS;
 afterEach(() => {
-  delete process.env.LEGOS_SETTINGS;
+  process.env.LEGOS_SETTINGS = before;
 });
 
 describe('settings', () => {

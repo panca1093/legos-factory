@@ -1,12 +1,12 @@
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { Connections } from '../server/connections.ts';
 import { openDb } from '../server/db.ts';
-import { alive, fakeServers, OTHER, WB } from './fakes.ts';
+import { alive, fakeServers, OTHER, useEnv, WB } from './fakes.ts';
 
 function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   const srv = fakeServers(opts);
@@ -42,10 +42,7 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   return { srv, conns, runs, req, post, connect, addWorkbench, path, pushed, runCount };
 }
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('adding connections', () => {
   it('validates input', async () => {

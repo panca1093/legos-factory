@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
@@ -15,7 +15,7 @@ import { jiraWorkSource } from '../server/providers/jira-workbench.ts';
 import { Workbench } from '../server/workbench.ts';
 import { WorkItems } from '../server/work-items.ts';
 import { stageGuide } from '../server/workflow.ts';
-import { alive, fakeServers, WB } from './fakes.ts';
+import { alive, fakeServers, useEnv, WB } from './fakes.ts';
 
 const repo = { workspace: 'acme', slug: 'api' };
 const DIFF = 'diff --git a/a.txt b/a.txt\n+hello\n';
@@ -67,7 +67,7 @@ function github(): Forge {
 }
 
 // What any Forge must do, however it talks to its product; `writes` says whether this one may change things.
-function forgeContract(name: string, make: () => Forge, writes: boolean) {
+function forgeContract(name: string, make: () => Forge, writes: boolean, ci: 'passed' | null) {
   describe(`forge contract: ${name}`, () => {
     it('lists repos and pull requests in the neutral shape', async () => {
       const forge = make();
@@ -80,7 +80,7 @@ function forgeContract(name: string, make: () => Forge, writes: boolean) {
       const pr = await make().getPr(repo, 7);
       expect(pr).toMatchObject({ repo: 'acme/api', id: 7, title: 'PROJ-1 export', state: 'OPEN', source: 'feat/PROJ-1', destination: 'main', description: 'd', url: 'https://forge/pr/7' });
       expect(pr.reviewers).toHaveLength(1);
-      expect([null, 'passed', 'failed', 'pending']).toContain(pr.ci);
+      expect(pr.ci).toBe(ci);
     });
 
     it('reads files, the diff and comments, oldest first with inline ones located', async () => {
@@ -110,8 +110,8 @@ function forgeContract(name: string, make: () => Forge, writes: boolean) {
   });
 }
 
-forgeContract('Bitbucket through workbench', bitbucket, true);
-forgeContract('GitHub', github, false);
+forgeContract('Bitbucket through workbench', bitbucket, true, null);
+forgeContract('GitHub', github, false, 'passed');
 
 describe('the Jira work source', () => {
   it('moves a ticket only through a transition it finds by target status', async () => {
@@ -133,9 +133,7 @@ describe('the Jira work source', () => {
 });
 
 describe('the core without Jira or Bitbucket', () => {
-  beforeAll(() => {
-    process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-  });
+  useEnv({ LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
   it('syncs a work item through any WorkSource and Forge', async () => {
     const db = openDb(':memory:');
@@ -222,7 +220,7 @@ describe('per-workspace configuration', () => {
     await send('PUT', `/api/workspaces/${id}/config`, { prTitle: { design: 'Prefix spec PR titles with SPEC.', build: '' } });
     const body = { repo: 'acme/api', ticket: 'PROJ-1', stage: 'design', kind: 'task', prompt: 'go' };
     expect((await send('POST', '/api/runs', body)).status).toBe(201);
-    await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 200 && !starts.length; i++) await new Promise((r) => setTimeout(r, 5));
     expect(starts[0].prompt).toMatch(/Prefix spec PR titles with SPEC\./);
   });
 });

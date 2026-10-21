@@ -1,12 +1,12 @@
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ActivityLog } from '../server/activity.ts';
 import { createApp, nameFromEmail } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { MyRepos } from '../server/my-repos.ts';
 import type { Run } from '../shared/types.ts';
-import { alive, fakeServers, WB } from './fakes.ts';
+import { alive, fakeServers, useEnv, WB } from './fakes.ts';
 
 const PRS: Record<string, any[]> = {
   'acme/api:OPEN': [
@@ -64,9 +64,7 @@ function setup(opts: { bitbucketWorkspace?: string; whoami?: object; repos?: str
   return { req, post, connectWorkbench, calls, db };
 }
 
-beforeAll(() => {
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('pull requests', () => {
   it('need a connected workbench and valid input', async () => {

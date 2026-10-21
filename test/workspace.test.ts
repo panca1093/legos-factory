@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { buildDeps, createApp, sweepOrphans } from '../server/app.ts';
 import { embeddedByDefault } from '../server/http.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
@@ -10,6 +10,7 @@ import { openDb } from '../server/db.ts';
 import { MyRepos } from '../server/my-repos.ts';
 import { WorkItems } from '../server/work-items.ts';
 import { managedWorkspace, parseRepo, sweepWorkspaces, workspacePath } from '../server/workspace.ts';
+import { useEnv } from './fakes.ts';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
 
@@ -62,9 +63,7 @@ const settle = async (cond: () => boolean) => {
   expect(cond()).toBe(true);
 };
 
-beforeAll(() => {
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('repo workspaces', () => {
   it('parses repo refs and recognises only its own paths', () => {

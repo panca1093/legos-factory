@@ -147,6 +147,8 @@ afterAll(() => {
   process.env = saved;
 });
 
+// everything the engine queued for the work item has been handled
+const idle = (s: ReturnType<typeof setup>) => s.deps.stages.serial('local', 'PROJ-1', 'acme/api', async () => {});
 const startBuild = (s: ReturnType<typeof setup>) => s.post('/api/work-items/PROJ-1/repos/acme/api/start-build', {});
 
 describe('the factory workflow', () => {
@@ -171,7 +173,7 @@ describe('the factory workflow', () => {
     await s.sync();
     await until(() => s.deps.stages.get('local', 'PROJ-1', 'acme/api')?.phase === 'ready', 'build unlocked');
     expect(await s.stage()).toMatchObject({ stage: 'build', phase: 'ready' });
-    await new Promise((r) => setTimeout(r, 50));
+    await idle(s);
     expect(s.starts).toHaveLength(1);
 
     const build = await startBuild(s);
@@ -232,8 +234,22 @@ describe('the factory workflow', () => {
     await s.run(last, { result: 'Still wrong.\nVerdict: REQUEST_CHANGES' });
     await until(() => s.deps.stages.get('local', 'PROJ-1', 'acme/api')?.phase === 'escalated', 'escalated');
     expect(await s.stage()).toMatchObject({ stage: 'inspect', phase: 'escalated', loops: MAX_REVIEW_LOOPS, note: expect.stringMatching(/3 rounds/) });
-    await new Promise((r) => setTimeout(r, 50));
+    await idle(s);
     expect(s.starts).toHaveLength(last + 1);
+  });
+
+  it('refuses Start build while a build runs or waits on its gate', async () => {
+    const s = setup();
+    await s.ready();
+    for (const phase of ['run', 'gate'] as const) {
+      s.deps.stages.put('local', 'PROJ-1', 'acme/api', { stage: 'build', phase, loops: 0, prId: 1, note: null, owner: 'local' });
+      const res = await startBuild(s);
+      expect(res.status, phase).toBe(409);
+      expect((await res.json()).error).toMatch(/already under way/);
+      expect(s.deps.stages.get('local', 'PROJ-1', 'acme/api')).toMatchObject({ phase });
+    }
+    expect(s.starts).toHaveLength(0);
+    expect(s.deps.stages.has('local', 'PROJ-1', 'acme/api', 'human.approved', 1)).toBe(false);
   });
 
   it('resumes an escalated build on its pull request branch with the findings, and approves nothing', async () => {

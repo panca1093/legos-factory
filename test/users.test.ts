@@ -1,17 +1,14 @@
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { Users } from '../server/users.ts';
-import { alive, fakeServers, OTHER, peer, WB } from './fakes.ts';
+import { alive, fakeServers, OTHER, peer, useEnv, WB } from './fakes.ts';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('users', () => {
   it('keeps PIN users apart by name and stores the database owner-only', async () => {
@@ -117,14 +114,19 @@ describe('sign-in', () => {
   });
 
   it('answers 429 while locked out, and requires x-legos on auth writes', async () => {
-    const { req, post } = setup();
-    await post('/auth/users', { name: 'Ada', pin: '123456' });
-    for (let i = 0; i < 4; i++) await post('/auth/login', { name: 'Ada', pin: '000000' });
-    const locked = await post('/auth/login', { name: 'Ada', pin: '000000' });
-    expect(locked.status).toBe(429);
-    expect((await locked.json()).retryAfterMs).toBe(30_000);
-    expect((await req('/auth/login', { method: 'POST', body: '{"name":"Ada","pin":"123456"}' })).status).toBe(403);
-    expect((await req('/auth/users', { method: 'POST', body: '{"name":"Eve","pin":"123456"}' })).status).toBe(403);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { req, post } = setup();
+      await post('/auth/users', { name: 'Ada', pin: '123456' });
+      for (let i = 0; i < 4; i++) await post('/auth/login', { name: 'Ada', pin: '000000' });
+      const locked = await post('/auth/login', { name: 'Ada', pin: '000000' });
+      expect(locked.status).toBe(429);
+      expect((await locked.json()).retryAfterMs).toBe(30_000);
+      expect((await req('/auth/login', { method: 'POST', body: '{"name":"Ada","pin":"123456"}' })).status).toBe(403);
+      expect((await req('/auth/users', { method: 'POST', body: '{"name":"Eve","pin":"123456"}' })).status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('logout clears the cookie', async () => {
