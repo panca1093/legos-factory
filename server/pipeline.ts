@@ -37,9 +37,10 @@ export function next(state: State, facts: Facts): Action[] {
 
   if (!event) return schedule(tasks);
   if (event.type === 'spec_approved') {
-    const repos = state.repos.map((repo) => repo.stage === 'spec_review' ? { ...repo, stage: 'building' as const, attempt: 0 } : repo);
+    const approved = state.repos.filter((repo) => ['backlog', 'shaping', 'spec_review'].includes(repo.stage));
+    const repos = state.repos.map((repo) => approved.includes(repo) ? { ...repo, stage: 'building' as const, attempt: 0 } : repo);
     return [
-      ...state.repos.filter((repo) => repo.stage === 'spec_review').map((repo) => setStage(repo.repo, 'building')),
+      ...approved.map((repo) => setStage(repo.repo, 'building')),
       ...schedule(tasks, repos),
     ];
   }

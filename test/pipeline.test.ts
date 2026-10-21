@@ -44,6 +44,44 @@ describe('pipeline transitions', () => {
     expect({ state, facts }).toEqual(before);
   });
 
+  it('one ticket spec approval moves all its repos into building', () => {
+    const input: State = {
+      repos: [
+        { repo: 'acme/api', stage: 'spec_review', attempt: 0 },
+        { repo: 'acme/web', stage: 'shaping', attempt: 0 },
+      ],
+      plan: { tasks: [task(), { ...task('T2', 'waiting', ['T1']), repo: 'acme/web' }], error: null },
+    };
+    const before = structuredClone(input);
+    expect(next(input, { reviewAttempts: 3, event: { type: 'spec_approved' } })).toEqual([
+      stage('building'),
+      { type: 'set_stage', repo: 'acme/web', stage: 'building', attempt: 0 },
+      start('T1'),
+    ]);
+    expect(input).toEqual(before);
+    input.repos.forEach((repo) => { repo.stage = 'building'; });
+    input.plan!.tasks[0].state = 'running';
+    expect(next(input, ended('inspector', 'pass'))).toEqual([
+      { type: 'set_task', task: 'T1', state: 'done' }, stage('building'),
+      { type: 'start_run', repo: 'acme/web', task: 'T2', persona: 'builder' },
+    ]);
+  });
+
+  it.each(['building', 'pr_review', 'ready', 'done'] as const)('duplicate spec approval preserves a repo already in %s', (advanced) => {
+    const input: State = {
+      repos: [
+        { repo: 'acme/api', stage: advanced, attempt: 2 },
+        { repo: 'acme/web', stage: 'shaping', attempt: 0 },
+      ],
+      plan: { tasks: [{ ...task('T2'), repo: 'acme/web' }], error: null },
+    };
+    expect(next(input, { reviewAttempts: 3, event: { type: 'spec_approved' } })).toEqual([
+      { type: 'set_stage', repo: 'acme/web', stage: 'building', attempt: 0 },
+      { type: 'start_run', repo: 'acme/web', task: 'T2', persona: 'builder' },
+    ]);
+    expect(input.repos[0]).toEqual({ repo: 'acme/api', stage: advanced, attempt: 2 });
+  });
+
   it('escalates after reviewAttempts failed reviews', () => {
     expect(next(state('building', [task('T1', 'running')], 2), ended('inspector', 'changes_requested'))).toEqual([
       { type: 'set_stage', repo: 'acme/api', stage: 'building', attempt: 3 },
