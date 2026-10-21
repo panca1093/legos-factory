@@ -40,6 +40,14 @@ const STAGE_GUIDE: Record<Stage, (ticket: string) => string> = {
     `Before anything else, read this repo's own conventions: CLAUDE.md, AGENTS.md, CONTRIBUTING and its docs folder. Implement ${t}, verify it, then open a pull request. Put ${t} in the branch name and in the PR title, following the repo's title format.`,
 };
 
+// A tracked chat is a discussion: the spec is written only when the person asks for it.
+const DISCUSSION_GUIDE = (t: string) =>
+  `Discuss the work for ${t} with the person before anything is written: the outcome, the constraints, what "done" means. Do not write a spec, do not implement anything and do not open a pull request. Wait for the person to say when to continue.`;
+
+export function stageGuide(stage: Stage, ticket: string): string {
+  return STAGE_GUIDE[stage](ticket);
+}
+
 export type LaunchRequest = z.output<typeof launchSchema>;
 
 // Runs in cwd or a fresh clone of repo, with the owner's connections reached through this app's proxy.
@@ -86,7 +94,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const ticket = req.ticket || null;
   const share = req.share ?? shareFor(cwd, settings);
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
-  let runPrompt = stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt;
+  let runPrompt = stage ? `${prompt}\n\n${kind === 'chat' ? DISCUSSION_GUIDE(req.ticket) : stageGuide(stage, req.ticket)}` : prompt;
   if (req.persona) runPrompt += `\n\n${await readFile(new URL(`../workflows/factory/personas/${req.persona}.md`, import.meta.url), 'utf8')}`;
   const runModel = model ?? (req.persona ? settings.automation.models[req.persona] : undefined);
   const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: runPrompt, permissionMode, resume, model: runModel, ticket, stage, share, task: req.task, persona: req.persona, readOnly: req.persona === 'inspector' }, connected));

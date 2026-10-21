@@ -8,7 +8,7 @@ import { hasShellMetacharacters } from '../claude-runs.ts';
 import { gitBranch, loadSettings, saveAutomation, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { isOwner } from '../owners.ts';
-import { MODEL_RE, launchRun, launchSchema } from '../launch-run.ts';
+import { MODEL_RE, launchRun, launchSchema, stageGuide } from '../launch-run.ts';
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
   ...s,
@@ -33,6 +33,7 @@ async function rememberCommand(command: unknown): Promise<void> {
 
 const textSchema = z.object({ text: text() });
 const requiredText = z.object({ text: text().refine((t) => !!t, 'text is required') });
+const NOT_A_DISCUSSION = 'only an idle tracked discussion can start a spec';
 const modelSchema = z.object({ model: text().refine((m) => MODEL_RE.test(m), 'invalid model') });
 const decisionSchema = z.object({
   behavior: z.enum(['allow', 'deny'], { error: 'behavior must be allow or deny' }),
@@ -112,6 +113,15 @@ export function runsRoutes(deps: Deps) {
   routes.post('/api/runs/:id/resume-task', async (c) => {
     const { text } = parse(textSchema, await readBody(c));
     if (!runs.resumeTask(c.req.param('id'), text)) throw new HttpError(409, 'only an idle chat that started as a task can resume it');
+    return c.json({ ok: true });
+  });
+
+  routes.post('/api/runs/:id/start-spec', async (c) => {
+    const { text } = parse(textSchema, await readBody(c));
+    const run = runs.get(c.req.param('id'));
+    if (!run?.ticket) throw new HttpError(409, NOT_A_DISCUSSION);
+    const message = [stageGuide('design', run.ticket), 'The discussion is done. Write the spec now.', text].filter(Boolean).join('\n\n');
+    if (!runs.startSpec(c.req.param('id'), message)) throw new HttpError(409, NOT_A_DISCUSSION);
     return c.json({ ok: true });
   });
 

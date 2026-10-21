@@ -439,6 +439,17 @@ export class RunManager extends EventEmitter {
     return true;
   }
 
+  // The discussion is over: the tracked chat becomes the spec run and ends on its own.
+  startSpec(id: string, text: string): boolean {
+    const live = this.live.get(id);
+    if (!live || live.run.kind !== 'chat' || live.run.status !== 'idle' || live.input.closed) return false;
+    if (!live.run.ticket || live.run.stage !== 'design') return false;
+    live.run.kind = 'task';
+    this.enqueue(live, text);
+    this.publish(live.run);
+    return true;
+  }
+
   // Answers a pending request with the user's question instead of a yes/no, and keeps the session open as a chat.
   discuss(id: string, question: string): string | null {
     const w = this.waiting.get(id);
