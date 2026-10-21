@@ -107,6 +107,31 @@ Each screen below lists purpose, content and where the data comes from. "Existin
 3. **Pipeline engine.** Plan parsing, stages per repo, persona per stage, Inspector loop with attempts, routing rules, Ready to merge, parallel builders behind the setting, Cataloger. Gates open on facts only (PR state, approvals). Tests per transition, including parse failure fallback and escalation after N attempts.
 4. **Gates in Reviews and the Flow view.** Factory gates tab, approve/request changes, merge, the Work item Flow graph and Pull requests box.
 
+## Parallel delivery (alternative to the four PRs in order)
+
+The work can run as three parallel tracks once a small contract is merged. Each track owns its files; a track never edits files another track owns.
+
+**Step 0, contract (one agent, merged before anything else):**
+- `shared/types.ts`: `Stage` per repo, `PlanTask` and `Plan`, `AutomationSettings` (allowlist, routing rules, personas' models, parallelBuilders, reviewAttempts), `Run.task` and `Run.persona`, the extended `WorkItem` (source, plan, per-repo stage and attempt, per-task state).
+- `server/db.ts`: the new columns from "Data and endpoints".
+- Automation settings storage and endpoint (`server/policy.ts`, `server/routes/settings.ts`).
+- API shapes, returning defaults where the behaviour does not exist yet: `GET /api/work-items` with the new fields, `GET/PUT /api/settings/automation`, `POST /api/work-items/:ticket/approve-spec`, `POST /api/work-items/:ticket/prs/:repo/approve` and `.../merge` (respond 501 until track C).
+- Tests that pin those shapes. After step 0, `shared/types.ts` and `server/db.ts` change only by agreement.
+
+**Tracks (in parallel, each on its own branch and worktree from the contract):**
+
+| Track | Owns | Delivers |
+|---|---|---|
+| A · Front end | `web/**` | Every screen in this spec against the contract's API, including the Automation settings, Factory gates and Flow views |
+| B · Auto mode | `server/claude-runs.ts`, `server/routes/runs.ts`, their tests (settings storage and endpoint are in step 0) | Allowlist check and pause, settings storage and endpoint |
+| C · Pipeline | `server/pipeline.ts` (new), `server/launch-run.ts`, `server/work-items.ts`, `server/jira-sync.ts`, `server/routes/work-items.ts`, `server/routes/prs.ts`, their tests | Plan parsing, stages, personas and models, Inspector loop, routing, Ready to merge, parallel builders, approve and merge endpoints |
+
+A track that needs a change in a file it does not own writes it down in its PR body instead of making it.
+
+**Integration:** merge B, then C, then A, each rebased on the one before; run the full suite after each merge.
+
+The work packages, worker rules and prompts for running this with an orchestrator and small worker agents are in `mission-control-orchestration.md`.
+
 ## Open questions (resolve before the PR that needs them)
 
 - Merge from the app: `main` has no merge call and it is unverified whether workbench exposes a Bitbucket merge tool. If not, "Merge" opens the PR in the forge. (PR 3)
