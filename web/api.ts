@@ -124,6 +124,7 @@ export const api = {
   automation: () => call<AutomationSettings>('/api/settings/automation'),
   saveAutomation: (a: AutomationSettings) => call<AutomationSettings>('/api/settings/automation', { method: 'PUT', body: JSON.stringify(a) }),
   approveSpec: (ticket: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/approve-spec`, { method: 'POST' }),
+  undoWorkItem: (ticket: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/undo`, { method: 'POST' }),
   approvePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/approve`, { method: 'POST' }),
   mergePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/merge`, { method: 'POST' }),
   requestSpecChanges: (ticket: string, comment: string) =>
