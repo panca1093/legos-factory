@@ -7,7 +7,7 @@ import { getSession, listSessions } from '../claude-sessions.ts';
 import { gitBranch, loadSettings, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { MODEL_RE, launchRun, launchSchema } from '../launch-run.ts';
-import { begun, startBuild } from '../stages.ts';
+import { startBuild, startFirst } from '../stages.ts';
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
   ...s,
@@ -71,9 +71,8 @@ export function runsRoutes(deps: Deps) {
     // a stage that needs a person's go-ahead goes through the engine, which checks its gate
     if (req.repo && req.ticket && req.stage && deps.workflow.stages.find((s) => s.id === req.stage)?.manual)
       return c.json(await startBuild(deps, who, req.ticket, req.repo, { model: req.model, permissionMode: req.permissionMode }), 201);
-    const run = await launchRun(deps, who, req);
-    begun(deps, run);
-    return c.json(run, 201);
+    if (req.repo && req.ticket && req.stage === deps.workflow.stages[0].id) return c.json(await startFirst(deps, who, req), 201);
+    return c.json(await launchRun(deps, who, req), 201);
   });
 
   routes.post('/api/runs/:id/messages', async (c) => {

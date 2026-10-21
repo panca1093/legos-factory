@@ -279,6 +279,21 @@ describe('the factory workflow', () => {
     expect(await s.stage()).toMatchObject({ stage: 'design', phase: 'run', note: null });
   });
 
+  it('refuses to relaunch design while a later stage runs, and never resets the review-loop counter', async () => {
+    const s = setup();
+    await s.ready();
+    const design = () => s.post('/api/runs', { repo: 'acme/api', ticket: 'PROJ-1', stage: 'design', kind: 'task', prompt: 'again' });
+    const row = (phase: 'run' | 'escalated', stage: 'inspect' | 'design') => ({ stage, phase, loops: 2, prId: 2, note: null, owner: 'local' }) as const;
+    s.deps.stages.put('local', 'PROJ-1', 'acme/api', row('run', 'inspect'));
+    expect((await design()).status).toBe(409);
+    expect(s.deps.stages.get('local', 'PROJ-1', 'acme/api')).toMatchObject({ stage: 'inspect', phase: 'run', loops: 2, prId: 2 });
+    expect(s.starts).toHaveLength(0);
+
+    s.deps.stages.put('local', 'PROJ-1', 'acme/api', row('escalated', 'inspect'));
+    expect((await design()).status).toBe(201);
+    expect(s.deps.stages.get('local', 'PROJ-1', 'acme/api')).toMatchObject({ stage: 'design', phase: 'run', loops: 2 });
+  });
+
   it('knows where a work item stands from PRs linked by hand', async () => {
     const s = setup();
     await s.ready();

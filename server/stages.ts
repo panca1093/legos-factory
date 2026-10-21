@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { PermissionMode, Run, Stage, StagePhase, StageView, TicketLink } from '../shared/types.ts';
 import { HttpError, errMsg, requireMyRepo, type Deps } from './http.ts';
-import { launchRun } from './launch-run.ts';
+import { launchRun, type LaunchRequest } from './launch-run.ts';
 import { keyOf } from './work-items.ts';
 import { CONVENTIONS, stageAfter, stageDef, type FactType } from './workflow.ts';
 
@@ -231,10 +231,17 @@ export async function onRunFinished(deps: Deps, run: Run) {
   });
 }
 
-// The first stage of the workflow was launched from a work item.
-export function begun(deps: Deps, run: Run) {
-  const first = deps.workflow.stages[0];
-  if (run.stage === first.id && run.ticket && run.repo) deps.stages.put(run.workspaceId, run.ticket, run.repo, { stage: first.id, phase: 'run', loops: 0, prId: null, note: null, owner: run.owner });
+// The first stage of the workflow, launched from a work item: only a fresh item, a design or a stuck item may (re)start it.
+export function startFirst(deps: Deps, who: Who, req: LaunchRequest): Promise<Run> {
+  const { ticket, repo } = req;
+  return deps.stages.serial(who.ws, ticket, repo, async () => {
+    const first = deps.workflow.stages[0];
+    const row = current(deps, who.ws, ticket, repo);
+    if (row && row.stage !== first.id && row.phase !== 'escalated') throw new HttpError(409, `a ${row.stage} run is already under way for ${repo}`);
+    const run = await launchRun(deps, who, req);
+    deps.stages.put(who.ws, ticket, repo, { stage: first.id, phase: 'run', loops: row?.loops ?? 0, prId: null, note: null, owner: run.owner });
+    return run;
+  });
 }
 
 // The explicit "Start build": allowed once the gate is open, and from `ready` it is itself the approval on record.
