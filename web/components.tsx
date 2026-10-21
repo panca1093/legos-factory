@@ -1,8 +1,9 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
-import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme } from './api.ts';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import type { ModelOption, PendingDecision, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
+import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type JiraRow, type RepoRow, type Theme } from './api.ts';
+import type { LaunchReq } from './chrome.tsx';
 import { Icon } from './icons.tsx';
 import { visibleEvents } from './lib/thread.ts';
 
@@ -618,11 +619,87 @@ export function RepoPicker({ workspace, onPick }: { workspace: string; onPick: (
   );
 }
 
-const MODES: { value: PermissionMode; label: string }[] = [
-  { value: 'default', label: 'Ask me first (Needs you)' },
-  { value: 'acceptEdits', label: 'Auto-accept file edits' },
-  { value: 'plan', label: 'Plan only (no changes)' },
-];
+// ---------- launch dialog ----------
+
+const TICKET_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+
+// A choice in the dialog: what it is, and what it means.
+function IntentCard({ on, title, hint, onClick }: { on: boolean; title: string; hint: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={on}
+      onClick={onClick}
+      style={{
+        flex: '1 1 150px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 2,
+        textAlign: 'left',
+        padding: '12px 14px',
+        borderRadius: 12,
+        border: `1px solid ${on ? 'var(--accent)' : 'var(--line)'}`,
+        background: on ? 'var(--soft)' : 'var(--paper)',
+        boxShadow: on ? '0 0 0 3px rgba(98, 89, 219, 0.13)' : undefined,
+        color: 'var(--ink)',
+        font: 'inherit',
+        cursor: 'pointer',
+      }}
+    >
+      <b style={{ fontSize: 14 }}>{title}</b>
+      <span className="muted" style={{ fontSize: 11.5 }}>{hint}</span>
+    </button>
+  );
+}
+
+// One repo of the list: picked or not, and where it comes from.
+function RepoRow({ name, on, source, onToggle }: { name: string; on: boolean; source: string; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={on}
+      onClick={onToggle}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        minHeight: 46,
+        width: '100%',
+        padding: '0 14px',
+        borderRadius: 10,
+        border: `1px solid ${on ? 'var(--run-edge)' : 'var(--line)'}`,
+        background: on ? 'var(--run-tint)' : 'var(--paper)',
+        color: 'var(--ink)',
+        fontFamily: 'var(--mono)',
+        fontSize: 13,
+        fontWeight: 500,
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
+      <span
+        style={{
+          width: 18,
+          height: 18,
+          flex: 'none',
+          borderRadius: 5,
+          display: 'grid',
+          placeItems: 'center',
+          border: `1.5px solid ${on ? 'var(--accent)' : '#a6adbd'}`,
+          background: on ? 'var(--accent)' : 'var(--paper)',
+          color: '#fff',
+        }}
+      >
+        {on && <Icon name="check" size={12} />}
+      </span>
+      {name}
+      <span className="muted" style={{ marginLeft: 'auto', fontFamily: 'Inter, sans-serif', fontSize: 11, fontWeight: 600 }}>{source}</span>
+    </button>
+  );
+}
 
 export function LaunchDialog({
   kind,
@@ -634,142 +711,372 @@ export function LaunchDialog({
   kind: RunKind;
   projects: string[];
   resume?: { sessionId: string; cwd: string; recentlyActive: boolean };
-  defaults?: { cwd?: string; prompt?: string };
+  defaults?: LaunchReq['defaults'];
   onClose: () => void;
 }) {
-  const [cwd, setCwd] = useState(resume?.cwd ?? defaults?.cwd ?? storage('lf:cwd') ?? '');
-  // a fresh clone of a repo (default) or an existing folder on this machine
-  const [source, setSource] = useState<'repo' | 'folder'>(() => (resume || defaults?.cwd || storage('lf:source') === 'folder' ? 'folder' : 'repo'));
-  const { data: mine, error: mineErr } = useFetch(api.myRepos, []);
-  const [repo, setRepo] = useState('');
-  useEffect(() => void (mine && !mine.repos.some((r) => r.name === repo) && setRepo(mine.repos[0]?.name ?? '')), [mine]);
-  const mainBranch = mine?.repos.find((r) => r.name === repo)?.mainBranch ?? null;
-  const [branch, setBranch] = useState('');
+  const [intent, setIntent] = useState<'chat' | 'task'>(kind);
   const [prompt, setPrompt] = useState(defaults?.prompt ?? '');
-  const [mode, setMode] = useState<PermissionMode>('default');
-  const [model, setModel] = useState(storage('lf:model') ?? 'default');
+  const [ticket, setTicket] = useState<{ key: string; summary: string } | null>(null);
+  const [start, setStart] = useState<'spec' | 'brainstorm'>('spec');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [folder, setFolder] = useState('');
+  const [folderPicked, setFolderPicked] = useState(false);
+  const [model, setModel] = useState(defaults?.model ?? storage('lf:model') ?? 'default');
+  const [branch, setBranch] = useState(defaults?.branch ?? '');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<JiraRow[] | null>(null);
+  const [searchErr, setSearchErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const { data: mine, error: mineErr } = useFetch(api.myRepos, []);
+  const models = useModels();
+  const repos = useMemo(() => mine?.repos ?? [], [mine]);
+  const project = ticket?.key.split('-')[0] ?? '';
+  // the repos the ticket's project is mapped to
+  const mapped = useMemo(
+    () => (project ? repos.filter((r) => r.projects.some((p) => p.toUpperCase() === project.toUpperCase())).map((r) => r.name) : []),
+    [repos, project],
+  );
 
-  const ready = !!prompt.trim() && (source === 'repo' ? !!repo : !!cwd);
+  // the ticket the caller opened the dialog with
+  useEffect(() => {
+    const key = defaults?.ticket;
+    if (!key) return;
+    let alive = true;
+    api.jiraIssue(key).then(
+      (issue) => alive && setTicket({ key: issue.key, summary: issue.summary }),
+      (e) => alive && (setTicket({ key, summary: '' }), setErr(e.message)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [defaults?.ticket]);
+
+  // a ticket brings its mapped repos; without one the first repo is the one that runs
+  useEffect(() => {
+    if (!mine) return;
+    const named = defaults?.repo && mine.repos.some((r) => r.name === defaults.repo) ? [defaults.repo] : [];
+    setPicked(ticket ? [...new Set([...mapped, ...named])] : named.length ? named : mine.repos.slice(0, 1).map((r) => r.name));
+  }, [mine, ticket?.key]);
+
+  const search = async (q: string) => {
+    const key = q.trim().toUpperCase();
+    setSearchErr(null);
+    try {
+      if (TICKET_KEY_RE.test(key)) {
+        const issue = await api.jiraIssue(key);
+        setResults([issue]);
+      } else {
+        const found = await api.jiraSearch(`text ~ "${q.trim().replace(/"/g, '')}" ORDER BY updated DESC`);
+        setResults(found.issues);
+      }
+    } catch (e: any) {
+      setResults([]);
+      setSearchErr(e.message);
+    }
+  };
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(null);
+      return;
+    }
+    const t = setTimeout(() => void search(q), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const typedKey = TICKET_KEY_RE.test(query.trim().toUpperCase()) ? query.trim().toUpperCase() : null;
+
+  const attach = (issue: JiraRow) => {
+    setTicket({ key: issue.key, summary: issue.summary });
+    setQuery('');
+    setResults(null);
+  };
+
+  const attachTyped = async () => {
+    if (!typedKey || busy) return;
+    setBusy(true);
+    setSearchErr(null);
+    try {
+      const issue = await api.jiraIssue(typedKey);
+      attach(issue);
+    } catch (e: any) {
+      setSearchErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = (name: string) =>
+    setPicked((p) => {
+      if (ticket) return p.includes(name) ? p.filter((x) => x !== name) : [...p, name];
+      return p[0] === name ? [] : [name];
+    });
+
+  // the folder a chat runs in: a repo of mine, or nothing
+  const chatFolder = resume ? `dir:${resume.cwd}` : folderPicked ? folder : repos[0] ? `repo:${repos[0].name}` : '';
+  const chatWhere = chatFolder.startsWith('repo:') ? { repo: chatFolder.slice(5) } : chatFolder.startsWith('dir:') ? { cwd: chatFolder.slice(4) } : {};
+
+  const modelOptions = models.filter((m) => m.value !== 'default');
+  const modelValues = model === 'default' || modelOptions.some((m) => m.value === model) ? modelOptions : [...modelOptions, { value: model, displayName: model, description: '' }];
+  const mainBranch = repos.find((r) => r.name === picked[0])?.mainBranch ?? null;
+
+  const n = picked.length;
+  const names = picked.join(', ');
+  const summary = !ticket
+    ? n
+      ? `One task in ${names}, in auto mode`
+      : 'Pick a repo'
+    : start === 'brainstorm'
+      ? `A brainstorm chat on ${ticket.key}, then a spec for ${n || 'no'} repo${n === 1 ? '' : 's'}`
+      : `Spec PR for ${names || 'no repo'}, then build and agent review on their own`;
+  const fine = !ticket
+    ? 'Runs to the end on its own. A command outside the allowlist pauses it and comes to Home.'
+    : start === 'brainstorm'
+      ? 'Spec, build and agent review then run on their own. You are asked at spec review, at PR review if rules route it, and to merge.'
+      : 'You are asked at spec review, at PR review if rules route it, and to merge. Jira follows each step.';
+  const cta = intent === 'chat' ? 'Start chat' : !ticket ? (n ? 'Start task' : 'Pick a repo') : start === 'brainstorm' ? 'Start brainstorm' : n ? `Start · ${n} repo${n === 1 ? '' : 's'}` : 'Pick a repo';
+
+  const ready = intent === 'chat' ? !!prompt.trim() : ticket ? n > 0 : n === 1 && !!prompt.trim();
+  const ticketText = ticket ? (ticket.summary ? `${ticket.key}: ${ticket.summary}` : ticket.key) : '';
+
   const submit = async () => {
     if (!ready || busy) return;
     setBusy(true);
     setErr(null);
     try {
-      const where = source === 'repo' ? { repo, branch: branch.trim() || undefined } : { cwd };
-      const run = await api.start({ kind, ...where, prompt, permissionMode: mode, resume: resume?.sessionId, model });
-      if (source === 'folder') storage('lf:cwd', cwd);
-      storage('lf:source', source);
+      const runs: Run[] = [];
+      if (intent === 'chat') {
+        runs.push(await api.start({ kind: 'chat', prompt, permissionMode: 'default', resume: resume?.sessionId, ...chatWhere }));
+      } else if (!ticket) {
+        runs.push(await api.start({ kind: 'task', repo: picked[0], prompt, permissionMode: 'default', branch: branch.trim() || undefined, model }));
+      } else if (start === 'brainstorm') {
+        runs.push(await api.start({ kind: 'chat', stage: 'design', persona: 'foreman', ticket: ticket.key, repo: picked[0], prompt: `Discuss ${ticketText}`, permissionMode: 'default' }));
+      } else {
+        for (const repo of picked) {
+          runs.push(await api.start({ kind: 'task', stage: 'design', persona: 'foreman', ticket: ticket.key, repo, prompt: `Implement ${ticketText}`, permissionMode: 'default', branch: branch.trim() || undefined, model }));
+        }
+      }
       storage('lf:model', model);
       onClose();
-      go(`#/runs/${run.id}`);
+      go(runs.length === 1 ? `#/runs/${runs[0].id}` : '#/work');
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
     }
   };
 
+  // ⌘↵ starts from anywhere in the dialog.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void submitRef.current();
+      }
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div className="scrim" onClick={onClose}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="launch-title" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-        <div>
-          <h2 id="launch-title">{resume ? 'Continue in chat' : kind === 'task' ? 'New task' : 'New chat'}</h2>
-          <p>
-            {kind === 'task'
-              ? 'Hand off a job: Claude works on it until done, then reports back. No follow-ups — use “Discuss in chat” afterwards.'
-              : 'Interactive Claude Code session to discuss and work together. Closes after 30 min idle.'}{' '}
-            Uses your settings, MCP servers and skills.
-          </p>
+      <div
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="launch-title"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.key === 'Escape' && onClose()}
+        style={{ width: 'min(640px, 100%)', maxHeight: 'calc(100dvh - 32px)' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <h2 id="launch-title">Start something</h2>
+          <button className="icon" aria-label="Close" onClick={onClose} style={{ marginLeft: 'auto' }}>
+            <Icon name="close" size={16} />
+          </button>
         </div>
+
         {resume?.recentlyActive && <p className="warn">This session was active in the last few minutes. If it's still open in a terminal, continuing here forks the conversation.</p>}
-        {!resume && (
-          <div className="segmented" role="tablist" aria-label="Where to work">
-            <button role="tab" aria-selected={source === 'repo'} className={source === 'repo' ? 'active' : ''} onClick={() => setSource('repo')}>
-              Repo
-            </button>
-            <button role="tab" aria-selected={source === 'folder'} className={source === 'folder' ? 'active' : ''} onClick={() => setSource('folder')}>
-              Local folder
-            </button>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, overflow: 'auto' }}>
+          <div role="radiogroup" aria-label="What do you want to do" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <IntentCard on={intent === 'chat'} title="Chat" hint="Think it through together" onClick={() => setIntent('chat')} />
+            <IntentCard on={intent === 'task'} title="Task" hint="Runs on its own to the end" onClick={() => setIntent('task')} />
           </div>
-        )}
-        {source === 'repo' ? (
-          <>
-            {mine && !mine.repos.length ? (
-              <div className="empty">
-                No repos yet — add them in{' '}
-                <a href="#/settings" onClick={onClose}>
-                  Settings
-                </a>
-              </div>
-            ) : (
+
+          {intent === 'chat' ? (
+            <>
               <label className="field">
-                <span>Repo</span>
-                <select className="input mono" value={repo} onChange={(e) => setRepo(e.target.value)}>
-                  {mine?.repos.map((r) => (
-                    <option key={r.name} value={r.name}>
+                <span>Start the conversation</span>
+                <textarea
+                  className="input"
+                  rows={5}
+                  autoFocus
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Ask anything, or paste a ticket key to brief on it"
+                />
+              </label>
+              <label className="field">
+                <span>Folder</span>
+                <select
+                  className="input mono"
+                  value={chatFolder}
+                  disabled={!!resume}
+                  onChange={(e) => {
+                    setFolder(e.target.value);
+                    setFolderPicked(true);
+                  }}
+                >
+                  <option value="">No folder, just talk</option>
+                  {repos.map((r) => (
+                    <option key={r.name} value={`repo:${r.name}`}>
                       {r.name}
                     </option>
                   ))}
+                  {resume && <option value={`dir:${resume.cwd}`}>{resume.cwd}</option>}
                 </select>
-                {mineErr && <small className="error">{mineErr}</small>}
               </label>
-            )}
-            <details className="more-options">
-              <summary>More options</summary>
-              <label className="field">
-                <span>Branch</span>
-                <input className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder={`${mainBranch ?? 'main branch'} (default) — the run starts from the latest commit here`} />
-              </label>
-            </details>
-          </>
-        ) : (
-          <label className="field">
-            <span>Working directory</span>
-            <input className="input mono" list="lf-projects" value={cwd} disabled={!!resume} onChange={(e) => setCwd(e.target.value)} placeholder="/Users/you/project" />
-            <datalist id="lf-projects">
-              {projects.map((p) => (
-                <option key={p} value={p} />
-              ))}
-            </datalist>
-          </label>
-        )}
-        <label className="field">
-          <span>{kind === 'task' ? 'Task' : 'Message'}</span>
-          <textarea
-            className="input"
-            rows={5}
-            autoFocus
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && submit()}
-            placeholder={kind === 'task' ? 'Describe the job and what “done” looks like' : 'What do you want to discuss?'}
-          />
-        </label>
-        <div className="field-row">
-          <label className="field">
-            <span>Model</span>
-            <ModelSelect value={model} onChange={setModel} />
-          </label>
-          <label className="field">
-            <span>Permissions</span>
-            <select className="input" value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
-              {MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>Ticket</span>
+                  <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>optional · attaching one makes it tracked work</span>
+                </div>
+                {ticket ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', border: '1px solid var(--run-edge)', borderRadius: 12, background: 'var(--run-tint)' }}>
+                    <span className="ticket-chip">{ticket.key}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontWeight: 600 }}>{ticket.summary}</span>
+                    <button type="button" className="text-action" onClick={() => setTicket(null)}>
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        className="input"
+                        type="search"
+                        autoFocus
+                        placeholder="Search Jira by key or title"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && void search(query)}
+                      />
+                      <button className="btn" disabled={!typedKey || busy} onClick={attachTyped}>
+                        Attach {typedKey ?? 'ticket'}
+                      </button>
+                    </div>
+                    {searchErr && <p className="error">{searchErr}</p>}
+                    {results && results.length > 0 && (
+                      <div className="list-card">
+                        {results.map((r) => (
+                          <div className="list-item" key={r.key}>
+                            <TicketChip ticket={r.key} />
+                            <div className="copy">
+                              <b>{r.summary}</b>
+                            </div>
+                            <button className="btn sm" onClick={() => attach(r)}>
+                              Attach {r.key}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <label className="field">
+                      <span>What should it do?</span>
+                      <textarea
+                        className="input"
+                        rows={4}
+                        value={prompt}
+                        onChange={(e) => setPrompt(e.target.value)}
+                        placeholder="e.g. Upgrade the lint rules and fix what breaks"
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+
+              {ticket && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>Start with</span>
+                  <div role="radiogroup" aria-label="Start with" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <IntentCard on={start === 'spec'} title="Spec" hint="Agent writes the spec PR; you review it" onClick={() => setStart('spec')} />
+                    <IntentCard on={start === 'brainstorm'} title="Brainstorm first" hint="Talk it through, then the spec" onClick={() => setStart('brainstorm')} />
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>Repos</span>
+                  <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{ticket ? 'one pipeline each, in parallel' : 'where the task runs'}</span>
+                </div>
+                {mineErr && <p className="error">{mineErr}</p>}
+                {!mine && !mineErr && <p className="muted">Loading repos…</p>}
+                {mine && !repos.length && (
+                  <div className="empty">
+                    No repos yet — add them in{' '}
+                    <a href="#/settings" onClick={onClose}>
+                      Settings
+                    </a>
+                  </div>
+                )}
+                {repos.map((r) => (
+                  <RepoRow
+                    key={r.name}
+                    name={r.name}
+                    on={picked.includes(r.name)}
+                    source={mapped.includes(r.name) ? `from ${project} → repo mapping` : 'in My repos'}
+                    onToggle={() => toggle(r.name)}
+                  />
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 16px', borderRadius: 12, background: 'var(--field)' }}>
+                <b style={{ fontSize: 13.5 }}>{summary}</b>
+                <span className="muted" style={{ fontSize: 12 }}>{fine}</span>
+              </div>
+
+              <details className="more-options">
+                <summary>More options · model, base branch</summary>
+                <div className="field-row">
+                  <label className="field">
+                    <span>Model</span>
+                    <select className="input" value={model} onChange={(e) => setModel(e.target.value)}>
+                      <option value="default">Account default</option>
+                      {modelValues.map((m) => (
+                        <option key={m.value} value={m.value}>
+                          {m.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Base branch</span>
+                    <input className="input mono" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder={mainBranch ?? 'main'} />
+                  </label>
+                </div>
+              </details>
+            </>
+          )}
         </div>
+
         {err && <p className="error">{err}</p>}
-        <footer>
+        <footer style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+          <span className="muted" style={{ fontSize: 12 }}>⌘↵ to start</span>
+          <span className="grow" />
           <button className="btn ghost" onClick={onClose}>
             Cancel
           </button>
           <button className="btn primary" disabled={busy || !ready} onClick={submit}>
-            {busy ? (source === 'repo' ? 'Fetching repo…' : 'Starting…') : kind === 'task' ? 'Start task ⌘↵' : 'Start chat ⌘↵'}
+            {busy ? 'Starting…' : cta}
           </button>
         </footer>
       </div>
