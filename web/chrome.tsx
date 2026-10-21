@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { Run, RunKind } from '../shared/types.ts';
+import type { Run, RunKind, Stage } from '../shared/types.ts';
 import { api, useLive, type Conn, type Me } from './api.ts';
 import { ConnChip, go } from './components.tsx';
 import { Icon } from './icons.tsx';
@@ -10,7 +10,7 @@ export const ORDER: Run['status'][] = ['awaiting_decision', 'running', 'starting
 
 export type Live = ReturnType<typeof useLive>;
 export type ResumeReq = { sessionId: string; cwd: string; recentlyActive: boolean };
-export type LaunchReq = { kind: RunKind; resume?: ResumeReq; defaults?: { cwd?: string; prompt?: string } };
+export type LaunchReq = { kind: RunKind; resume?: ResumeReq; defaults?: { cwd?: string; prompt?: string; ticket?: string; stage?: Stage; repo?: string; branch?: string; model?: string } };
 
 // Topbar controls shared by every page frame.
 export const Chrome = createContext<{ conn: Conn; openRail: () => void; inspector: boolean; toggleInspector: () => void; review: (decisionId: string) => void; me: Me }>(null!);
