@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RunKind } from '../../shared/types.ts';
-import { api, ago, storage, useFetch, useNow, type JiraDev, type JiraRow, type PrRow, type Stage, type StageView, type WorkItem } from '../api.ts';
+import { api, ago, storage, useFetch, useNow, useRole, type JiraDev, type JiraRow, type PrRow, type Role, type Stage, type StageView, type WorkItem } from '../api.ts';
 import { Empty, Markdown, TicketChip, go } from '../components.tsx';
 import { Icon } from '../icons.tsx';
 import { ALIVE, PR_TONE, type Live, type LaunchReq } from '../chrome.tsx';
@@ -142,7 +142,7 @@ function TicketModal({ row, item, onClose, onStart, onPr, onItem }: { row: JiraR
         )}
         <WorkItemPanel ticket={row.key} item={item} onChange={onItem} />
         <div className="ticket-desc">
-          {error ? <p className="error">{error}</p> : !data ? <Empty>Loading ticket…</Empty> : data.description ? (
+          {error ? <p className="error" role="alert">{error}</p> : !data ? <Empty>Loading ticket…</Empty> : data.description ? (
             <div className="ticket-desc-text">
               <Markdown text={data.description} />
             </div>
@@ -248,7 +248,7 @@ function WorkDialog({ row, item, onClose }: { row: JiraRow; item: WorkItem | nul
           <span>Task</span>
           <textarea className="input" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         </label>
-        {err && <p className="error">{err}</p>}
+        {err && <p className="error" role="alert">{err}</p>}
         <footer>
           <button className="btn ghost" onClick={onClose}>
             Cancel
@@ -266,10 +266,11 @@ const STAGE_NAME: Record<Stage, string> = { design: 'Design', build: 'Build', in
 const FACT_NAME: Record<string, string> = { 'pr.merged': 'the PR to merge', 'ci.passed': 'green checks', 'human.approved': 'your approval' };
 
 // Where the factory workflow stands for one repo, and the buttons only a person may press.
-function StageLine({ ticket, stage, busy, act }: { ticket: string; stage: StageView; busy: boolean; act: (f: () => Promise<unknown>) => Promise<void> }) {
+function StageLine({ ticket, stage, role, busy, act }: { ticket: string; stage: StageView; role: Role | null; busy: boolean; act: (f: () => Promise<unknown>) => Promise<void> }) {
   const waiting = stage.missing.map((f) => FACT_NAME[f] ?? f).join(', ');
   const canStart = stage.stage === 'build' && (stage.phase === 'ready' || stage.phase === 'escalated') && stage.missing.length === 0;
   const canApprove = (stage.stage === 'build' || stage.stage === 'inspect') && stage.prId != null && stage.missing.includes('human.approved');
+  const mayAct = role === 'owner' || role === 'member';
   return (
     <span className="stage-line">
       <b>{STAGE_NAME[stage.stage]}</b>
@@ -281,12 +282,13 @@ function StageLine({ ticket, stage, busy, act }: { ticket: string; stage: StageV
         {stage.phase === 'done' && ' · done'}
         {stage.loops > 0 && ` · ${stage.loops} review round${stage.loops > 1 ? 's' : ''}`}
       </span>
-      {canStart && (
+      {role === 'viewer' && (canStart || canApprove) && <span className="muted">read-only: viewers cannot start or approve</span>}
+      {mayAct && canStart && (
         <button type="button" className="btn sm primary" disabled={busy} onClick={() => void act(() => api.startBuild(ticket, stage.repo))}>
           Start build
         </button>
       )}
-      {canApprove && (
+      {mayAct && canApprove && (
         <button type="button" className="btn sm" disabled={busy} onClick={() => void act(() => api.approveBuild(ticket, stage.repo))}>
           Approve
         </button>
@@ -299,6 +301,7 @@ function StageLine({ ticket, stage, busy, act }: { ticket: string; stage: StageV
 function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkItem | null; onChange: () => void }) {
   const now = useNow(60000);
   const { data: mine } = useFetch(api.myRepos, []);
+  const role = useRole();
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [addRepo, setAddRepo] = useState('');
@@ -358,7 +361,7 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
             return (
               <div key={r.name} className="work-item-repo">
                 <span className="mono">{r.name}</span>
-                {stageOf(r.name) && <StageLine ticket={ticket} stage={stageOf(r.name)!} busy={busy} act={act} />}
+                {stageOf(r.name) && <StageLine ticket={ticket} stage={stageOf(r.name)!} role={role} busy={busy} act={act} />}
                 {links.length ? (
                   <LinkChips item={{ ...item, links }} />
                 ) : (
@@ -415,7 +418,7 @@ function WorkItemPanel({ ticket, item, onChange }: { ticket: string; item: WorkI
           </span>
         </div>
       )}
-      {err && <p className="error">{err}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
     </section>
   );
 }
@@ -496,7 +499,7 @@ export function JiraIssues({ live, onNew }: { live: Live; onNew: (k: RunKind, de
           Refresh
         </button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
       {!rows ? (
         <div className="empty">Asking Jira through workbench…</div>
       ) : rows.length === 0 ? (

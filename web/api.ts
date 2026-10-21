@@ -209,6 +209,12 @@ export function useFetch<T>(fn: () => Promise<T>, deps: unknown[]): { data: T | 
   return { data, error, reload: () => setN((x) => x + 1) };
 }
 
+// The signed-in user's role in the workspace they act in; null until it is known.
+export function useRole(): Role | null {
+  const { data } = useFetch(api.workspaces, []);
+  return data?.workspaces.find((w) => w.id === data.active)?.role ?? null;
+}
+
 export function useNow(intervalMs = 30000): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {

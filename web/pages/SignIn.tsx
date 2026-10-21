@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { api, type Me } from '../api.ts';
 
 const CLAIM_EVERY_MS = 1500;
@@ -164,14 +164,14 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
               </>
             )}
             {providers.map((p, i) => (
-              <div key={p.id} className="signin-body">
+              <Fragment key={p.id}>
                 {(names.length > 0 || i > 0) && <div className="signin-or">or</div>}
                 <button type="button" className={`btn signin-btn${names.length || i ? '' : ' primary'}`} onClick={() => provider(p.id, p.label)}>
                   Sign in with {p.label}
                 </button>
-              </div>
+              </Fragment>
             ))}
-            {!canSignIn && !me?.pin && <p className="signin-note">No sign-in method is set up for this address. Ask whoever runs this app.</p>}
+            {me && !canSignIn && !me.pin && <p className="signin-note">No sign-in method is set up for this address. Ask whoever runs this app.</p>}
             {me?.pin && (
               <button type="button" className="btn ghost signin-switch" onClick={turn}>
                 Create a new user
