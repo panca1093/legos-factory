@@ -4,6 +4,7 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import type { DecisionAnswer, PendingDecision, SessionSummary, Settings, StreamMessage } from '../../shared/types.ts';
 import { getSession, listSessions } from '../claude-sessions.ts';
+import { hasShellMetacharacters } from '../claude-runs.ts';
 import { gitBranch, loadSettings, saveAutomation, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { isOwner } from '../owners.ts';
@@ -14,6 +15,21 @@ const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: M
   ticket: tickets.get(s.id) ?? null,
   share: shareFor(s.cwd, settings),
 });
+
+const DANGEROUS = new Set(['rm', 'sh', 'bash', 'zsh', 'curl', 'wget', 'sudo', 'chmod', 'chown', 'dd']);
+
+// Remembers the command's first two words, unless the command could chain or is destructive.
+async function rememberCommand(command: unknown): Promise<void> {
+  if (typeof command !== 'string' || !command.trim()) return;
+  if (hasShellMetacharacters(command)) return;
+  const words = command.trim().split(/\s+/);
+  if (DANGEROUS.has(words[0])) return;
+  if (words[0] === 'git' && words[1] === 'push') return;
+  const prefix = words.slice(0, 2).join(' ');
+  const { automation } = await loadSettings();
+  if (automation.allowlist.some((entry) => entry.trim() === prefix)) return;
+  await saveAutomation({ ...automation, allowlist: [...automation.allowlist, prefix] });
+}
 
 const textSchema = z.object({ text: text() });
 const requiredText = z.object({ text: text().refine((t) => !!t, 'text is required') });
@@ -102,17 +118,12 @@ export function runsRoutes(deps: Deps) {
   routes.post('/api/decisions/:id', async (c) => {
     const b = parse(decisionSchema, await readBody(c));
     const decision = decisionById(c.req.param('id'));
-    if (b.remember && b.behavior === 'allow' && decision?.toolName === 'Bash' && (!users || isOwner(users.get(c.get('uid'))))) {
-      const command = decision.input.command;
-      if (typeof command === 'string' && command.trim()) {
-        const prefix = command.trim().split(/\s+/).slice(0, 2).join(' ');
-        const { automation } = await loadSettings();
-        await saveAutomation({ ...automation, allowlist: [...automation.allowlist, prefix] });
-      }
-    }
     const answer: DecisionAnswer = b.behavior === 'allow' ? { behavior: 'allow', answers: b.answers } : { behavior: 'deny', message: b.message };
     // 410: expired, withdrawn, or answered elsewhere — the UI must drop it, not retry
     if (!runs.decide(c.req.param('id'), answer)) throw new HttpError(410, 'decision no longer open');
+    if (b.remember && b.behavior === 'allow' && decision?.toolName === 'Bash' && (!users || isOwner(users.get(c.get('uid'))))) {
+      await rememberCommand(decision.input.command);
+    }
     return c.json({ ok: true });
   });
 
