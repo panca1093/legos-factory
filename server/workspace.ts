@@ -20,6 +20,11 @@ export function workspacesDir(): string {
 
 const safe = (s: string) => PART_RE.test(s) && s !== '.' && s !== '..';
 
+// A task id as a path and branch part: letters, digits, dot and dash only.
+export function safeName(s: string): string {
+  return s.replace(/[^\w.-]/g, '-');
+}
+
 export function parseRepo(s: string): RepoRef | null {
   const [workspace, slug, ...rest] = s.trim().split('/');
   return !rest.length && workspace && slug && safe(workspace) && safe(slug) ? { workspace, slug } : null;
