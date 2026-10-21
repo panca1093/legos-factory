@@ -33,6 +33,8 @@ export function toTeamItem(i: ActivityItem): TeamItem {
 // sessions started from legos-factory show up, never the machine's other Claude sessions.
 export class ActivityLog {
   private lastSig = new Map<string, string>();
+  // run ids whose session an undo forgot: their late final record must not resurrect the deleted rows
+  private forgotten = new Set<string>();
 
   constructor(private db: DatabaseSync) {
     // runs live in memory: whatever was still going when the server stopped is gone
@@ -44,6 +46,7 @@ export class ActivityLog {
   // Returns the item when it was written (a real change), else null.
   async record(run: Omit<Run, 'events'>, owner: string): Promise<ActivityItem | null> {
     const item = toItem(run);
+    if (this.forgotten.has(item.runId)) return null;
     const sig = [item.status, item.turns, item.endedAt, item.ticket, item.model, item.kind, item.sessionId, run.task, run.persona].join('|');
     if (this.lastSig.get(item.runId) === sig) return null;
     this.lastSig.set(item.runId, sig);
@@ -92,5 +95,12 @@ export class ActivityLog {
 
   ownsSession(owner: string, sessionId: string): boolean {
     return !!this.db.prepare(`select 1 from runs where owner = ? and session_id = ? limit 1`).get(owner, sessionId);
+  }
+
+  // an undone work item's session goes away as a whole, transcript aside
+  forgetSession(owner: string, sessionId: string): boolean {
+    const rows = this.db.prepare(`select run_id from runs where owner = ? and session_id = ?`).all(owner, sessionId) as { run_id: string }[];
+    for (const r of rows) this.forgotten.add(r.run_id);
+    return Number(this.db.prepare(`delete from runs where owner = ? and session_id = ?`).run(owner, sessionId).changes) > 0;
   }
 }
