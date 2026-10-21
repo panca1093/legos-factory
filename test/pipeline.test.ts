@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { next, type Action, type Facts, type State } from '../server/pipeline.ts';
-import type { PipelineStage, PlanTask } from '../shared/types.ts';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildDeps } from '../server/app.ts';
+import { RunManager } from '../server/claude-runs.ts';
+import { approveSpec, next, pipelineRunEnded, syncPipeline, type Action, type Facts, type State } from '../server/pipeline.ts';
+import type { PipelineStage, PlanTask, Run } from '../shared/types.ts';
 
 const task = (id = 'T1', state: PlanTask['state'] = 'waiting', needs: string[] = []): PlanTask => ({
   id, state, needs, do: 'Build feature', repo: 'acme/api', test: 'feature.test.ts', touches: [id + '.ts'],
@@ -105,5 +111,85 @@ describe('pipeline transitions', () => {
   it('ignores events for an unknown repo or task', () => {
     expect(next(state('building'), { ...ended('builder'), event: { type: 'run_ended', repo: 'acme/web', task: 'T1', persona: 'builder', ok: true } })).toEqual([]);
     expect(next(state('building'), { ...ended('builder'), event: { type: 'run_ended', repo: 'acme/api', task: 'missing', persona: 'builder', ok: true } })).toEqual([]);
+  });
+});
+
+describe('cataloger after merge', () => {
+  let root: string;
+  let saved: NodeJS.ProcessEnv;
+  let deps: ReturnType<typeof buildDeps>;
+  let runs: RunManager;
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' });
+  const plan = '```plan\n- id: T1\n  do: Build retry\n  repo: acme/api\n  test: retry.test.ts\n  needs: []\n  touches: [retry.ts]\n```';
+
+  beforeEach(() => {
+    saved = { ...process.env };
+    root = mkdtempSync(join(tmpdir(), 'lf-cataloger-'));
+    process.env.LEGOS_SETTINGS = join(root, 'settings.json');
+    process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    const src = join(root, 'src');
+    mkdirSync(src);
+    git(src, 'init', '-q', '-b', 'main');
+    git(src, 'config', 'user.name', 'Example');
+    git(src, 'config', 'user.email', 'example@example.com');
+    writeFileSync(join(src, 'README.md'), 'example');
+    git(src, 'add', '.');
+    git(src, 'commit', '-qm', 'init');
+    mkdirSync(join(root, 'acme'));
+    git(root, 'clone', '-q', '--bare', src, join(root, 'acme', 'api.git'));
+    runs = new RunManager(undefined, undefined, 0);
+    deps = buildDeps(runs, { workspaces: join(root, 'workspaces'), gitUrl: `file://${root}/{workspace}/{slug}.git` });
+    deps.workbench = async () => ({ token: 'fake', client: {
+      bitbucketPr: async () => ({ state: 'OPEN', title: 'Spec', description: plan, reviewers: [] }),
+      bitbucketPrFiles: async () => [{ status: 'modified', path: 'retry.ts', oldPath: null, added: 12, removed: 3 }],
+      jiraIssue: async () => ({ key: 'PROJ-123', summary: 'Retry cap', issueType: 'Story', labels: [], status: 'In Progress' }),
+      jiraStatus: async () => 'In Progress', jiraTransitions: async () => [], jiraAddComment: async () => {},
+    } as any });
+    deps.workItems.create('local', 'PROJ-123');
+    deps.myRepos.add('local', { name: 'acme/api', mainBranch: 'main' });
+    deps.workItems.addRepo('local', 'PROJ-123', 'acme/api');
+    deps.db.prepare(`update work_item_repos set stage = 'spec_review'`).run();
+    deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'spec', prId: 1, branch: 'main', title: 'Spec', state: 'OPEN', runId: null }, true);
+  });
+
+  afterEach(async () => {
+    await Promise.all([...deps.syncs.values()]);
+    deps.db.close();
+    process.env = saved;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const queued = () => { const s = runs.snapshot(); return s.type === 'snapshot' ? s.runs : []; };
+  async function finish(run: Run, result: string | null = null) {
+    run.endedAt = new Date().toISOString();
+    run.status = 'completed';
+    run.result = result;
+    await pipelineRunEnded(deps, run);
+  }
+
+  // build the repo, review it and merge its pull request
+  async function buildAndMerge() {
+    await approveSpec(deps, 'local', 'PROJ-123');
+    await finish(queued()[0]);
+    deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'factory/PROJ-123/api', title: 'Build', state: 'OPEN', runId: null }, true);
+    await finish(queued()[1], 'Verdict: APPROVE');
+    deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'factory/PROJ-123/api', title: 'Build', state: 'MERGED', runId: null }, true);
+  }
+
+  it('starts the cataloger after merge', async () => {
+    await buildAndMerge();
+    await syncPipeline(deps, 'local', 'PROJ-123');
+    const cataloger = queued().find((r) => r.persona === 'cataloger');
+    expect(cataloger).toMatchObject({ repo: 'acme/api', task: null, kind: 'task', stage: 'build' });
+    expect(cataloger!.prompt).toContain('Do not open a pull request');
+    expect(deps.workItems.get('local', 'PROJ-123')?.plan?.tasks[0].state).toBe('done');
+  });
+
+  it('skips it when off', async () => {
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ automation: { models: { foreman: 'opus', builder: 'sonnet', inspector: 'opus', cataloger: 'off' } } }));
+    await buildAndMerge();
+    await syncPipeline(deps, 'local', 'PROJ-123');
+    expect(queued().some((r) => r.persona === 'cataloger')).toBe(false);
   });
 });

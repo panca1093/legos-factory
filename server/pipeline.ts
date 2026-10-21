@@ -203,6 +203,16 @@ async function startMergeRun(deps: Deps, owner: string, ticket: string, repo: st
   }
 }
 
+// The Cataloger files what the merged work taught the repo.
+async function startCatalogerRun(deps: Deps, owner: string, ticket: string, repo: string): Promise<void> {
+  const prompt = `Catalog what ${ticket} changed in ${repo} now that its pull request was merged.\nKeep the decisions and their why, the surprises, the traps and the invariants the code relies on.\nWrite it where this repo keeps docs of this kind; if it has no such place, write the summary in your answer.\nCommit the documentation on a branch of your own, never the main branch, and push it.\nDo not open a pull request: this run opens none.`;
+  try {
+    await launchRun(deps, owner, launchSchema.parse({ ticket, stage: 'build', kind: 'task', persona: 'cataloger', repo, prompt }));
+  } catch (err) {
+    deps.workItems.setNote(owner, ticket, `Escalated: ${repo}: ${errMsg(err)}`);
+  }
+}
+
 async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, previous?: Omit<Run, 'events'>) {
   const state = stateOf(deps, owner, ticket);
   const event = facts.event;
@@ -232,6 +242,11 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
     }
   }
   for (const repo of reposToMerge(deps, owner, ticket)) await startMergeRun(deps, owner, ticket, repo);
+  if (event?.type === 'pr' && event.kind === 'impl' && event.state === 'merged'
+    && automation.models.cataloger && automation.models.cataloger !== 'off'
+    && !reposWithRun(deps, owner, ticket, 'cataloger').includes(event.repo.toLowerCase())) {
+    await startCatalogerRun(deps, owner, ticket, event.repo);
+  }
 }
 
 export function approveSpec(deps: Deps, owner: string, ticket: string): Promise<void> {
