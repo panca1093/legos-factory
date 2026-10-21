@@ -1,9 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type KeyboardEvent } from 'react';
 import type { SessionSummary } from '../../shared/types.ts';
 import { api, ago, fmtTokens, projectName, useFetch, useNow } from '../api.ts';
 import { Empty, ShareBadge, TicketChip, Thread, UsageRows, totalTokens } from '../components.tsx';
 import { Icon } from '../icons.tsx';
 import { ALIVE, RECENT_MS, type Live, type ResumeReq, useStickyScroll, Frame } from '../chrome.tsx';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+// automatic activation: moving focus with the arrows also selects that tab
+const onTabKey = (index: number) => (e: KeyboardEvent<HTMLButtonElement>) => {
+  const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+  if (next === null) return;
+  e.preventDefault();
+  tabs?.item(next).focus();
+  tabs?.item(next).click();
+};
 
 export function Sessions({ sessions, error, live, embedded = false, query, onContinue }: { sessions: SessionSummary[] | null; error: string | null; live: Live; embedded?: boolean; query?: string; onContinue?: (r: ResumeReq) => void }) {
   const now = useNow();
@@ -38,8 +57,8 @@ export function Sessions({ sessions, error, live, embedded = false, query, onCon
               ))}
             </select>
             <div className="segmented" role="tablist" aria-label="Session status">
-              {(['all', 'live', 'today'] as const).map((f) => (
-                <button key={f} role="tab" aria-selected={filter === f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
+              {(['all', 'live', 'today'] as const).map((f, i) => (
+                <button key={f} role="tab" aria-selected={filter === f} tabIndex={filter === f ? 0 : -1} className={filter === f ? 'active' : ''} onKeyDown={onTabKey(i)} onClick={() => setFilter(f)}>
                   {f === 'all' ? 'All' : f === 'live' ? 'Live' : 'Today'}
                 </button>
               ))}

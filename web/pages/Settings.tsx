@@ -1,10 +1,29 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useState, type KeyboardEvent } from 'react';
 import type { AutomationSettings, Persona, RoutingRule } from '../../shared/types.ts';
 import { MY_REPOS_CAP, ago, api, projectName, storage, useFetch, useLive, useNow, type Connection, type Integration, type MyRepo } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
 import { Chrome, Frame } from '../chrome.tsx';
 
 import './Settings.css';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+// automatic activation: moving focus with the arrows also selects that tab
+const onTabKey = (index: number) => (e: KeyboardEvent<HTMLButtonElement>) => {
+  const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+  if (next === null) return;
+  e.preventDefault();
+  tabs?.item(next).focus();
+  tabs?.item(next).click();
+};
 
 export function SettingsPage() {
   const [conns, setConns] = useState<Connection[] | null>(null);
@@ -279,8 +298,8 @@ function AddConnection({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
             ['workbench', 'Workbench'],
             ['mcp', 'MCP server'],
           ] as const
-        ).map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? 'active' : ''} onClick={() => pickKind(k)}>
+        ).map(([k, label], i) => (
+          <button key={k} type="button" role="tab" aria-selected={kind === k} tabIndex={kind === k ? 0 : -1} className={kind === k ? 'active' : ''} onKeyDown={onTabKey(i)} onClick={() => pickKind(k)}>
             {label}
           </button>
         ))}
@@ -427,8 +446,8 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
                   ['connected', 'Connected', connected.length],
                   ['available', 'Available', all.length - connected.length],
                 ] as const
-              ).map(([k, label, n]) => (
-                <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>
+              ).map(([k, label, n], i) => (
+                <button key={k} role="tab" aria-selected={tab === k} tabIndex={tab === k ? 0 : -1} className={tab === k ? 'active' : ''} onKeyDown={onTabKey(i)} onClick={() => setTab(k)}>
                   {label} <span className="tab-count">{n}</span>
                 </button>
               ))}
