@@ -169,7 +169,7 @@ export class Runs extends EventEmitter {
       commands.push(...(this.commands.get(id) ?? []));
       this.commands.delete(id);
     }
-    return { jobs, commands, lost };
+    return { jobs, commands, lost, leaseMs: this.dispatcher.leaseMs };
   }
 
   // The per-run secret for the connections proxy and git credentials is made here, for this runner, and dies with the run.

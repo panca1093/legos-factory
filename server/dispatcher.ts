@@ -17,6 +17,10 @@ export class Dispatcher {
     private opts: { leaseMs: number; maxAttempts: number; now?: () => number } = { leaseMs: 60_000, maxAttempts: 3 },
   ) {}
 
+  get leaseMs() {
+    return this.opts.leaseMs;
+  }
+
   private now() {
     return this.opts.now?.() ?? Date.now();
   }

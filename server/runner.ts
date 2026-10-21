@@ -16,39 +16,65 @@ export type RunnerOptions = {
   // a git token for a repo run this runner clones itself
   credential: (job: Job) => Promise<string>;
   retryMs?: number;
+  now?: () => number;
   onFatal?: (err: Error) => void;
 };
 
+const DEFAULT_LEASE_MS = 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Runner {
   private unconfirmed = new Set<string>();
   private owned = new Map<string, boolean>();
+  private dropped = new Map<string, boolean>();
+  private leaseMs = DEFAULT_LEASE_MS;
+  private lastOk: number;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private outbox: RunnerMessage[] = [];
   private flushing = false;
   private stopped = false;
 
   constructor(private o: RunnerOptions) {
+    this.lastOk = this.now();
     o.manager.on('message', (m: StreamMessage) => {
       this.say(m);
-      if (m.type === 'run' && m.run.endedAt && this.owned.has(m.run.id)) void this.finish(m.run);
+      if (m.type !== 'run' || !m.run.endedAt) return;
+      if (this.owned.has(m.run.id)) void this.finish(m.run);
+      else if (this.dropped.delete(m.run.id) && m.run.cwd) void this.discard(m.run.cwd);
     });
   }
 
+  private now() {
+    return this.o.now?.() ?? Date.now();
+  }
+
   start() {
+    this.lastOk = this.now();
+    this.timer = setInterval(() => this.checkLease(), 250);
+    this.timer.unref?.();
     void this.loop();
   }
 
   stop() {
     this.stopped = true;
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  // The control plane gives a silent runner's jobs to someone else after the lease: stop working before that happens twice.
+  private checkLease() {
+    if (this.now() - this.lastOk <= this.leaseMs) return;
+    for (const id of [...this.unconfirmed]) this.drop(id);
   }
 
   private async loop() {
     let failures = 0;
     while (!this.stopped) {
       try {
+        const sent = this.now();
         const res = await this.o.transport.poll({ capacity: this.o.manager.capacity, running: [...this.unconfirmed] });
         failures = 0;
+        this.lastOk = sent;
+        this.leaseMs = res.leaseMs ?? this.leaseMs;
         for (const id of res.lost) this.drop(id);
         for (const c of res.commands) this.apply(c);
         for (const job of res.jobs) void this.launch(job);
@@ -80,11 +106,18 @@ export class Runner {
     }
   }
 
-  // The control plane gave this job to someone else: stop working on it.
+  // The control plane gave this job to someone else: stop working on it and remove the clone it made.
   private drop(runId: string) {
     this.unconfirmed.delete(runId);
+    const owns = this.owned.get(runId);
     this.owned.delete(runId);
+    if (owns) this.dropped.set(runId, true);
     void this.o.manager.end(runId);
+  }
+
+  private discard(path: string) {
+    if (this.busy(path)) return;
+    return removeWorkspace(this.o.wsRoot, path).catch((err) => console.warn('workspace cleanup failed:', err.message));
   }
 
   private busy(path: string): boolean {
@@ -100,6 +133,7 @@ export class Runner {
       this.say({ type: 'launch_failed', runId: job.runId, error: err instanceof Error ? err.message : String(err) });
     };
     const begin = (cwd: string) => {
+      if (!this.unconfirmed.has(job.runId)) return void (job.ownsClone && this.discard(cwd));
       try {
         this.o.manager.start({ ...job.request, id: job.runId, cwd });
       } catch (err) {

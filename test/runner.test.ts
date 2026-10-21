@@ -8,7 +8,7 @@ import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { Dispatcher, EMBEDDED, type RunnerRef } from '../server/dispatcher.ts';
 import { MyRepos } from '../server/my-repos.ts';
-import type { JobRequest } from '../server/protocol.ts';
+import type { Job, JobRequest, PollResponse } from '../server/protocol.ts';
 import { Runner, httpTransport } from '../server/runner.ts';
 import { workspacePath } from '../server/workspace.ts';
 import { alive } from './fakes.ts';
@@ -337,6 +337,47 @@ describe('remote runner', () => {
     runner.stop();
   });
 
+  it('stops its runs and deletes their clones when it has not reached the control plane for a lease', async () => {
+    let now = 0;
+    let online = true;
+    let handed = false;
+    const lease: PollResponse = { jobs: [], commands: [], lost: [], leaseMs: 1000 };
+    const job: Job = { runId: 'j1', attempt: 1, prepared: false, ownsClone: true, clone: { repo: 'acme/api', key: 'k1' }, request: { id: 'j1', workspaceId: 'local', owner: 'local', kind: 'chat', cwd: '', prompt: 'go' } };
+    const wsRoot = mkdtempSync(join(tmpdir(), 'lf-runner-ws-'));
+    const manager = new RunManager(alive);
+    const runner = new Runner({
+      transport: {
+        poll: async () => {
+          await new Promise((r) => setTimeout(r, 10));
+          if (!online) throw new Error('offline');
+          return handed ? lease : ((handed = true), { ...lease, jobs: [job] });
+        },
+        report: async () => {
+          if (!online) throw new Error('offline');
+        },
+      },
+      manager,
+      wsRoot,
+      gitUrl: forge(),
+      credential: async () => 'unused',
+      retryMs: 20,
+      now: () => now,
+    });
+    runner.start();
+    const clone = workspacePath(wsRoot, 'local', { workspace: 'acme', slug: 'api' }, 'k1');
+    await until(() => manager.get('j1')?.status === 'running' || manager.get('j1')?.status === 'starting', 'the run started');
+    expect(existsSync(clone)).toBe(true);
+
+    online = false;
+    now += 500;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(manager.get('j1')!.endedAt).toBeNull();
+    now += 600;
+    await until(() => manager.get('j1')!.endedAt != null, 'the run was stopped');
+    await until(() => !existsSync(clone), 'the clone was deleted');
+    runner.stop();
+  });
+
   it('turns away unknown tokens and gives a runner only its own workspace', async () => {
     const h = hub();
     const poll = (token: string) => h.call('/runner/poll', { method: 'POST', body: JSON.stringify({ capacity: 1, running: [] }), headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } });
@@ -346,7 +387,7 @@ describe('remote runner', () => {
     const made = await (await h.api('POST', '/api/runners', { name: 'a' })).json();
     expect(made.token).toMatch(/^lfr_/);
     expect(JSON.stringify(await (await h.api('GET', '/api/runners')).json())).not.toContain(made.token);
-    expect(await (await poll(made.token)).json()).toEqual({ jobs: [], commands: [], lost: [] });
+    expect(await (await poll(made.token)).json()).toEqual({ jobs: [], commands: [], lost: [], leaseMs: expect.any(Number) });
     expect((await h.api('DELETE', `/api/runners/${made.id}`)).status).toBe(200);
     expect((await poll(made.token)).status).toBe(401);
   });

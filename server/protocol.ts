@@ -36,7 +36,8 @@ export type Command = { runId: string } & (
 export type Order = Command extends infer C ? (C extends unknown ? Omit<C, 'runId'> : never) : never;
 
 export type PollRequest = { capacity: number; running: string[] };
-export type PollResponse = { jobs: Job[]; commands: Command[]; lost: string[] };
+// leaseMs: how long the control plane waits for the next poll before giving this runner's jobs away
+export type PollResponse = { jobs: Job[]; commands: Command[]; lost: string[]; leaseMs?: number };
 
 export type RunnerMessage = StreamMessage | { type: 'finished'; runId: string; branch: string | null } | { type: 'launch_failed'; runId: string; error: string };
 
