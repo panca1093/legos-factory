@@ -852,11 +852,15 @@ export function LaunchDialog({
         runs.push(await api.start({ kind: 'chat', prompt, permissionMode: 'default', resume: resume?.sessionId, ...chatWhere }));
       } else if (!ticket) {
         runs.push(await api.start({ kind: 'task', repo: picked[0], prompt, permissionMode: 'default', branch: branch.trim() || undefined, model }));
-      } else if (start === 'brainstorm') {
-        runs.push(await api.start({ kind: 'chat', stage: 'design', persona: 'foreman', ticket: ticket.key, repo: picked[0], prompt: `Discuss ${ticketText}`, permissionMode: 'default' }));
       } else {
-        for (const repo of picked) {
-          runs.push(await api.start({ kind: 'task', stage: 'design', persona: 'foreman', ticket: ticket.key, repo, prompt: `Implement ${ticketText}`, permissionMode: 'default', branch: branch.trim() || undefined, model }));
+        // the run needs a work item that carries its repo, or the server refuses it
+        await api.setWorkItemRepos(ticket.key, picked);
+        if (start === 'brainstorm') {
+          runs.push(await api.start({ kind: 'chat', stage: 'design', persona: 'foreman', ticket: ticket.key, repo: picked[0], prompt: `Discuss ${ticketText}`, permissionMode: 'default' }));
+        } else {
+          for (const repo of picked) {
+            runs.push(await api.start({ kind: 'task', stage: 'design', persona: 'foreman', ticket: ticket.key, repo, prompt: `Implement ${ticketText}`, permissionMode: 'default', branch: branch.trim() || undefined, model }));
+          }
         }
       }
       storage('lf:model', model);
