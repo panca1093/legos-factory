@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { WorkItem } from '../../shared/types.ts';
 import { parseRepo } from '../workspace.ts';
 import { HttpError, TICKET_RE, parse, readBody, requireMyRepo, requireWorkbench, upstream, type Deps, type Env } from '../http.ts';
+import { ALIVE } from '../claude-runs.ts';
 import { approvePr, approveSpec, requestPrChanges, requestSpecChanges } from '../pipeline.ts';
 import { mergePrInForge } from './prs.ts';
 
@@ -21,7 +22,7 @@ const commentSchema = z.object({
 });
 
 export function workItemsRoutes(deps: Deps) {
-  const { workItems, myRepos } = deps;
+  const { workItems, myRepos, runs, activity } = deps;
   const routes = new Hono<Env>();
 
   const view = (owner: string, ticket: string): WorkItem => {
@@ -123,6 +124,19 @@ export function workItemsRoutes(deps: Deps) {
     const ticket = ticketOf(c);
     const { comment } = parse(commentSchema, await readBody(c));
     await requestPrChanges(deps, uid, ticket, c.req.param('repo'), comment);
+    return c.json({ ok: true });
+  });
+
+  // Undo a wrongly started task: end the ticket's runs, forget their sessions and put it back in the Backlog.
+  routes.post('/api/work-items/:ticket/undo', async (c) => {
+    const uid = c.get('uid');
+    const ticket = ticketOf(c);
+    if (!workItems.get(uid, ticket)) throw new HttpError(404, 'work item not found');
+    const snap = runs.snapshot();
+    const active = snap.type === 'snapshot' ? snap.runs.filter((r) => r.owner === uid && r.ticket === ticket && ALIVE.includes(r.status)) : [];
+    for (const run of active) await runs.end(run.id);
+    for (const sessionId of new Set(active.map((r) => r.sessionId).filter((s): s is string => !!s))) activity.forgetSession(uid, sessionId);
+    workItems.reset(uid, ticket);
     return c.json({ ok: true });
   });
 
