@@ -12,6 +12,9 @@ export type ReviewRequest = PrRow & { reviewers: Pr['reviewers']; approvedByMe: 
 
 export type ForgeMerge = { merged: true } | { url: string };
 
+// The one tool that merges a pull request; other tools that mention merging are not ours to call.
+export const MERGE_TOOL = 'bitbucket_merge_pr';
+
 const ticketPrsQuery = z.object({
   ticket: text()
     .transform((t) => t.toUpperCase())
@@ -152,16 +155,15 @@ export function prsRoutes(deps: Deps) {
   return routes;
 }
 
-// Merges the PR when the workbench has a merge tool; otherwise the person merges it in the forge.
+// Merges the PR when the workbench has the merge tool; otherwise the person merges it in the forge.
 export async function mergePrInForge(deps: Deps, uid: string, ref: RepoRef, prId: number): Promise<ForgeMerge> {
   const wb = await requireWorkbench(deps, uid);
   const tools = await upstream(wb.client.listTools(wb.token));
-  const mergeTool = tools.find((tool) => tool.name.toLowerCase().includes('merge'));
-  if (!mergeTool) {
+  if (!tools.some((tool) => tool.name === MERGE_TOOL)) {
     const pr = await upstream(wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, prId));
     return { url: pr.url ?? '' };
   }
-  await upstream(wb.client.call(wb.token, mergeTool.name, { workspace: ref.workspace, repoSlug: ref.slug, pullRequestId: prId }));
+  await upstream(wb.client.call(wb.token, MERGE_TOOL, { workspace: ref.workspace, repoSlug: ref.slug, pullRequestId: prId }));
   return { merged: true };
 }
 
