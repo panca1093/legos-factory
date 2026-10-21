@@ -1,19 +1,19 @@
 import { useContext, useState } from 'react';
-import type { Persona, PipelineStage, PlanTask, Run } from '../../shared/types.ts';
-import { ago, api, useFetch, useNow } from '../api.ts';
+import type { Persona, PipelineStage, PlanTask, Run, WorkItem } from '../../shared/types.ts';
+import { ago, api, useFetch, useNow, type RoutingInfo } from '../api.ts';
 import { Chrome, Frame, type Live } from '../chrome.tsx';
 import './WorkItem.css';
 
 const STAGES: PipelineStage[] = ['backlog', 'shaping', 'spec_review', 'building', 'pr_review', 'ready', 'done'];
 const PERSONAS = { foreman: 'Foreman', builder: 'Builder', inspector: 'Inspector', cataloger: 'Cataloger' };
-const STEPS: { label: string; personas: Persona[]; gate?: string; stages: PipelineStage[] }[] = [
-  { label: 'Brainstorm', personas: ['foreman'], gate: 'Optional', stages: [] },
-  { label: 'Spec', personas: ['foreman'], gate: 'You', stages: ['shaping', 'spec_review'] },
-  { label: 'Build + agent review', personas: ['builder', 'inspector'], stages: ['building'] },
-  { label: 'PR review', personas: [], gate: 'If routed', stages: ['pr_review'] },
-  { label: 'Merge', personas: [], gate: 'You', stages: ['ready'] },
-  { label: 'Ready for QA', personas: [], stages: ['done'] },
-  { label: 'Catalog', personas: ['cataloger'], stages: [] },
+const STEPS: { label: string; personas: Persona[]; gate?: string }[] = [
+  { label: 'Brainstorm', personas: ['foreman'], gate: 'Optional' },
+  { label: 'Spec', personas: ['foreman'], gate: 'You' },
+  { label: 'Build + agent review', personas: ['builder', 'inspector'] },
+  { label: 'PR review', personas: [], gate: 'If routed' },
+  { label: 'Merge', personas: [], gate: 'You' },
+  { label: 'Ready for QA', personas: [] },
+  { label: 'Catalog', personas: ['cataloger'] },
 ];
 
 export function flowColumns(tasks: PlanTask[]): PlanTask[][] {
@@ -37,6 +37,40 @@ function PersonaBadge({ persona }: { persona: Run['persona'] }) {
 const cost = (value: number | null) => value === null ? '— est. (unpriced)' : `$${value.toFixed(2)} est.`;
 const prHref = (repo: string, id: number) => `#/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${id}`;
 
+type StepState = 'done' | 'now' | 'wait' | 'skip' | 'pending';
+type StepView = { state: StepState; text: string };
+
+// The tracked discussion of a ticket. It stays a chat: the spec is written only when the person asks for it.
+function TrackedChat({ run, now }: { run: Run; now: number }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const writeSpec = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.startSpec(run.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="wi-panel wi-chat" aria-label="Tracked discussion">
+      <div className="wi-section-head">
+        <h2>Brainstorm</h2>
+        <span className={`wi-state ${run.status}`}>{run.status}</span>
+        <span className="wi-meta">tracked discussion · {run.model ?? 'model unavailable'} · {ago(run.startedAt, now)}</span>
+        <a className="wi-meta wi-chat-open" href={`#/runs/${encodeURIComponent(run.id)}`}>Open discussion →</a>
+      </div>
+      <p className="wi-meta">The discussion stays a chat. Write the spec when you are ready.</p>
+      {run.status === 'idle' && <button className="btn primary" disabled={busy} onClick={writeSpec}>Write the spec</button>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
   const now = useNow(15000);
   const chrome = useContext(Chrome);
@@ -49,6 +83,8 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [answered, setAnswered] = useState<string[]>([]);
+  const [starting, setStarting] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const observed = new Map((activity.data?.items ?? []).filter((r) => r.ticket === ticket).map((r) => [r.runId, { ...r, id: r.runId, task: null as string | null, persona: null as Run['persona'], owner: null as string | null }]));
   for (const run of live.runs.values()) {
     if (run.ticket === ticket) observed.set(run.id, { ...run, runId: run.id, title: run.prompt, project: run.repo ?? '' });
@@ -62,6 +98,35 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
   const priced = runs.filter((r) => r.estimatedCostUsd !== null);
   const knownCost = priced.reduce((sum, r) => sum + (r.estimatedCostUsd ?? 0), 0);
   const activeRules = automation.data?.routing.filter((r) => r.on) ?? [];
+  const liveChat = [...live.runs.values()].filter((r) => r.ticket === ticket && r.kind === 'chat').sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null;
+  const seenChat = !!liveChat || (activity.data?.items ?? []).some((r) => r.ticket === ticket && r.kind === 'chat');
+  const firstRepo = item?.repos[0]?.name ?? null;
+  const routing = item ? (item as WorkItem & { routing?: Record<string, RoutingInfo> | null }).routing ?? null : null;
+  const routed = routing
+    ? Object.entries(routing).filter(([, info]) => info && ((info.matches?.length ?? 0) + (info.inspectorReasons?.length ?? 0) + (info.reasons?.length ?? 0) > 0 || (info.findings ?? '').length > 0))
+    : [];
+  const startBrainstorm = async () => {
+    if (!item || !firstRepo || starting) return;
+    setStarting(true);
+    setChatError(null);
+    try {
+      await api.start({
+        kind: 'chat',
+        stage: 'design',
+        persona: 'foreman',
+        ticket,
+        repo: firstRepo,
+        prompt: jira?.summary
+          ? `Discuss the work for ${ticket}: ${jira.summary}. Agree the scope and the approach with me first; no spec and no pull request yet.`
+          : `Discuss the work for ${ticket}. Agree the scope and the approach with me first; no spec and no pull request yet.`,
+        permissionMode: 'default',
+      });
+    } catch (e) {
+      setChatError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(false);
+    }
+  };
   const act = async (id: string, request: () => Promise<unknown>, dismiss = false) => {
     if (busy) return;
     setBusy(id);
@@ -76,6 +141,32 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
     }
   };
 
+  const stageIdx = stage ? STAGES.indexOf(stage) : -1;
+  const stageState = (stages: PipelineStage[], waitAt?: PipelineStage): StepState => {
+    if (stageIdx < 0) return 'pending';
+    const idx = stages.map((s) => STAGES.indexOf(s));
+    if (stageIdx > Math.max(...idx)) return 'done';
+    if (stageIdx < Math.min(...idx)) return 'pending';
+    if (waitAt && stageIdx === STAGES.indexOf(waitAt)) return 'wait';
+    return 'now';
+  };
+  const specPr = item?.links.find((l) => l.kind === 'spec')?.prId ?? null;
+  const repoCount = item?.repos.length ?? 0;
+  const specText = stageIdx > STAGES.indexOf('spec_review')
+    ? `${specPr ? `#${specPr} ` : ''}approved by you`
+    : stageIdx === STAGES.indexOf('spec_review')
+      ? `${specPr ? `#${specPr} ` : ''}waiting for your approval`
+      : specPr ? `#${specPr}` : '—';
+  const views: Record<string, StepView> = {
+    Brainstorm: { state: !seenChat ? 'skip' : liveChat ? 'now' : 'done', text: liveChat ? liveChat.status : seenChat ? 'in progress' : 'skipped' },
+    Spec: { state: stageState(['shaping', 'spec_review'], 'spec_review'), text: specText },
+    'Build + agent review': { state: stageState(['building']), text: repoCount ? `${repoCount} repo${repoCount === 1 ? '' : 's'}, auto` : '—' },
+    'PR review': { state: stageState(['pr_review']), text: 'rules decide per PR' },
+    Merge: { state: stageState(['ready'], 'ready'), text: 'one click' },
+    'Ready for QA': { state: stageState(['done']), text: 'Jira moves itself' },
+    Catalog: { state: 'pending', text: 'after merge, docs' },
+  };
+
   return (
     <Frame crumb={<><a href="#/work">Work</a> / <span>{ticket}</span></>}>
       <div className="scroll"><div className="page work-item-page">
@@ -87,26 +178,29 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
           </div>
           <div className="wi-actions">
             {jira?.url && <a className="btn" href={jira.url} target="_blank" rel="noreferrer">Open in Jira ↗</a>}
-            <button className="btn" disabled title="Tracked brainstorm launch is not available in the current contract">Brainstorm</button>
+            <button className="btn" disabled={!item || !firstRepo || !!liveChat || starting} title={!item ? 'The work item is not loaded yet.' : !firstRepo ? 'Add a repo to this ticket before starting a discussion.' : liveChat ? 'A discussion is already open for this ticket.' : 'Start a tracked discussion for this ticket.'} onClick={startBrainstorm}>{starting ? 'Starting…' : 'Brainstorm'}</button>
           </div>
         </header>
+        {chatError && <p className="error" role="alert">{chatError}</p>}
+        {item && !firstRepo && <p className="wi-meta">Add a repo to this ticket before starting a discussion.</p>}
         {items.error && <p className="error" role="alert">{items.error}</p>}
         {!items.data && !items.error && <p role="status">Loading work item…</p>}
         {items.data && !item && <p className="empty">No tracked work item found for {ticket}.</p>}
         {item && <>
           <section className="wi-panel wi-stepper" aria-label="Ticket stages">
             {STEPS.map((step) => {
-              const current = !!stage && step.stages.includes(stage);
-              const personaRun = runs.find((r) => r.persona && step.personas.some((p) => p === r.persona) && ['starting', 'running', 'awaiting_decision'].includes(r.status));
+              const view = views[step.label];
+              const current = view.state === 'now' || view.state === 'wait';
               return <div className={`wi-step ${current ? 'current' : ''}`} key={step.label} aria-current={current ? 'step' : undefined}>
-                <div className="wi-bar" />
+                <div className={`wi-bar ${view.state}`} />
                 <b>{step.label} {step.gate && <span className="wi-gate">{step.gate}</span>}</b>
                 <div className="wi-inline">{step.personas.map((p) => <PersonaBadge key={p} persona={p} />)}</div>
-                <span className="wi-meta">{current ? `Repo stage: ${stage}` : step.label === 'Brainstorm' ? 'History unavailable' : step.label === 'Catalog' && personaRun ? `Live run: ${personaRun.status}` : '—'}</span>
+                <span className="wi-meta">{view.text}</span>
               </div>;
             })}
           </section>
-          <p className="wi-meta">Slowest repo: {stage ?? '—'}. Historical gate approvals, brainstorm outcomes and QA transitions are unavailable.</p>
+          <p className="wi-meta">Slowest repo: {stage ?? '—'}. Historical gate approvals and QA transitions are unavailable.</p>
+          {liveChat && <TrackedChat run={liveChat} now={now} />}
           {decisions.map((d) => {
             const run = live.runs.get(d.runId)!;
             const command = d.toolName === 'Bash' && typeof d.input.command === 'string' ? d.input.command : null;
@@ -155,8 +249,17 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
             </section>
             <aside className="wi-aside">
               <section className="wi-panel"><h2>When this needs a person</h2><p>A PR goes to you if any rule matches. The Inspector may add a reason, never remove one.</p>
+                {routed.length ? routed.map(([repo, info]) => <div className="wi-routing" key={repo}>
+                  <div className="wi-inline"><b className="wi-repo">{repo}</b><span className="wi-meta">routed {ago(info.at ?? null, now)}</span></div>
+                  <ul className="wi-rules">
+                    {(info.matches ?? []).map((match) => <li key={match.id}>Rule {match.id} matched — {match.reason}</li>)}
+                    {(info.inspectorReasons ?? []).map((reason, index) => <li key={index}>Inspector — {reason}</li>)}
+                    {!(info.matches ?? []).length && !(info.inspectorReasons ?? []).length && (info.reasons ?? []).map((reason, index) => <li key={index}>{reason}</li>)}
+                  </ul>
+                  {info.findings ? <p className="wi-meta">Inspector findings: {info.findings}</p> : null}
+                </div>) : <p className="wi-meta">No routing reasons for this work item yet.</p>}
                 {automation.error ? <p className="error">{automation.error}</p> : !automation.data ? <p className="wi-meta">Loading workspace rules…</p> : activeRules.length ? <ul className="wi-rules">{activeRules.map((rule) => <li key={rule.id}>{rule.kind}: <code>{rule.value}</code></li>)}</ul> : <p className="wi-meta">No active workspace rules.</p>}
-                <p className="wi-meta">Matched routing reasons are unavailable for this work item.</p><a href="#/settings">Workspace rules →</a>
+                <a href="#/settings">Workspace rules →</a>
               </section>
               <section className="wi-panel"><h2>What happened</h2>
                 {item.note && <div className="wi-event"><span className="wi-avatar unknown">?</span><div><b>{item.note.text}</b><p className="wi-meta">Actor unavailable · {ago(item.note.at, now)}</p></div></div>}
