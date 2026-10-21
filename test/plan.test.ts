@@ -31,6 +31,16 @@ describe('plan parser', () => {
   it('falls back on a cycle', () => expectFallback(block(`${entry('T1', repos[0], '[T2]')}\n${entry('T2', repos[1], '[T1]')}`), /cycle/i));
   it('falls back on duplicate task ids', () => expectFallback(block(`${entry('T1')}\n${entry('T1')}`), /duplicate.*id/i));
 
+  it('a plan with an invalid task id is rejected', () => {
+    expectFallback(block(entry('T 1')), /invalid.*id/i);
+    expectFallback(block(entry('T/1')), /invalid.*id/i);
+    expectFallback(block(entry('T.1')), /invalid.*id/i);
+  });
+
+  it('a plan with the same task id twice is rejected', () => {
+    expectFallback(block(`${entry('T1')}\n${entry('t1')}`), /duplicate.*id/i);
+  });
+
   it.each([
     entry('T1').replace('  test: T1.test.ts\n', ''),
     entry('T1').replace('needs: []', 'needs: T2'),
