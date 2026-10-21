@@ -53,6 +53,20 @@ export class WorkItems {
     this.db.prepare(`update work_items set note = ?, note_at = ? where owner = ? and ticket = ?`).run(text, text ? now() : null, owner, ticket);
   }
 
+  // Undo a wrongly started task: every repo back to the backlog, the plan's tasks back to waiting, the note gone.
+  reset(owner: string, ticket: string) {
+    this.db.prepare(`update work_item_repos set stage = 'backlog', attempt = 0 where owner = ? and ticket = ?`).run(owner, ticket);
+    this.db.prepare(`update work_items set note = null, note_at = null where owner = ? and ticket = ?`).run(owner, ticket);
+    const row = this.db.prepare(`select plan from work_items where owner = ? and ticket = ?`).get(owner, ticket) as { plan: string | null } | undefined;
+    if (!row?.plan) return;
+    try {
+      const plan = JSON.parse(row.plan) as Plan;
+      this.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => ({ ...t, state: 'waiting' as const })) });
+    } catch {
+      // an unreadable stored plan has no task states to rewind
+    }
+  }
+
   // the routing decisions of a ticket, keyed by lower-cased repo
   routing(owner: string, ticket: string): Record<string, RoutingInfo> {
     const row = this.db.prepare(`select routing from work_items where owner = ? and ticket = ?`).get(owner, ticket) as { routing: string | null } | undefined;
