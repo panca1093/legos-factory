@@ -205,6 +205,7 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
     const next = tabs ? tabStep(e.key, index, tabs.length) : null;
     if (next === null) return;
     e.preventDefault();
+    setScope(next === 0 ? 'mine' : 'team');
     tabs?.item(next).focus();
   };
 
@@ -308,12 +309,11 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
           <div className="work-toolbar">
             {isOwner && (
               <div className="segmented" role="tablist" aria-label="Whose work">
-                <button role="tab" aria-selected={!readOnly} tabIndex={!readOnly ? 0 : -1} className={!readOnly ? 'active' : ''} onKeyDown={onTabKey(0)} onClick={() => setScope('mine')}>
-                  Mine
-                </button>
-                <button role="tab" aria-selected={readOnly} tabIndex={readOnly ? 0 : -1} className={readOnly ? 'active' : ''} onKeyDown={onTabKey(1)} onClick={() => setScope('team')}>
-                  Team
-                </button>
+                {(['mine', 'team'] as const).map((value, index) => (
+                  <button key={value} role="tab" aria-selected={value === scope} tabIndex={value === scope ? 0 : -1} className={value === scope ? 'active' : ''} onKeyDown={onTabKey(index)} onClick={() => setScope(value)}>
+                    {value === 'mine' ? 'Mine' : 'Team'}
+                  </button>
+                ))}
               </div>
             )}
             <input className="input" type="search" placeholder="Filter by key, title or repo" aria-label="Filter by key, title or repo" value={q} onChange={(e) => setQ(e.target.value)} />
