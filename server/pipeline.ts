@@ -3,9 +3,9 @@ import type { Persona, PipelineStage, Plan, PlanTask, Run, TicketLink } from '..
 import { HttpError, NO_WB, errMsg, type Deps } from './http.ts';
 import { launchRun, launchSchema } from './launch-run.ts';
 import { loadSettings } from './policy.ts';
-import { parsePlan } from './plan.ts';
+import { canRunTogether, parsePlan } from './plan.ts';
 import { route } from './routing.ts';
-import { parseRepo } from './workspace.ts';
+import { parseRepo, safeName } from './workspace.ts';
 import type { PrFile } from './workbench.ts';
 
 export type State = {
@@ -15,6 +15,8 @@ export type State = {
 
 export type Facts = {
   reviewAttempts: number;
+  // how many Builder runs may work at once; 0 (the default) keeps one task at a time
+  parallelBuilders?: number;
   ruleMatched?: boolean;
   inspectorReasons?: string[];
   // a Foreman run is still working on this repo: its spec PR is being revised, not waiting for review
@@ -35,14 +37,23 @@ export type Action =
 export function next(state: State, facts: Facts): Action[] {
   const tasks = state.plan?.tasks ?? [];
   const event = facts.event;
+  const limit = Math.max(0, facts.parallelBuilders ?? 0);
   const setStage = (repo: string, stage: PipelineStage, attempt = 0): Action => ({ type: 'set_stage', repo, stage, attempt });
   const start = (task: PlanTask, persona: Persona): Action => ({ type: 'start_run', repo: task.repo, task: task.id, persona });
   const schedule = (planTasks: PlanTask[], repos = state.repos): Action[] => {
-    if (planTasks.some((task) => ['running', 'paused', 'failed'].includes(task.state))) return [];
-    const task = planTasks.find((task) => task.state === 'waiting'
+    if (planTasks.some((task) => task.state === 'failed')) return [];
+    const busy = planTasks.filter((task) => task.state === 'running' || task.state === 'paused');
+    const candidates = planTasks.filter((task) => task.state === 'waiting'
       && repos.some((repo) => repo.repo === task.repo && repo.stage === 'building')
       && task.needs.every((id) => planTasks.some((dependency) => dependency.id === id && dependency.state === 'done')));
-    return task ? [start(task, 'builder')] : [];
+    if (!limit) return busy.length || !candidates.length ? [] : [start(candidates[0], 'builder')];
+    const plan = { tasks: planTasks, error: null };
+    const picks: PlanTask[] = [];
+    for (const task of candidates) {
+      if (busy.length + picks.length >= limit) break;
+      if ([...busy, ...picks].every((other) => canRunTogether(task, other, plan))) picks.push(task);
+    }
+    return picks.map((task) => start(task, 'builder'));
   };
 
   if (!event) return schedule(tasks);
@@ -121,13 +132,28 @@ function foremanBusy(deps: Deps, owner: string, ticket: string, repo: string): b
   return snapshot.runs.some((r) => r.owner === owner && r.ticket === ticket && (r.repo ?? '').toLowerCase() === repo.toLowerCase() && r.persona === 'foreman' && !r.endedAt);
 }
 
+// The branch a task run works on; the merge run merges these branches into one.
+const taskBranch = (ticket: string, task: string) => `factory/${ticket}/${safeName(task)}`;
+
 // Starts the run of one plan task: the plan marks the task running, the prompt carries the task and the findings.
 async function startTaskRun(deps: Deps, owner: string, ticket: string, task: PlanTask, persona: Persona, opts: { findings?: string; cwd?: string } = {}): Promise<void> {
   const plan = deps.workItems.get(owner, ticket)?.plan;
   if (!plan) return;
   deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'running' } : t) });
-  const branch = deps.workItems.links(owner, ticket).find((l) => l.repo.toLowerCase() === task.repo.toLowerCase() && l.kind === 'impl' && l.state === 'OPEN')?.branch;
-  const prompt = `${persona === 'inspector' ? 'Review' : 'Implement'} task ${task.id}: ${task.do}\nTest: ${task.test}\nApproved plan:\n${JSON.stringify(plan)}${opts.findings ? `\nPrevious run findings:\n${opts.findings}` : ''}`;
+  const impl = deps.workItems.links(owner, ticket).find((l) => l.repo.toLowerCase() === task.repo.toLowerCase() && l.kind === 'impl' && l.state === 'OPEN')?.branch;
+  const own = taskBranch(ticket, task.id);
+  // The task branch is not on the remote yet: the Builder creates it, the Inspector reads it.
+  const branch = impl ?? (persona === 'builder' ? undefined : own);
+  const lines = [
+    `${persona === 'inspector' ? 'Review' : 'Implement'} task ${task.id}: ${task.do}`,
+    `Test: ${task.test}`,
+    `Approved plan:\n${JSON.stringify(plan)}`,
+  ];
+  if (opts.findings) lines.push(`Previous run findings:\n${opts.findings}`);
+  if (persona === 'inspector') lines.push(`The work of this task is on the branch ${impl ?? own}.`);
+  else if (impl) lines.push(`The pull request for ${task.repo} is already open on ${impl}: commit and push your work to that branch, and do not open a new pull request.`);
+  else lines.push(`Work on the branch ${own}: create it from the default branch if it does not exist yet, check it out if it does, then commit and push your work there.\nDo not open a pull request: the factory merges the task branches and opens one pull request for the repo.`);
+  const prompt = lines.join('\n');
   try {
     await launchRun(deps, owner, launchSchema.parse({
       ticket, stage: 'build', kind: 'task', task: task.id, persona, prompt, branch,
@@ -139,12 +165,53 @@ async function startTaskRun(deps: Deps, owner: string, ticket: string, task: Pla
   }
 }
 
+// The repos a pipeline run of this persona already worked on: never start a second one.
+const reposWithRun = (deps: Deps, owner: string, ticket: string, persona: Persona): string[] =>
+  (deps.db.prepare(`select distinct lower(json_extract(item, '$.repo')) as repo from runs
+      where owner = ? and persona = ? and task is null and json_extract(item, '$.ticket') = ? and json_extract(item, '$.repo') is not null`)
+    .all(owner, persona, ticket) as { repo: string }[]).map((row) => row.repo);
+
+// The repos whose tasks are all done and that still wait for their one pull request.
+function reposToMerge(deps: Deps, owner: string, ticket: string): string[] {
+  const plan = deps.workItems.get(owner, ticket)?.plan;
+  if (!plan) return [];
+  const links = deps.workItems.links(owner, ticket);
+  const started = reposWithRun(deps, owner, ticket, 'builder');
+  return deps.workItems.repos(owner, ticket)
+    .filter((repo) => {
+      const tasks = plan.tasks.filter((task) => task.repo === repo.name);
+      return repo.stage === 'building'
+        && tasks.length > 0
+        && tasks.every((task) => task.state === 'done')
+        && !links.some((l) => l.kind === 'impl' && l.state === 'OPEN' && l.repo.toLowerCase() === repo.name.toLowerCase())
+        && !started.includes(repo.name.toLowerCase());
+    })
+    .map((repo) => repo.name);
+}
+
+// One pull request per repo: a Builder merges the task branches, runs the suite and opens it.
+async function startMergeRun(deps: Deps, owner: string, ticket: string, repo: string): Promise<void> {
+  const tasks = (deps.workItems.get(owner, ticket)?.plan?.tasks ?? []).filter((task) => task.repo === repo);
+  const target = `factory/${ticket}/${repo.split('/').pop() ?? repo}`;
+  const branches = tasks.map((task) => `- ${taskBranch(ticket, task.id)} (task ${task.id}: ${task.do})`).join('\n');
+  const tests = tasks.map((task) => task.test).filter(Boolean).join(', ');
+  const prompt = `Merge the task branches of ${ticket} for ${repo} into one branch and open one pull request.\n\nBranches to merge:\n${branches}\n\nCreate ${target} from the default branch and merge every branch above into it, resolving the conflicts.\nThen run the full test suite of the repo${tests ? ` and the tests of every merged task (${tests})` : ''}.\nOnly when everything is green, push ${target} and open one pull request for ${ticket} with ${target} as the source branch.`;
+  try {
+    await launchRun(deps, owner, launchSchema.parse({ ticket, stage: 'build', kind: 'task', persona: 'builder', repo, prompt }));
+  } catch (err) {
+    deps.workItems.setNote(owner, ticket, `Escalated: ${repo}: ${errMsg(err)}`);
+  }
+}
+
 async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, previous?: Omit<Run, 'events'>) {
   const state = stateOf(deps, owner, ticket);
   const event = facts.event;
-  const effective: Facts = event?.type === 'pr' && event.kind === 'spec'
-    ? { ...facts, foremanRunning: foremanBusy(deps, owner, ticket, event.repo) }
-    : facts;
+  const { automation } = await loadSettings();
+  const effective: Facts = {
+    ...facts,
+    parallelBuilders: automation.parallelBuilders,
+    ...(event?.type === 'pr' && event.kind === 'spec' ? { foremanRunning: foremanBusy(deps, owner, ticket, event.repo) } : {}),
+  };
   for (const action of next(state, effective)) {
     if (action.type === 'set_stage') deps.workItems.setStage(owner, ticket, action.repo, action.stage, action.attempt);
     else if (action.type === 'mark_ready') deps.workItems.setStage(owner, ticket, action.repo, 'ready');
@@ -164,6 +231,7 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
       });
     }
   }
+  for (const repo of reposToMerge(deps, owner, ticket)) await startMergeRun(deps, owner, ticket, repo);
 }
 
 export function approveSpec(deps: Deps, owner: string, ticket: string): Promise<void> {

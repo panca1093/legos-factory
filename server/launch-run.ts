@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel, Stage } from '../shared/types.ts';
 import { syncWorkItem } from './jira-sync.ts';
 import { loadSettings, shareFor } from './policy.ts';
-import { createWorkspace, exists, managedWorkspace, parseRepo, workspacePath, type RepoRef } from './workspace.ts';
+import { createWorkspace, exists, managedWorkspace, parseRepo, safeName, workspacePath, type RepoRef } from './workspace.ts';
 import { BRANCH_RE, HttpError, TICKET_RE, domain, gitToken, optText, requireMyRepo, text, type Deps } from './http.ts';
 
 const MODES = ['default', 'acceptEdits', 'plan'] as const satisfies PermissionMode[];
@@ -60,7 +60,9 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
     requireMyRepo(deps, uid, req.repo);
     if (stage && !deps.workItems.hasRepo(uid, req.ticket, req.repo)) throw new HttpError(409, `add ${req.repo} to ${req.ticket}'s work item first`, { needWorkItem: true });
-    const key = req.ticket || `run-${randomBytes(4).toString('hex')}`;
+    const key = req.ticket
+      ? req.task ? `${req.ticket}-${safeName(req.task)}`.slice(0, 100) : req.ticket
+      : `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
-import { approveSpec, pipelineRunEnded } from '../server/pipeline.ts';
+import { approveSpec, pipelineRunEnded, syncPipeline } from '../server/pipeline.ts';
 import { capturePr, startSyncLoop, syncWorkItem } from '../server/jira-sync.ts';
 import { launchRun, launchSchema } from '../server/launch-run.ts';
 import { WorkItems } from '../server/work-items.ts';
@@ -73,12 +73,13 @@ async function finish(run: Run, result: string | null = null) {
 const setRules = (routing: { id: string; kind: string; value: string; on: boolean }[]) =>
   writeFileSync(join(root, 'settings.json'), JSON.stringify({ automation: { routing } }));
 
-// build, link the implementation PR and let the Inspector have the last word
+// build, merge the task branches into the repo's one pull request and let the Inspector have the last word
 async function buildAndReview(result: string) {
   await approveSpec(deps, 'local', 'PROJ-123');
   await finish(queued()[0]);
-  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'main', title: 'Build', state: 'OPEN', runId: null }, true);
   await finish(queued()[1], result);
+  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'factory/PROJ-123/api', title: 'Build', state: 'OPEN', runId: null }, true);
+  await syncPipeline(deps, 'local', 'PROJ-123');
 }
 
 it('approving the spec starts the first wave', async () => {
@@ -96,11 +97,14 @@ it('a passing review with no matching rule marks the repo ready', async () => {
   await approveSpec(deps, 'local', 'PROJ-123');
   await finish(queued()[0]);
   expect(queued()[1]).toMatchObject({ task: 'T1', persona: 'inspector' });
-  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'main', title: 'Build', state: 'OPEN', runId: null }, true);
   await finish(queued()[1], 'Verdict: APPROVE');
-  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('ready');
   expect(deps.workItems.get('local', 'PROJ-123')?.plan?.tasks[0].state).toBe('done');
   expect(queued()[2]).toMatchObject({ task: 'T2', persona: 'builder' });
+  // the repo's tasks are done: a Builder merges their branches and opens the one pull request
+  expect(queued()[3]).toMatchObject({ persona: 'builder', task: null, repo: 'acme/api' });
+  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'factory/PROJ-123/api', title: 'Build', state: 'OPEN', runId: null }, true);
+  await syncPipeline(deps, 'local', 'PROJ-123');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('ready');
 });
 
 it('a failing review starts the same task again', async () => {
