@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
-import { loadSettings } from '../server/policy.ts';
+import { loadSettings, saveAutomation } from '../server/policy.ts';
 
 const defaults = {
   allowlist: ['npm test', 'npm run build', 'npm run lint', 'go test', 'go vet'],
@@ -12,7 +12,7 @@ const defaults = {
   models: { foreman: 'opus', builder: 'sonnet', inspector: 'opus', cataloger: 'haiku' },
   parallelBuilders: 0,
   reviewAttempts: 3,
-  brainstorm: 'optional',
+  brainstorm: 'optional' as const,
 };
 
 let root: string;
@@ -57,6 +57,40 @@ describe('automation settings', () => {
       await writeFile(path, JSON.stringify({ automation }));
       expect(await loadSettings()).toMatchObject({ automation: defaults });
     }
+  });
+
+  it('keeps valid keys when one key is invalid', async () => {
+    const automation = { ...defaults, allowlist: ['go vet'], routing: [{ id: 'r1', kind: 'repo', value: 'acme/api', on: true }], models: { foreman: 'haiku', builder: 'opus', inspector: 'sonnet', cataloger: 'off' }, parallelBuilders: 2, reviewAttempts: 6, brainstorm: 'always' };
+    await writeFile(path, JSON.stringify({ automation }));
+    expect(await loadSettings()).toMatchObject({ automation: { ...automation, reviewAttempts: 3 } });
+    await writeFile(path, JSON.stringify({ automation: { ...automation, reviewAttempts: 2, models: { ...automation.models, inspector: 'opus' } } }));
+    expect(await loadSettings()).toMatchObject({ automation: { ...automation, reviewAttempts: 2, models: defaults.models }, automationErrors: ['models'] });
+  });
+
+  it('reports which keys fell back', async () => {
+    const invalid = { allowlist: [' '], routing: [{}], models: {}, parallelBuilders: 5, reviewAttempts: 0, brainstorm: 'never' };
+    for (const key of Object.keys(defaults)) {
+      await writeFile(path, JSON.stringify({ automation: { ...defaults, [key]: invalid[key as keyof typeof invalid] } }));
+      expect(await loadSettings()).toMatchObject({ automation: defaults, automationErrors: [key] });
+      const missing: Record<string, unknown> = { ...defaults };
+      delete missing[key];
+      await writeFile(path, JSON.stringify({ automation: missing }));
+      expect(await loadSettings()).toMatchObject({ automation: defaults, automationErrors: [key] });
+    }
+    await writeFile(path, JSON.stringify({ automation: defaults }));
+    expect(await loadSettings()).toMatchObject({ automationErrors: [] });
+    await rm(path);
+    expect(await loadSettings()).toMatchObject({ automationErrors: Object.keys(defaults) });
+    await writeFile(path, '{');
+    expect(await loadSettings()).toMatchObject({ automationErrors: Object.keys(defaults) });
+  });
+
+  it('a failed write leaves the old settings.json intact', async () => {
+    const old = JSON.stringify({ custom: 'acme', automation: defaults });
+    await writeFile(path, old);
+    await mkdir(`${path}.tmp`);
+    await expect(saveAutomation({ ...defaults, allowlist: ['go vet'] })).rejects.toThrow();
+    expect(await readFile(path, 'utf8')).toBe(old);
   });
 
   it('keeps other keys when saving', async () => {
