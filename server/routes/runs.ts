@@ -8,12 +8,12 @@ import { hasShellMetacharacters } from '../claude-runs.ts';
 import { gitBranch, loadSettings, saveAutomation, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { isOwner } from '../owners.ts';
-import { MODEL_RE, launchRun, launchSchema, stageGuide } from '../launch-run.ts';
+import { MODEL_RE, isScratchChat, launchRun, launchSchema, stageGuide } from '../launch-run.ts';
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
   ...s,
   ticket: tickets.get(s.id) ?? null,
-  share: shareFor(s.cwd, settings),
+  share: isScratchChat(s.cwd) ? 'private' : shareFor(s.cwd, settings),
 });
 
 const DANGEROUS = new Set(['rm', 'sh', 'bash', 'zsh', 'curl', 'wget', 'sudo', 'chmod', 'chown', 'dd']);

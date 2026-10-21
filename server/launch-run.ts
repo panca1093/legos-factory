@@ -56,6 +56,11 @@ export function chatsDir(): string {
   return process.env.LEGOS_CHATS_DIR ?? join(homedir(), '.legos-factory', 'chats');
 }
 
+// The scratch folder is the app's own: a chat there is never published to the team hub.
+export function isScratchChat(cwd: string | null): boolean {
+  return !!cwd && resolve(cwd) === resolve(chatsDir());
+}
+
 // Runs in cwd or a fresh clone of repo, with the owner's connections reached through this app's proxy.
 export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Promise<Run> {
   const { runs, activity, opts, wsRoot } = deps;
@@ -101,8 +106,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   const started = (run: Run) => (clone && deps.clones.set(run.id, clone.path), run);
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
   const ticket = req.ticket || null;
-  // The scratch folder is the app's own: a chat there is never published to the team hub.
-  const share = req.share ?? (resolve(cwd) === resolve(chatsDir()) ? 'private' : shareFor(cwd, settings));
+  const share = req.share ?? (isScratchChat(cwd) ? 'private' : shareFor(cwd, settings));
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
   let runPrompt = stage ? `${prompt}\n\n${kind === 'chat' ? DISCUSSION_GUIDE(req.ticket) : stageGuide(stage, req.ticket)}` : prompt;
   if (req.persona) runPrompt += `\n\n${await readFile(new URL(`../workflows/factory/personas/${req.persona}.md`, import.meta.url), 'utf8')}`;
