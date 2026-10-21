@@ -688,9 +688,9 @@ function RepoRow({ name, on, source, onToggle }: { name: string; on: boolean; so
           borderRadius: 5,
           display: 'grid',
           placeItems: 'center',
-          border: `1.5px solid ${on ? 'var(--accent)' : '#a6adbd'}`,
+          border: `1.5px solid ${on ? 'var(--accent)' : 'var(--faint)'}`,
           background: on ? 'var(--accent)' : 'var(--paper)',
-          color: '#fff',
+          color: 'var(--on-tone)',
         }}
       >
         {on && <Icon name="check" size={12} />}
@@ -760,20 +760,24 @@ export function LaunchDialog({
     setPicked(ticket ? [...new Set([...mapped, ...named])] : named.length ? named : mine.repos.slice(0, 1).map((r) => r.name));
   }, [mine, ticket?.key]);
 
+  const searchSeq = useRef(0);
   const search = async (q: string) => {
     const key = q.trim().toUpperCase();
+    const seq = ++searchSeq.current;
     setSearchErr(null);
     try {
       if (TICKET_KEY_RE.test(key)) {
         const issue = await api.jiraIssue(key);
-        setResults([issue]);
+        if (seq === searchSeq.current) setResults([issue]);
       } else {
         const found = await api.jiraSearch(`text ~ "${q.trim().replace(/"/g, '')}" ORDER BY updated DESC`);
-        setResults(found.issues);
+        if (seq === searchSeq.current) setResults(found.issues);
       }
     } catch (e: any) {
-      setResults([]);
-      setSearchErr(e.message);
+      if (seq === searchSeq.current) {
+        setResults([]);
+        setSearchErr(e.message);
+      }
     }
   };
 
@@ -842,8 +846,10 @@ export function LaunchDialog({
   const ready = intent === 'chat' ? !!prompt.trim() : ticket ? n > 0 : n === 1 && !!prompt.trim();
   const ticketText = ticket ? (ticket.summary ? `${ticket.key}: ${ticket.summary}` : ticket.key) : '';
 
+  const starting = useRef(false);
   const submit = async () => {
-    if (!ready || busy) return;
+    if (!ready || busy || starting.current) return;
+    starting.current = true;
     setBusy(true);
     setErr(null);
     try {
@@ -858,9 +864,20 @@ export function LaunchDialog({
         if (start === 'brainstorm') {
           runs.push(await api.start({ kind: 'chat', stage: 'design', persona: 'foreman', ticket: ticket.key, repo: picked[0], prompt: `Discuss ${ticketText}`, permissionMode: 'default' }));
         } else {
-          for (const repo of picked) {
-            runs.push(await api.start({ kind: 'task', stage: 'design', persona: 'foreman', ticket: ticket.key, repo, prompt: `Implement ${ticketText}`, permissionMode: 'default', branch: branch.trim() || undefined, model }));
-          }
+          // one spec run for the ticket; the spec PR carries the plan for every picked repo
+          runs.push(
+            await api.start({
+              kind: 'task',
+              stage: 'design',
+              persona: 'foreman',
+              ticket: ticket.key,
+              repo: picked[0],
+              prompt: `Implement ${ticketText}. Repos: ${picked.join(', ')}.`,
+              permissionMode: 'default',
+              branch: branch.trim() || undefined,
+              model,
+            }),
+          );
         }
       }
       storage('lf:model', model);
@@ -869,6 +886,7 @@ export function LaunchDialog({
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
+      starting.current = false;
     }
   };
 
@@ -968,6 +986,7 @@ export function LaunchDialog({
                         className="input"
                         type="search"
                         autoFocus
+                        aria-label="Search Jira"
                         placeholder="Search Jira by key or title"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
