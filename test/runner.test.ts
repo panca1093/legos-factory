@@ -10,6 +10,7 @@ import { Dispatcher, EMBEDDED, type RunnerRef } from '../server/dispatcher.ts';
 import { MyRepos } from '../server/my-repos.ts';
 import type { JobRequest } from '../server/protocol.ts';
 import { Runner, httpTransport } from '../server/runner.ts';
+import { workspacePath } from '../server/workspace.ts';
 import { alive } from './fakes.ts';
 
 beforeAll(() => {
@@ -255,6 +256,15 @@ describe('remote runner', () => {
     return { deps, call, api, fetchFn: ((url: string, init: RequestInit) => call(String(url).slice(PUBLIC.length), init)) as unknown as typeof fetch };
   }
 
+  it('lets a report move a run along but never change whose run it is, where, or for which ticket', async () => {
+    const h = hub();
+    const run = await (await h.api('POST', '/api/runs', { repo: 'acme/api', prompt: 'hello' })).json();
+    const runner = { id: 'r1', workspaceId: 'local', embedded: false };
+    await h.deps.runs.poll(runner, { capacity: 1, running: [] });
+    h.deps.runs.report(runner, [{ type: 'run', run: { ...run, repo: 'evil/x', ticket: 'EVIL-1', stage: 'build', cwd: '/', workspaceId: 'other', owner: 'mallory', prompt: 'forged', status: 'running', turns: 3 } }]);
+    expect(h.deps.runs.get(run.id)).toMatchObject({ repo: 'acme/api', ticket: null, stage: null, cwd: '', workspaceId: 'local', owner: 'local', prompt: 'hello', status: 'running', turns: 3 });
+  });
+
   it('pulls a repo run over HTTP, clones it itself, takes commands and reports back', async () => {
     const h = hub();
     const run = await (await h.api('POST', '/api/runs', { repo: 'acme/api', prompt: 'hello' })).json();
@@ -276,16 +286,16 @@ describe('remote runner', () => {
     runner.start();
 
     await until(() => h.deps.runs.get(run.id)?.status === 'starting', 'the runner picked the run up');
-    const mine = h.deps.runs.get(run.id)!;
-    expect(mine.cwd.startsWith(wsRoot)).toBe(true);
-    expect(existsSync(join(mine.cwd, 'README.md'))).toBe(true);
+    const clone = workspacePath(wsRoot, 'local', { workspace: 'acme', slug: 'api' }, h.deps.runs.openJobs()[0].request.clone!.key);
+    expect(h.deps.runs.get(run.id)!.cwd).toBe('');
+    expect(existsSync(join(clone, 'README.md'))).toBe(true);
 
     expect((await h.api('POST', `/api/runs/${run.id}/messages`, { text: 'more' })).status).toBe(200);
     await until(() => h.deps.runs.get(run.id)!.events.some((e) => e.kind === 'user' && e.text === 'more'), 'the message reached the agent');
 
     expect((await h.api('POST', `/api/runs/${run.id}/end`)).status).toBe(200);
     await until(() => h.deps.runs.get(run.id)!.status === 'completed', 'the run ended');
-    await until(() => !existsSync(mine.cwd), 'the runner deleted its clone');
+    await until(() => !existsSync(clone), 'the runner deleted its clone');
     await until(() => h.deps.runs.openJobs().length === 0, 'the job is done');
     runner.stop();
   });

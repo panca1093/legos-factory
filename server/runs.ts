@@ -21,6 +21,9 @@ export type RunsOptions = {
 
 const WORKING: Run['status'][] = ['starting', 'running', 'awaiting_decision'];
 const RESUME_NOTE = 'The server restarted while you were working. Continue where you left off and finish the task; check the git status of your working tree first.';
+// The only fields a runner may change; who, where and for which ticket a run is stays as the control plane queued it.
+const PROGRESS = ['status', 'kind', 'fromTask', 'sessionId', 'permissionMode', 'model', 'lastEventAt', 'endedAt', 'endedBy', 'turns', 'error', 'estimatedCostUsd', 'result'] as const satisfies (keyof Run)[];
+const pick = <T extends object, K extends keyof T>(from: T, keys: readonly K[]) => Object.fromEntries(keys.filter((k) => k in from).map((k) => [k, from[k]])) as Pick<T, K>;
 const gone = (message: string, status = 409) => Object.assign(new Error(message), { status });
 
 export class Runs extends EventEmitter {
@@ -213,9 +216,7 @@ export class Runs extends EventEmitter {
       case 'run': {
         const run = this.runs.get(m.run.id);
         if (!run) return;
-        const { startedAt, workspaceId, owner, prompt } = run;
-        const { events: _, ...reported } = m.run as Run;
-        Object.assign(run, reported, { startedAt, workspaceId, owner, prompt });
+        Object.assign(run, pick(m.run as Run, PROGRESS));
         if (run.endedAt) {
           this.revoke(run.id);
           this.closeDecisions(run.id);
