@@ -18,7 +18,7 @@ const managers: RunManager[] = [];
 beforeEach(async () => {
   originalSettings = process.env.LEGOS_SETTINGS;
   originalOwners = process.env.LEGOS_OWNERS;
-  process.env.LEGOS_OWNERS = 'Ada';
+  process.env.LEGOS_OWNERS = 'ada@example.com';
   root = await mkdtemp(join(tmpdir(), 'lf-automode-'));
   process.env.LEGOS_SETTINGS = join(root, 'settings.json');
   const { automation } = await loadSettings();
@@ -160,7 +160,7 @@ describe('remember paused commands', () => {
   });
 
   it('remember from a non-owner does not change the allowlist', async () => {
-    process.env.LEGOS_OWNERS = 'Other';
+    process.env.LEGOS_OWNERS = 'other@example.com';
     const { request, decisions, answer } = decisionRoute();
     const before = (await loadSettings()).automation;
     const pending = request('Bash', { command: 'git push origin feature' });
