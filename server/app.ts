@@ -49,7 +49,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
   app.route('/', jiraRoutes(deps));
   app.route('/', myReposRoutes(deps));
   app.route('/', workItemsRoutes(deps));
-  app.route('/', settingsRoutes());
+  app.route('/', settingsRoutes(deps));
   app.onError(onError);
   return app;
 }
