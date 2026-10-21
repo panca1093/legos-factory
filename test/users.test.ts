@@ -1,17 +1,14 @@
 import { mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { createApp } from '../server/app.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { Users } from '../server/users.ts';
-import { alive, fakeServers, OTHER, WB } from './fakes.ts';
+import { alive, fakeServers, OTHER, peer, useEnv, WB } from './fakes.ts';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('users', () => {
   it('keeps PIN users apart by name and stores the database owner-only', async () => {
@@ -83,20 +80,22 @@ function setup(opts: { workbench?: boolean } = {}) {
   const srv = fakeServers();
   const db = openDb(':memory:');
   const runs = new RunManager(alive);
-  const app = createApp(runs, { users: new Users(db), db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, workbenchUrl: opts.workbench ? `${WB}/mcp` : null });
+  const options = { users: new Users(db), db, selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, workbenchUrl: opts.workbench ? `${WB}/mcp` : null };
+  const deps = buildDeps(runs, options);
+  const app = createApp(runs, options, deps);
   const req = (path: string, init: RequestInit = {}, cookie?: string) =>
-    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', ...(cookie && { cookie }), ...(init.headers as any) } });
+    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', ...(cookie && { cookie }), ...(init.headers as any) } }, peer());
   const post = (path: string, body: unknown, cookie?: string) =>
     req(path, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } }, cookie);
   const signUp = async (name: string, pin = '123456') => cookieOf(await post('/auth/users', { name, pin }));
-  return { srv, runs, req, post, signUp };
+  return { srv, runs, board: deps.runs, req, post, signUp };
 }
 const cookieOf = (r: Response) => r.headers.get('set-cookie')!.split(';')[0];
 
 describe('sign-in', () => {
   it('gates the API until someone creates a user or signs in', async () => {
     const { req, post } = setup();
-    expect(await (await req('/auth/me')).json()).toMatchObject({ authEnabled: true, workbenchLogin: false, users: [], authenticated: false });
+    expect(await (await req('/auth/me')).json()).toMatchObject({ authEnabled: true, pin: true, providers: [], users: [], authenticated: false });
     expect((await req('/api/sessions')).status).toBe(401);
     expect((await post('/auth/users', { name: 'Ada', pin: '12ab56' })).status).toBe(400);
     expect((await post('/auth/users', { name: '', pin: '123456' })).status).toBe(400);
@@ -115,14 +114,19 @@ describe('sign-in', () => {
   });
 
   it('answers 429 while locked out, and requires x-legos on auth writes', async () => {
-    const { req, post } = setup();
-    await post('/auth/users', { name: 'Ada', pin: '123456' });
-    for (let i = 0; i < 4; i++) await post('/auth/login', { name: 'Ada', pin: '000000' });
-    const locked = await post('/auth/login', { name: 'Ada', pin: '000000' });
-    expect(locked.status).toBe(429);
-    expect((await locked.json()).retryAfterMs).toBe(30_000);
-    expect((await req('/auth/login', { method: 'POST', body: '{"name":"Ada","pin":"123456"}' })).status).toBe(403);
-    expect((await req('/auth/users', { method: 'POST', body: '{"name":"Eve","pin":"123456"}' })).status).toBe(403);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { req, post } = setup();
+      await post('/auth/users', { name: 'Ada', pin: '123456' });
+      for (let i = 0; i < 4; i++) await post('/auth/login', { name: 'Ada', pin: '000000' });
+      const locked = await post('/auth/login', { name: 'Ada', pin: '000000' });
+      expect(locked.status).toBe(429);
+      expect((await locked.json()).retryAfterMs).toBe(30_000);
+      expect((await req('/auth/login', { method: 'POST', body: '{"name":"Ada","pin":"123456"}' })).status).toBe(403);
+      expect((await req('/auth/users', { method: 'POST', body: '{"name":"Eve","pin":"123456"}' })).status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('logout clears the cookie', async () => {
@@ -134,14 +138,15 @@ describe('sign-in', () => {
   it('signs in with workbench as its own user, with workbench already connected', async () => {
     const { srv, req, post, signUp } = setup({ workbench: true });
     const ada = await signUp('Ada');
-    expect(await (await req('/auth/me')).json()).toMatchObject({ workbenchLogin: true });
+    expect(await (await req('/auth/me')).json()).toMatchObject({ providers: [{ id: 'workbench', label: 'workbench' }] });
 
     const attempt = 'attempt-0123456789abcdef';
-    const start = await post('/auth/workbench', { attempt });
+    const start = await post('/auth/providers/workbench', { attempt });
     expect(start.status).toBe(200);
-    const authorize = new URL((await start.json()).url);
+    const { url, secret } = await start.json();
+    const authorize = new URL(url);
     expect(authorize.origin + authorize.pathname).toBe(`${WB}/authorize`);
-    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404); // not finished yet
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=${secret}`)).status).toBe(404); // not finished yet
 
     srv.setChallenge(authorize.searchParams.get('code_challenge')!);
     const cb = await req(`/auth/callback?code=abc&state=${authorize.searchParams.get('state')}`);
@@ -149,10 +154,12 @@ describe('sign-in', () => {
     expect(await cb.text()).toContain('Signed in as who@acme.test');
     // the browser that finished the redirect is signed in; so is the app polling with its attempt, once
     const viaCallback = cookieOf(cb);
-    const claim = await req(`/auth/claim?attempt=${attempt}`);
+    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404);
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=wrong`)).status).toBe(404);
+    const claim = await req(`/auth/claim?attempt=${attempt}&secret=${secret}`);
     expect(claim.status).toBe(200);
     const viaClaim = cookieOf(claim);
-    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404);
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=${secret}`)).status).toBe(404);
 
     for (const cookie of [viaCallback, viaClaim]) {
       expect(await (await req('/auth/me', {}, cookie)).json()).toMatchObject({ authenticated: true, user: { kind: 'workbench', email: 'who@acme.test' } });
@@ -164,7 +171,7 @@ describe('sign-in', () => {
     expect(await (await req('/auth/me')).json()).toMatchObject({ users: ['Ada'] });
 
     // signing in again reuses the same user
-    const again = new URL((await (await post('/auth/workbench', {})).json()).url);
+    const again = new URL((await (await post('/auth/providers/workbench', {})).json()).url);
     srv.setChallenge(again.searchParams.get('code_challenge')!);
     const cb2 = await req(`/auth/callback?code=abc&state=${again.searchParams.get('state')}`);
     const me1 = (await (await req('/auth/me', {}, viaClaim)).json()).user.id;
@@ -174,16 +181,16 @@ describe('sign-in', () => {
 
   it('hides workbench sign-in when not configured and rejects forged callbacks', async () => {
     const { req, post } = setup();
-    expect((await post('/auth/workbench', {})).status).toBe(404);
-    expect((await post('/auth/workbench', { attempt: 'x' })).status).toBe(404);
-    expect((await setup({ workbench: true }).post('/auth/workbench', { attempt: 'bad id!' })).status).toBe(400);
+    expect((await post('/auth/providers/workbench', {})).status).toBe(404);
+    expect((await post('/auth/providers/workbench', { attempt: 'x' })).status).toBe(404);
+    expect((await setup({ workbench: true }).post('/auth/providers/workbench', { attempt: 'bad id!' })).status).toBe(400);
     expect((await req('/auth/callback?code=x&state=forged')).status).toBe(400);
   });
 });
 
 describe('isolation between users', () => {
   it('keeps connections, runs, decisions and the live stream to their owner', async () => {
-    const { runs, req, post, signUp } = setup();
+    const { runs, board, req, post, signUp } = setup();
     const ada = await signUp('Ada');
     const bob = await signUp('Bob');
     await post('/api/connections', { name: 'tools', kind: 'mcp', url: `${OTHER}/mcp`, auth: 'header', headers: { 'x-api-key': 'ada-key' } }, ada);
@@ -204,11 +211,11 @@ describe('isolation between users', () => {
 
     // a pending decision on Ada's run is invisible to Bob
     const decision = { id: 'd1', runId: run.id, cwd: '/tmp', toolName: 'Bash', title: null, reason: null, input: {}, createdAt: new Date().toISOString() };
-    const snapshot = runs.snapshot.bind(runs);
-    runs.snapshot = () => ({ ...(snapshot() as any), decisions: [decision] });
+    const snapshot = board.snapshot.bind(board);
+    board.snapshot = () => ({ ...(snapshot() as any), decisions: [decision] });
     const answered: string[] = [];
-    runs.decide = (id) => (answered.push(id), true);
-    runs.discuss = (id) => (answered.push(id), run.id);
+    board.decide = (id) => (answered.push(id), true);
+    board.discuss = (id) => (answered.push(id), run.id);
     expect((await post('/api/decisions/d1', { behavior: 'allow' }, bob)).status).toBe(410);
     expect((await post('/api/decisions/d1/discuss', { text: 'why?' }, bob)).status).toBe(410);
     expect(answered).toEqual([]);
@@ -227,5 +234,16 @@ describe('isolation between users', () => {
     expect(bobSnap.runs).toEqual([]);
     expect(bobSnap.decisions).toEqual([]);
     expect((await (await req('/api/activity/me', {}, bob)).json()).items).toEqual([]);
+
+    const closedSeenBy = async (cookie: string) => {
+      const reader = (await req('/api/stream', {}, cookie)).body!.getReader();
+      await reader.read();
+      board.emit('message', { type: 'decision_closed', id: 'd1', outcome: 'withdrawn' });
+      const next = await Promise.race([reader.read(), new Promise<null>((r) => setTimeout(() => r(null), 100))]);
+      await reader.cancel();
+      return next?.value ? JSON.parse(new TextDecoder().decode(next.value).replace(/^data: /, '')) : null;
+    };
+    expect(await closedSeenBy(ada)).toMatchObject({ type: 'decision_closed', id: 'd1' });
+    expect(await closedSeenBy(bob)).toBeNull();
   });
 });

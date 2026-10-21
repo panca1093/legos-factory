@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { MY_REPOS_CAP, api, storage, type Connection, type Integration, type MyRepo } from '../api.ts';
+import { useContext, useEffect, useState } from 'react';
+import { MY_REPOS_CAP, api, storage, useRole, type Connection, type Integration, type MyRepo, type Role, type Runner, type WorkspaceConfig, type WorkspaceInfo, type WorkspaceMember } from '../api.ts';
 import { RepoPicker } from '../components.tsx';
-import { Frame } from '../chrome.tsx';
+import { Chrome, Frame } from '../chrome.tsx';
 
 export function SettingsPage() {
   const [conns, setConns] = useState<Connection[] | null>(null);
@@ -11,6 +11,7 @@ export function SettingsPage() {
     loadConns();
   }, []);
   const wb = conns?.find((c) => c.kind === 'workbench' && c.connected);
+  const role = useRole();
   return (
     <Frame
       crumb={
@@ -27,12 +28,296 @@ export function SettingsPage() {
               <p className="lead">Servers your chats and tasks can reach, and the repos you work on.</p>
             </div>
           </div>
+          <Workspace />
+          <Runners role={role} />
           <Connections list={conns} error={connError} reload={loadConns} />
           {wb && <Integrations key={wb.name} workbenchUrl={new URL(wb.url).origin} />}
           <Repositories />
         </div>
       </div>
     </Frame>
+  );
+}
+
+// Where your connections, repos and runs live: your own, or a team's. Members share what a workspace holds.
+function Workspace() {
+  const { me } = useContext(Chrome);
+  const [list, setList] = useState<{ active: string; workspaces: WorkspaceInfo[]; config: WorkspaceConfig } | null>(null);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [who, setWho] = useState('');
+  const [role, setRole] = useState<Role>('member');
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const current = list?.workspaces.find((w) => w.id === list.active);
+  const load = () => api.workspaces().then((r) => (setList(r), setErr(null)), (e) => setErr(e.message));
+  useEffect(() => void load(), []);
+  useEffect(() => {
+    if (current?.kind === 'team') api.members(current.id).then((r) => setMembers(r.members), (e) => setErr(e.message));
+    else setMembers([]);
+  }, [current?.id]);
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+  };
+  // a change to who may do what can change what this person may do: read the roles again
+  const changeMembers = (f: () => Promise<{ members: WorkspaceMember[] }>) =>
+    act(async () => {
+      setMembers((await f()).members);
+      await load();
+    });
+  // everything on screen belongs to the old workspace
+  const switchTo = (id: string) => act(async () => (await api.switchWorkspace(id), location.reload()));
+  const leave = () => act(async () => (await api.removeMember(current!.id, me.user!.id), location.reload()));
+  const manage = current?.kind === 'team' && current.role === 'owner';
+  return (
+    <>
+      <div className="sectionbar">
+        <h2>Workspace</h2>
+      </div>
+      {err && (
+        <p className="error" role="alert">
+          {err}{' '}
+          {!list && (
+            <button type="button" className="text-action" onClick={() => void load()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
+      {!list && !err && <div className="empty">Loading your workspaces…</div>}
+      {list && (
+        <div className="pr-box name-box">
+          <label className="field">
+            <span>Working in</span>
+            <select className="input" value={list.active} onChange={(e) => void switchTo(e.target.value)}>
+              {list.workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} · {w.kind === 'personal' ? 'personal' : w.role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <form
+            className="pr-reply-actions"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void act(async () => (await switchTo((await api.createWorkspace(name.trim())).id), setName('')));
+            }}
+          >
+            <input className="input sm" aria-label="Name of the new team workspace" value={name} maxLength={64} placeholder="New team workspace" onChange={(e) => setName(e.target.value)} />
+            <button className="btn sm" disabled={!name.trim()}>
+              Create
+            </button>
+          </form>
+        </div>
+      )}
+      {list && current?.role === 'owner' && (
+        <div className="pr-box name-box">
+          {(['design', 'build'] as const).map((stage) => (
+            <label key={stage} className="field">
+              <span>
+                PR title rule for {stage} runs{' '}
+                {saved === stage && (
+                  <span className="muted" role="status">
+                    · saved
+                  </span>
+                )}
+              </span>
+              <input
+                className="input"
+                defaultValue={list.config.prTitle?.[stage] ?? ''}
+                maxLength={500}
+                placeholder="e.g. Start the title with the ticket key. Empty: follow each repo's own format."
+                onChange={() => setSaved(null)}
+                onBlur={(e) => {
+                  const next = { ...list.config.prTitle, [stage]: e.target.value.trim() || undefined };
+                  if ((list.config.prTitle?.[stage] ?? '') !== e.target.value.trim())
+                    void act(async () => (setList({ ...list, config: (await api.setWorkspaceConfig(list.active, next)).config }), setSaved(stage)));
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+              />
+            </label>
+          ))}
+        </div>
+      )}
+      {current?.kind === 'team' && (
+        <div className="section-list">
+          {members.map((m) => (
+            <div key={m.userId} className="row">
+              <div className="copy">
+                <b>{m.name}</b>
+                <span>{m.email ?? 'local user'}</span>
+              </div>
+              <div className="actions">
+                {manage ? (
+                  <select className="input sm" aria-label={`Role for ${m.name}`} value={m.role} onChange={(e) => void changeMembers(() => api.setMember(current.id, m.userId, e.target.value as Role))}>
+                    {(['owner', 'member', 'viewer'] as Role[]).map((r) => (
+                      <option key={r}>{r}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="muted">{m.role}</span>
+                )}
+                {manage &&
+                  (removing === m.userId ? (
+                    <button className="btn sm danger" onClick={() => (setRemoving(null), void changeMembers(() => api.removeMember(current.id, m.userId)))}>
+                      Confirm: {m.name} loses access
+                    </button>
+                  ) : (
+                    <button className="btn sm ghost" onClick={() => setRemoving(m.userId)}>
+                      Remove
+                    </button>
+                  ))}
+              </div>
+            </div>
+          ))}
+          {manage && (
+            <form
+              className="row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void changeMembers(() => api.setMember(current.id, who.trim(), role)).then(() => setWho(''));
+              }}
+            >
+              <div className="copy">
+                <input className="input sm" aria-label="Name or e-mail of the person to add" value={who} placeholder="Name or e-mail of someone who has signed in" onChange={(e) => setWho(e.target.value)} />
+              </div>
+              <div className="actions">
+                <select className="input sm" aria-label="Role for the new member" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+                  {(['owner', 'member', 'viewer'] as Role[]).map((r) => (
+                    <option key={r}>{r}</option>
+                  ))}
+                </select>
+                <button className="btn sm" disabled={!who.trim()}>
+                  Add
+                </button>
+              </div>
+            </form>
+          )}
+          {!manage && me.user && (
+            <div className="row">
+              <div className="copy">
+                <span>You are a {current.role} here: members and roles are managed by an owner.</span>
+              </div>
+              <div className="actions">
+                {removing === me.user.id ? (
+                  <button className="btn sm danger" onClick={() => void leave()}>
+                    Confirm: leave {current.name}
+                  </button>
+                ) : (
+                  <button className="btn sm ghost" onClick={() => setRemoving(me.user!.id)}>
+                    Leave workspace
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// Machines that run this workspace's agents by pulling jobs from here. Runs start on the one inside this app unless it is turned off.
+function Runners({ role }: { role: Role | null }) {
+  const [list, setList] = useState<Runner[] | null>(null);
+  const [name, setName] = useState('');
+  const [fresh, setFresh] = useState<{ id: string; name: string; token: string } | null>(null);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => api.runners().then((r) => (setList(r.runners), setErr(null)), (e) => setErr(e.message));
+  useEffect(() => void load(), []);
+  const act = async (f: () => Promise<unknown>) => {
+    setErr(null);
+    try {
+      await f();
+    } catch (e: any) {
+      setErr(e.message);
+    }
+    await load();
+  };
+  const owner = role === 'owner';
+  const command = fresh && `LEGOS_CONTROL_URL=${location.origin} LEGOS_RUNNER_TOKEN=${fresh.token} npm run runner`;
+  return (
+    <>
+      <div className="sectionbar">
+        <h2>Runners</h2>
+      </div>
+      {err && (
+        <p className="error" role="alert">
+          {err}{' '}
+          {!list && (
+            <button type="button" className="text-action" onClick={() => void load()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
+      {owner ? (
+        <form
+          className="pr-box name-box"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act(async () => (setFresh(await api.addRunner(name.trim())), setCopied(false), setName('')));
+          }}
+        >
+          <div className="pr-reply-actions">
+            <input className="input sm" aria-label="Runner name" value={name} maxLength={64} placeholder="Name of a machine, e.g. build-box" onChange={(e) => setName(e.target.value)} />
+            <button className="btn sm" disabled={!name.trim()}>
+              Add runner
+            </button>
+          </div>
+          <div aria-live="polite">
+            {fresh && (
+              <p className="muted">
+                Token for {fresh.name}, shown once. On that machine run:
+                <br />
+                <code className="mono">{command}</code>{' '}
+                <button type="button" className="text-action" onClick={() => void navigator.clipboard?.writeText(command!).then(() => setCopied(true))}>
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </p>
+            )}
+          </div>
+        </form>
+      ) : (
+        role && <p className="footnote">Read-only: only an owner of this workspace adds or revokes runners.</p>
+      )}
+      {!list && !err && <div className="empty">Loading runners…</div>}
+      {list && !list.length && <div className="empty">No runners yet. Runs start on the one inside this app, unless it is turned off.</div>}
+      {!!list?.length && (
+        <div className="section-list">
+          {list.map((r) => (
+            <div key={r.id} className="row">
+              <div className="copy">
+                <b>{r.name}</b>
+                <span>{r.online ? 'online' : r.lastSeenAt ? `last seen ${new Date(r.lastSeenAt).toLocaleString()}` : 'never connected'}</span>
+              </div>
+              {owner && (
+                <div className="actions">
+                  {revoking === r.id ? (
+                    <button className="btn sm danger" onClick={() => (setRevoking(null), fresh?.id === r.id && setFresh(null), void act(() => api.removeRunner(r.id)))}>
+                      Confirm: its running jobs stop
+                    </button>
+                  ) : (
+                    <button className="btn sm ghost" onClick={() => setRevoking(r.id)}>
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -87,7 +372,7 @@ function Repositories() {
           </div>
         </div>
       )}
-      {err && <p className="error">{err}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
       {list && !list.length && !adding && <div className="empty">No repos yet. Add the repos you work on — new tasks, pull requests and Reviews use only these.</div>}
       {!!list?.length && (
         <div className="section-list">
@@ -167,7 +452,7 @@ function Connections({ list, error, reload }: { list: Connection[] | null; error
 
   return (
     <>
-      <div className="sectionbar" style={{ marginTop: 0 }}>
+      <div className="sectionbar">
         <h2>Connections</h2>
         {!adding && (
           <button className="text-action" onClick={() => setAdding(true)}>
@@ -185,7 +470,7 @@ function Connections({ list, error, reload }: { list: Connection[] | null; error
           }}
         />
       )}
-      {(err || error) && <p className="error">{err ?? error}</p>}
+      {(err || error) && <p className="error" role="alert">{err ?? error}</p>}
       {list && !list.length && !adding && <div className="empty">No connections yet. Add workbench or any MCP server — every chat and task can then use it.</div>}
       {!!list?.length && (
         <div className="section-list">
@@ -312,7 +597,7 @@ function AddConnection({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
           </label>
         </div>
       )}
-      {err && <p className="error">{err}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
       <div className="add-conn-actions">
         <button type="button" className="btn ghost" onClick={onCancel}>
           Cancel
@@ -431,7 +716,7 @@ function Integrations({ workbenchUrl }: { workbenchUrl: string | null }) {
             </div>
             <input className="input" placeholder="Search apps" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error" role="alert">{error}</p>}
           {!list && !error ? (
             <div className="empty">Asking workbench…</div>
           ) : (

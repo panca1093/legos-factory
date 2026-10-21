@@ -1,12 +1,12 @@
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { Connections } from '../server/connections.ts';
 import { openDb } from '../server/db.ts';
-import { alive, fakeServers, OTHER, WB } from './fakes.ts';
+import { alive, fakeServers, OTHER, useEnv, WB } from './fakes.ts';
 
 function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   const srv = fakeServers(opts);
@@ -21,7 +21,7 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   const path = join(mkdtempSync(join(tmpdir(), 'lf-conn-')), 'factory.db');
   const db = openDb(path);
   // a second view on the same rows as the app's own (sign-in off: everything belongs to 'local')
-  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', db, owner: 'local', fetch: fetchFn });
+  const conns = new Connections({ callbackUrl: 'http://localhost:4317/auth/callback', db, workspaceId: 'local', fetch: fetchFn });
   const runs = new RunManager(alive);
   const app = createApp(runs, { db, selfUrl: 'http://localhost:4317', fetch: fetchFn, hubUrl: opts.hub ? 'https://hub.test' : null });
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
@@ -42,10 +42,7 @@ function setup(opts: { expiresIn?: number; hub?: boolean } = {}) {
   return { srv, conns, runs, req, post, connect, addWorkbench, path, pushed, runCount };
 }
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 describe('adding connections', () => {
   it('validates input', async () => {

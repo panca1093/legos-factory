@@ -8,6 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc",
     "dev:team": "concurrently -k -n hub,server,web \"LEGOS_MODE=hub tsx watch --env-file-if-exists=.env.local server/index.ts\" \"LEGOS_HUB_URL=http://localhost:4400 tsx watch --env-file-if-exists=.env.local server/index.ts\" \"vite\"",
+    "runner": "tsx --env-file-if-exists=.env.local server/runner-main.ts",
     "hub": "LEGOS_MODE=hub tsx --env-file-if-exists=.env.local server/index.ts"
   },
   "type": "module",
@@ -19,6 +20,7 @@
     "marked": "18.0.14",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "yaml": "^2.8.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

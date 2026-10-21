@@ -1,14 +1,13 @@
-import { rm } from 'node:fs/promises';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { buildDeps, createApp } from './app.ts';
+import { buildDeps, createApp, sweepOrphans } from './app.ts';
 import { RunManager } from './claude-runs.ts';
 import { openDb } from './db.ts';
 import { startSyncLoop } from './jira-sync.ts';
 import { createHub } from './hub.ts';
+import { embeddedByDefault, loopbackBind } from './http.ts';
 import { Users } from './users.ts';
 import { Workbench } from './workbench.ts';
-import { workspacesDir } from './workspace.ts';
 
 const port = Number(process.env.LEGOS_API_PORT ?? 4317);
 const selfUrl = `http://localhost:${port}`;
@@ -25,8 +24,6 @@ function startHub() {
 }
 
 async function startApp() {
-  // runs don't survive a restart, so neither do their throwaway clones
-  await rm(workspacesDir(), { recursive: true, force: true });
   const runs = new RunManager();
   const db = openDb();
   const users = process.env.LEGOS_AUTH === 'off' ? null : new Users(db);
@@ -35,8 +32,26 @@ async function startApp() {
   // a bare workbench host means its MCP endpoint
   const workbenchUrl = wb ? (new URL(wb).pathname === '/' ? `${wb}/mcp` : wb) : null;
   const bitbucketWorkspace = process.env.LEGOS_BITBUCKET_WORKSPACE?.trim() || null;
-  const opts = { users, db, selfUrl, hubUrl, workbenchUrl, bitbucketWorkspace };
+  const oidc = process.env.LEGOS_OIDC_ISSUER
+    ? {
+        issuer: process.env.LEGOS_OIDC_ISSUER,
+        clientId: process.env.LEGOS_OIDC_CLIENT_ID ?? '',
+        clientSecret: process.env.LEGOS_OIDC_CLIENT_SECRET ?? '',
+        label: process.env.LEGOS_OIDC_NAME,
+        scopes: process.env.LEGOS_OIDC_SCOPES,
+        allowedDomains: process.env.LEGOS_OIDC_ALLOWED_DOMAINS?.split(',').filter(Boolean),
+      }
+    : null;
+  if (oidc && (!oidc.clientId || !oidc.clientSecret)) throw new Error('LEGOS_OIDC_CLIENT_ID and LEGOS_OIDC_CLIENT_SECRET are required with LEGOS_OIDC_ISSUER');
+  const publicUrl = process.env.LEGOS_PUBLIC_URL?.replace(/\/$/, '') || null;
+  const leaseMs = Number(process.env.LEGOS_LEASE_MS) || undefined;
+  const maxAttempts = Number(process.env.LEGOS_MAX_ATTEMPTS) || undefined;
+  // loopback unless this is a team control plane that runners on other machines must reach (then put TLS in front)
+  const hostname = process.env.LEGOS_BIND || '127.0.0.1';
+  const embeddedRunner = embeddedByDefault(process.env.LEGOS_RUNNER, !loopbackBind(hostname) || !!publicUrl);
+  const opts = { users, db, selfUrl, bind: hostname, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
   const deps = buildDeps(runs, opts);
+  sweepOrphans(deps);
   const app = createApp(runs, opts, deps);
   startSyncLoop(deps, Number(process.env.LEGOS_SYNC_MS ?? 120_000));
   // warm the model list so the first picker open isn't waiting on a CLI spawn
@@ -47,9 +62,9 @@ async function startApp() {
     app.get('*', serveStatic({ path: './dist/index.html' }));
   }
 
-  serve({ fetch: app.fetch, hostname: '127.0.0.1', port }, () => {
+  serve({ fetch: app.fetch, hostname, port }, () => {
     console.log(
-      `legos-factory api on ${selfUrl} · sign-in ${users ? `PIN${workbenchUrl ? ' + workbench' : ''}` : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'}`,
+      `legos-factory api on ${selfUrl} · sign-in ${users ? ['PIN', workbenchUrl && 'workbench', oidc && 'OpenID Connect'].filter(Boolean).join(' + ') : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'} · runner ${embeddedRunner ? 'embedded' : 'remote only'}`,
     );
   });
 }

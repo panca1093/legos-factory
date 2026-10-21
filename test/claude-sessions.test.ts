@@ -1,12 +1,11 @@
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { getSession, listSessions, toEvents } from '../server/claude-sessions.ts';
+import { useEnv } from './fakes.ts';
 
 const ID = '11111111-1111-1111-1111-111111111111';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects') });
 
 describe('session summary', () => {
   it('dedupes usage by message id and adds subagent usage', async () => {

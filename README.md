@@ -13,7 +13,7 @@ Local mission control for coding agents. v1 runtime: Claude Code. Codex and Herm
 - **Reviews** — open PRs from others that wait on you: you're a reviewer, or someone @-mentioned you in a comment. "Review with factory" drafts a review you post yourself.
 - **PR replies and Ask factory** — reply to any review comment from the PR page, or tick comments and **Ask factory**: one comment at a time, a read-only run proposes a fix, you approve (or edit, or skip), a fix run commits and pushes to the PR branch, and the factory replies on the comment with the commit. Then the next one.
 
-- **My repos** — each user lists the Bitbucket repos they maintain (Settings, up to 25). New tasks, PR pages, a ticket's PR lookup and Reviews work only on those; removing a repo keeps its history.
+- **My repos** — each workspace lists the Bitbucket repos it maintains (Settings, up to 25). New tasks, PR pages, a ticket's PR lookup and Reviews work only on those; removing a repo keeps its history.
 - **Connections** — add workbench or any remote MCP server in Settings (OAuth or a static header); every new chat and task gets them as MCP tools.
 
 Runs load your user/project settings, so MCP servers (Jira, Bitbucket, …) and skills work as in the CLI. Nothing org-specific lives here.
@@ -27,19 +27,55 @@ npm test
 
 `npm run build && npm start` serves the built UI from the API port. `npm run dev:team` also starts a local team hub (`LEGOS_MODE=hub`, :4400) for My activity / Team activity.
 
+## Architecture
+
+- **Control plane** (`server/app.ts` and routes): Hono API and the React UI over one SQLite file. It owns workspaces, connections, repos, work items, the run queue (`server/dispatcher.ts`) and the live picture of every run (`server/runs.ts`).
+- **Runner** (`server/runner.ts`, `npm run runner`): executes the agent through the Claude Agent SDK on its own machine and talks to the control plane over `/runner/*`. One is embedded by default.
+- **Stage engine** (`server/stages.ts`, `workflows/factory`): moves each repo of a work item through the factory workflow on facts.
+- **Ports and providers** (`server/ports.ts`, `server/providers`): WorkSource and Forge, with Jira, Bitbucket (through workbench) and GitHub implementations.
+- **Workspaces** (`server/tenancy.ts`): the tenancy unit, with roles; sign-in by PIN, workbench or OpenID Connect.
+
+## Modes: one person or a team
+
+legos-factory is a **control plane** (this app: API, UI, database, the run queue) plus **runners** (processes that execute the agent). Runners only ever call the control plane, over outbound HTTPS, like CI runners.
+
+- **Personal (default).** One process: the control plane and an embedded runner on the same machine. Nothing to configure; it works exactly as before.
+- **Team.** Self-host one control plane for the team and give every build machine a runner:
+
+  ```bash
+  # control plane: no runner of its own, reachable by runners (put TLS in front of it)
+  LEGOS_RUNNER=off LEGOS_BIND=0.0.0.0 LEGOS_PUBLIC_URL=https://factory.example.com npm start
+
+  # a build machine: mint a token in Settings → Runners (owners), then
+  LEGOS_CONTROL_URL=https://factory.example.com LEGOS_RUNNER_TOKEN=lfr_... npm run runner
+  ```
+
+  A runner serves the workspace its token was minted in. It runs the agent with the machine's own Claude login: a user's Claude subscription never reaches the control plane. Git and connection credentials are attached per run (see Notes), and the run's clone lives on the runner. Repo runs go to any runner of the workspace; runs in a plain folder, and Ask factory, need the embedded runner.
+
+Runs are queued in the database and handed out highest priority first, then first come first served (chats before tasks). A runner claims a job with a lease and keeps it alive with heartbeats (`LEGOS_LEASE_MS`, default 60 s); a job whose runner goes quiet returns to the queue and resumes its Claude session, and fails after `LEGOS_MAX_ATTEMPTS` (default 3) claims. Each runner takes at most its capacity at once (`LEGOS_MAX_RUNS`, default 3). See `docs/specs/runner-dispatcher.md`.
+
+## Stages
+
+A work item (Jira tab → Work on this) takes each repo through the workflow in `workflows/factory/factory.yaml`: **Design** (spec PR) → gate → **Build** → **Inspect** → **Catalog**. Gates open on facts the forge or a person reports — `pr.merged`, `ci.passed`, `human.approved` — never on what an agent says. Merging the spec PR unlocks Build, which starts only from its **Start build** button. Inspect is a read-only reviewer on the build PR; if it asks for changes, Build runs again with its findings, at most 3 times, then a person decides. Jira statuses move forward by themselves as before. See `docs/specs/stage-engine.md`.
+
+## Ports
+
+The core talks to tickets and code hosting through two small interfaces in `server/ports.ts`: **WorkSource** (list/get a ticket, move its status, comment) and **Forge** (repos, pull requests, diff, comments, merge, clone credential). One module per provider implements them in `server/providers`: Jira and Bitbucket through workbench (what ships), and a read-only GitHub forge that proves the contract. Organisation-specific text lives in per-workspace configuration, not code: Jira project → repo mapping (Settings → Repositories) and PR title rules per stage (Settings → Workspace). See `docs/specs/ports.md`.
+
 ## Notes
 
-- Everything legos-factory owns lives in one SQLite file, `~/.legos-factory/factory.db` (0600): users, their connections, their repos and their runs.
-- Sign-in, two separate kinds of user: local users (name + 6-digit PIN, scrypt; anyone at the machine can add one) and, with `LEGOS_WORKBENCH_URL` set, "Sign in with workbench" (OAuth 2.1 + PKCE; that user starts with workbench already connected). Sessions are HMAC-signed cookies for 30 days. Five wrong PINs lock a name for 30 s, doubling per further miss. `LEGOS_AUTH=off` skips sign-in for local dev.
-- Each user sees only their own runs, decisions, sessions and connections. Sessions lists only conversations started here (transcripts are still read from Claude's own JSONL); terminal sessions never show up.
-- Connections (Settings): a workbench or any MCP server, via OAuth 2.1 (discovery, dynamic client registration, PKCE) or a static header. Credentials stay server-side in `factory.db`, per user; runs reach each of their owner's servers through a local proxy (`/mcp/<name>`) that attaches them fresh. A connected workbench also enables the apps list, Jira tasks and the team hub.
+- Everything legos-factory owns lives in one SQLite file, `~/.legos-factory/factory.db` (0600): users, workspaces, and each workspace's connections, repos, work items and runs.
+- Sign-in has three providers, each its own kind of user: **PIN** (name + 6-digit PIN, scrypt; anyone at the machine can add one; offered only on `localhost`, never over the network), **workbench** with `LEGOS_WORKBENCH_URL` (OAuth 2.1 + PKCE; that user starts with workbench already connected) and **OpenID Connect** for any standards-compliant issuer. Sessions are HMAC-signed cookies for 30 days (`Secure` behind an https `LEGOS_PUBLIC_URL`). Five wrong PINs lock a name for 30 s, doubling per further miss. `LEGOS_AUTH=off` skips sign-in for local dev.
+- OpenID Connect: set `LEGOS_OIDC_ISSUER`, `LEGOS_OIDC_CLIENT_ID` and `LEGOS_OIDC_CLIENT_SECRET` (optionally `LEGOS_OIDC_NAME` for the button, `LEGOS_OIDC_SCOPES`, and `LEGOS_OIDC_ALLOWED_DOMAINS` to limit who may sign in by e-mail domain) and register `<LEGOS_PUBLIC_URL>/auth/oidc/callback` as the redirect URI. The app discovers the issuer's endpoints, uses the authorization-code flow with PKCE, and accepts an ID token only if its RS256 signature, issuer, audience, expiry and nonce check out and the issuer has not flagged the e-mail as unverified. A new person gets a personal workspace; a team owner adds them to a team by e-mail.
+- **Workspaces** are the tenancy unit. Every user gets a personal workspace (a team of one); a team workspace has many members with a role each: `owner` (connections, repos, members), `member` (runs and work items) and `viewer` (read-only). Roles are enforced in the API. Switch workspace and manage members in Settings. Runs, decisions, sessions, connections, repos and work items belong to a workspace and are invisible to everyone outside it. Sessions lists only conversations started here (transcripts are still read from Claude's own JSONL); terminal sessions never show up.
+- Connections (Settings): a workbench or any MCP server, via OAuth 2.1 (discovery, dynamic client registration, PKCE) or a static header. Credentials stay server-side in `factory.db`, per workspace; runs reach each of their owner's servers through a local proxy (`/mcp/<name>`) that attaches them fresh. A connected workbench also enables the apps list, Jira tasks and the team hub.
 
-- Git clone, pull and push use your own Bitbucket identity through workbench (`bitbucket_get_clone_url`), not an SSH key: clones use plain `https://bitbucket.org/...` remotes, and a credential helper in each clone asks this app (`/git/credential`, local hosts and live runs only) for a fresh short-lived token for that run's own repo while it is in My repos. Pushing needs repository write access on your workbench connection. See `docs/specs/git-via-workbench.md`.
+- Git clone, pull and push use the workspace's Bitbucket identity through workbench (`bitbucket_get_clone_url`), not an SSH key: clones use plain `https://bitbucket.org/...` remotes, and a credential helper in each clone asks this app (`/git/credential`, with the run's own secret, for live runs only) for a fresh short-lived token for that run's own repo while it is in My repos. Pushing needs repository write access on your workbench connection. See `docs/specs/git-via-workbench.md`.
 
-- Reviews and Ask factory go through workbench's Bitbucket tools, which have two gaps: no threaded replies (a reply is a new comment on the same line, quoting the original) and no search for review requests (Reviews scans the 40 most recently updated open PRs across your repos, matches you by Bitbucket account id — your name comes from the Reviews page, else workbench, else your email — and caches for 5 minutes). Ask factory works on its own fresh clone of the PR branch (`pr-<id>` under the workspaces dir), so your own checkout is never touched; its shell commands (tests, commit, push) still ask in Needs you.
+- Reviews and Ask factory go through the Forge port (Bitbucket via workbench), which has two gaps: no threaded replies (a reply is a new comment on the same line, quoting the original) and no search for review requests (Reviews scans the 40 most recently updated open PRs across your repos, matches you by Bitbucket account id — your name comes from the Reviews page, else workbench, else your email — and caches for 5 minutes). Ask factory works on its own fresh clone of the PR branch (`pr-<id>` under the workspaces dir), so your own checkout is never touched; its shell commands (tests, commit, push) still ask in Needs you.
 
-- Binds to 127.0.0.1 only. `/api` rejects non-local `Host` and requires `x-legos: 1` on writes, since launching a run executes code.
-- Each live session is a `claude` process. Live runs are in memory; restarting the server marks the unfinished ones failed (their transcripts stay under Sessions and can be continued).
+- Binds to 127.0.0.1 unless `LEGOS_BIND` says otherwise (team control planes; put TLS in front). `/api` rejects any `Host` that is not localhost or the host of `LEGOS_PUBLIC_URL`, and requires `x-legos: 1` on writes, since launching a run executes code. PIN users exist only for connections from this machine's own socket, and not at all when `LEGOS_BIND` is not loopback or `LEGOS_PUBLIC_URL` is set.
+- Each live session is a `claude` process. Restarting the server does not fail unfinished runs: those that were working go back in the queue and resume their Claude session (a clone is kept and reused); a chat that was only waiting for you ends and can be continued from Sessions. Ask factory queues live in memory and still end.
 - Cost is Claude Code's API-equivalent estimate, not an invoice.
 - Team sharing per folder (Private / Status / Full) and `jiraFlow` (the status names the Jira sync moves a ticket through, default To Do / In Progress / Code Review / Ready for QA) live in `~/.legos-factory/settings.json` (`LEGOS_SETTINGS` overrides). Private unless a rule says otherwise; nothing is sent anywhere until the team hub exists.
 - `LEGOS_SYNC_MS` sets how often work items are synced to Jira (default 120000 ms).

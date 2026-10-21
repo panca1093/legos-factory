@@ -1,14 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Role, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StageView, StreamMessage, WorkItem, WorkspaceConfig, WorkspaceInfo, WorkspaceMember } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
-  // "Sign in with workbench" is configured
-  workbenchLogin: boolean;
+  // PIN sign-in is offered: only when the app is reached from this machine
+  pin: boolean;
+  // the outside providers people can sign in with: workbench, OpenID Connect
+  providers: { id: 'workbench' | 'oidc'; label: string }[];
   // local (PIN) users, for the sign-in screen
   users: string[];
   authenticated: boolean;
-  user: { id: string; kind: 'pin' | 'workbench'; name: string; email: string | null } | null;
+  user: { id: string; kind: 'pin' | 'workbench' | 'oidc'; name: string; email: string | null } | null;
 };
 
 // Any 401 means the session ended (logout elsewhere, refresh failed): show the sign-in screen.
@@ -34,6 +36,8 @@ export type Connection = {
 };
 export type NewConnection = Pick<Connection, 'name' | 'kind' | 'url' | 'auth'> & { headers?: Record<string, string> };
 
+export type Runner = { id: string; name: string; createdAt: string; lastSeenAt: string | null; online: boolean };
+
 export type Integration = { name: string; version: string | null; connected: boolean };
 export type JiraDev = {
   prs: { count: number; state: string | null; open: boolean } | null;
@@ -43,7 +47,7 @@ export type JiraDev = {
 };
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
-export type { Stage, WorkItem };
+export type { Role, Stage, StageView, WorkItem, WorkspaceConfig, WorkspaceInfo, WorkspaceMember };
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -64,6 +68,16 @@ export type JiraIssue = JiraRow & {
 export type JiraRow = { key: string; summary: string; status: string | null; assignee: string | null; priority: string | null; updated: string | null; dev: JiraDev | null };
 
 export const api = {
+  workspaces: () => call<{ active: string; workspaces: WorkspaceInfo[]; config: WorkspaceConfig }>('/api/workspaces'),
+  setWorkspaceConfig: (id: string, prTitle: NonNullable<WorkspaceConfig['prTitle']>) => call<{ config: WorkspaceConfig }>(`/api/workspaces/${id}/config`, { method: 'PUT', body: JSON.stringify({ prTitle }) }),
+  createWorkspace: (name: string) => call<WorkspaceInfo>('/api/workspaces', { method: 'POST', body: JSON.stringify({ name }) }),
+  switchWorkspace: (id: string) => call<{ ok: true }>('/api/workspaces/active', { method: 'POST', body: JSON.stringify({ id }) }),
+  members: (id: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`),
+  setMember: (id: string, user: string, role: Role) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members`, { method: 'PUT', body: JSON.stringify({ user, role }) }),
+  removeMember: (id: string, userId: string) => call<{ members: WorkspaceMember[] }>(`/api/workspaces/${id}/members/${userId}`, { method: 'DELETE' }),
+  runners: () => call<{ runners: Runner[] }>('/api/runners'),
+  addRunner: (name: string) => call<Runner & { token: string }>('/api/runners', { method: 'POST', body: JSON.stringify({ name }) }),
+  removeRunner: (id: string) => call<{ ok: true }>(`/api/runners/${id}`, { method: 'DELETE' }),
   myActivity: (days: number) => call<{ items: ActivityItem[] }>(`/api/activity/me?days=${days}`),
   team: (days: number) => call<{ configured: boolean; me?: string; members?: TeamMember[] }>(`/api/team?days=${days}`),
   integrations: () => call<{ integrations: Integration[] }>('/api/workbench/integrations'),
@@ -73,8 +87,8 @@ export const api = {
   me: () => call<Me>('/auth/me'),
   createUser: (name: string, pin: string) => call<{ ok: true }>('/auth/users', { method: 'POST', body: JSON.stringify({ name, pin }) }),
   login: (name: string, pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ name, pin }) }),
-  workbenchSignIn: (attempt: string) => call<{ url: string }>('/auth/workbench', { method: 'POST', body: JSON.stringify({ attempt }) }),
-  claim: (attempt: string) => call<{ ok: boolean }>(`/auth/claim?attempt=${attempt}`),
+  providerSignIn: (id: string, attempt: string) => call<{ url: string; secret?: string }>(`/auth/providers/${id}`, { method: 'POST', body: JSON.stringify({ attempt }) }),
+  claim: (attempt: string, secret: string) => call<{ ok: boolean }>(`/auth/claim?attempt=${attempt}&secret=${encodeURIComponent(secret)}`),
   connections: () => call<{ connections: Connection[] }>('/api/connections'),
   addConnection: (c: NewConnection) => call<Connection>('/api/connections', { method: 'POST', body: JSON.stringify(c) }),
   removeConnection: (name: string) => call<{ ok: true }>(`/api/connections/${name}`, { method: 'DELETE' }),
@@ -105,6 +119,8 @@ export const api = {
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  startBuild: (ticket: string, repo: string) => call<Run>(`/api/work-items/${ticket}/repos/${repo}/start-build`, { method: 'POST', body: '{}' }),
+  approveBuild: (ticket: string, repo: string) => call<WorkItem>(`/api/work-items/${ticket}/repos/${repo}/approve`, { method: 'POST', body: '{}' }),
   linkPr: (ticket: string, repo: string, prId: number, kind: 'spec' | 'impl') => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
   setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
@@ -191,6 +207,12 @@ export function useFetch<T>(fn: () => Promise<T>, deps: unknown[]): { data: T | 
     };
   }, [...deps, n]);
   return { data, error, reload: () => setN((x) => x + 1) };
+}
+
+// The signed-in user's role in the workspace they act in; null until it is known.
+export function useRole(): Role | null {
+  const { data } = useFetch(api.workspaces, []);
+  return data?.workspaces.find((w) => w.id === data.active)?.role ?? null;
 }
 
 export function useNow(intervalMs = 30000): number {

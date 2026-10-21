@@ -1,8 +1,20 @@
 import { createHash } from 'node:crypto';
+import { afterAll, beforeAll } from 'vitest';
 import type { QueryFn } from '../server/claude-runs.ts';
 
 export const WB = 'https://wb.test';
 export const OTHER = 'https://tools.test';
+// what Hono's node adapter hands requests: the socket's remote address
+export const peer = (address = '127.0.0.1') => ({ incoming: { socket: { remoteAddress: address } } });
+// Sets env vars for a describe block or file and puts the previous values back after it.
+export function useEnv(vars: Record<string, string>) {
+  const before = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  beforeAll(() => void Object.assign(process.env, vars));
+  afterAll(() => {
+    for (const [k, v] of Object.entries(before)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  });
+}
+
 export const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 
 // Fake workbench (its own authorization server) plus a generic MCP server that delegates auth to it.

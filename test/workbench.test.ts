@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { adfToMarkdown, parseJiraDev, salvageComments, salvageDiff, Workbench } from '../server/workbench.ts';
+import { bitbucketForge, salvageComments, salvageDiff } from '../server/providers/bitbucket-workbench.ts';
+import { adfToMarkdown, jiraWorkSource, parseJiraDev } from '../server/providers/jira-workbench.ts';
+import { Workbench } from '../server/workbench.ts';
 
 // Shapes as Jira returns the Development field (values trimmed to what the parser reads)
 const MERGED_DEV =
@@ -143,17 +145,18 @@ describe('Workbench client', () => {
 
   it('searches and reads Jira through execute_tools', async () => {
     const { wb, seen } = fake();
-    expect(await wb.jiraSearch('tok', 'assignee = currentUser()', 20)).toEqual({
-      issues: [
+    const jira = jiraWorkSource(wb, 'tok');
+    expect(await jira.list({ filter: 'mine', query: 'assignee = currentUser()' }, 20)).toEqual({
+      items: [
         {
           key: 'PROJ-1', summary: 'Do it', status: 'To Do', assignee: 'P', priority: 'P2', updated: 'x',
           dev: { prs: { count: 1, state: 'MERGED', open: false }, builds: { ok: 1, failed: 0 }, deploys: [{ env: 'UAT', status: 'NOT_DEPLOYED' }], stale: true },
         },
       ],
-      nextPageToken: 'n1',
+      next: 'n1',
     });
     expect(seen.at(-1)!.args).toEqual({ executions: [{ tool: 'jira_search_issues', args: { jql: 'assignee = currentUser()', maxResults: 20, fields: ['summary', 'status', 'assignee', 'priority', 'updated', 'customfield_10000'] } }] });
-    expect(await wb.jiraIssue('tok', 'PROJ-1')).toMatchObject({ key: 'PROJ-1', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'], reporter: 'Rae', parent: 'PROJ-0', created: 'c1' });
+    expect(await jira.get('PROJ-1')).toMatchObject({ key: 'PROJ-1', description: 'details', url: 'https://jira/PROJ-1', labels: ['a'], reporter: 'Rae', parent: 'PROJ-0', created: 'c1' });
   });
 
   it('surfaces per-tool errors and returns the connect URL', async () => {
@@ -189,7 +192,7 @@ describe('cut-off comment lists', () => {
 
   it('returns the salvaged comments of a PR whose list was cut', async () => {
     const wb = scripted([cut]);
-    expect((await wb.bitbucketPrComments('tok', 'acme', 'api', 1)).map((x) => x.id)).toEqual([1, 2]);
+    expect((await bitbucketForge(wb, 'tok').comments({ workspace: 'acme', slug: 'api' }, 1)).map((x) => x.id)).toEqual([1, 2]);
   });
 });
 

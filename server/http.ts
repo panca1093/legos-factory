@@ -1,17 +1,25 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context } from 'hono';
 import type { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
-import type { RunManager, StartRequest } from './claude-runs.ts';
-import type { Run } from '../shared/types.ts';
+import type { Role, Run } from '../shared/types.ts';
 import type { ActivityLog } from './activity.ts';
 import type { Connections, Pending } from './connections.ts';
 import type { MyRepos } from './my-repos.ts';
 import type { FixQueues } from './pr-fixes.ts';
+import type { RunnerRegistry } from './runner-auth.ts';
+import type { StageStore } from './stages.ts';
+import type { Workflow } from './workflow.ts';
+import type { Runs } from './runs.ts';
+import type { Workspaces } from './tenancy.ts';
 import type { Users } from './users.ts';
 import type { WorkItems } from './work-items.ts';
-import { tokenFromCloneUrl, type Workbench } from './workbench.ts';
+import type { Oidc, OidcConfig } from './oidc.ts';
+import type { Forge, RepoRow, WorkSource } from './ports.ts';
+import type { Workbench } from './workbench.ts';
+import type { JobRequest } from './protocol.ts';
 import type { RepoRef } from './workspace.ts';
 
 export type AppOptions = {
@@ -20,53 +28,80 @@ export type AppOptions = {
   // defaults to a throwaway in-memory database
   db?: DatabaseSync;
   selfUrl?: string;
+  // the address the server listens on (LEGOS_BIND); anything but loopback makes this a network-facing control plane
+  bind?: string | null;
+  // where runners on other machines reach this app (put TLS in front); its host is accepted next to localhost
+  publicUrl?: string | null;
+  // false: this process only coordinates, runs execute on remote runners
+  embeddedRunner?: boolean;
+  // job leases: a runner that stays silent this long loses its jobs, which are claimed again up to maxAttempts times
+  leaseMs?: number;
+  maxAttempts?: number;
+  // how long a runner's poll waits for work before answering empty
+  pollWaitMs?: number;
   fetch?: typeof fetch;
   // team hub base URL; unset = no team activity
   hubUrl?: string | null;
+  // OpenID Connect provider for sign-in; unset hides that option
+  oidc?: OidcConfig | null;
   // workbench MCP URL behind "Sign in with workbench"; unset hides that option
   workbenchUrl?: string | null;
   // where repo runs get their throwaway clones, and how to reach a repo (see workspace.ts)
   workspaces?: string;
   gitUrl?: string;
+  // where factory.yaml and its personas live; defaults to the one in this repo
+  workflowDir?: string;
   // the Bitbucket workspace repos are listed from when none is asked for (the forge can't tell us)
   bitbucketWorkspace?: string | null;
 };
 
-export type Env = { Variables: { uid: string } };
+// uid is the signed-in user; ws and role are the workspace they act in and what they may do there
+export type Env = { Variables: { uid: string; ws: string; role: Role } };
 
 export type WorkbenchClient = { client: Workbench; token: string };
-export type Repos = Awaited<ReturnType<Workbench['bitbucketRepos']>>;
+export type Repos = RepoRow[];
 
 // What the route modules share; built once in createApp.
 export type Deps = {
-  runs: RunManager;
+  runs: Runs;
+  runners: RunnerRegistry;
+  oidc: Oidc | null;
+  // false when no runner lives in this process: runs there need a repo, so a runner can clone it
+  embedded: boolean;
+  hostOk: (host: string | undefined) => boolean;
+  // reachable beyond this machine (bound past loopback, or behind a public URL): no PIN users, no runs in local folders
+  networked: boolean;
   opts: AppOptions;
   users: Users | null;
+  workspaces: Workspaces;
   db: DatabaseSync;
   activity: ActivityLog;
   myRepos: MyRepos;
   workItems: WorkItems;
+  stages: StageStore;
+  workflow: Workflow;
   // the Jira sync running or queued per work item (see jira-sync.ts)
   syncs: Map<string, Promise<void>>;
   http: typeof fetch;
   fixes: FixQueues;
   wsRoot: string;
-  connsFor: (owner: string) => Connections;
-  // OAuth state -> whose connect it was, shared by every user's Connections
+  connsFor: (workspaceId: string) => Connections;
+  // OAuth state -> whose connect it was, shared by every workspace's Connections
   pending: Map<string, Pending>;
-  // the owner's connected workbench, if any: apps, Jira and the team hub go through it
-  workbench: (owner: string) => Promise<WorkbenchClient | null>;
-  workspaceRepos: (uid: string, wb: WorkbenchClient, workspace: string, refresh?: boolean) => Promise<Repos>;
+  // the workspace's connected workbench, if any: apps, Jira and the team hub go through it
+  workbench: (workspaceId: string) => Promise<WorkbenchClient | null>;
+  // where the workspace's code and tickets live; null until a workbench is connected
+  forge: (workspaceId: string) => Promise<Forge | null>;
+  workSource: (workspaceId: string) => Promise<WorkSource | null>;
+  workspaceRepos: (workspaceId: string, forge: Forge, namespace: string, refresh?: boolean) => Promise<Repos>;
   // per-run secret -> run, so only runs launched here reach the connections proxy and git credentials
   grants: Map<string, string>;
   // how Claude Code processes reach this app
   selfUrl: string;
-  // runs.start, plus a grant for repo runs (git credentials) and for the named connections (MCP proxy)
-  startRun: (req: StartRequest, mcpNames?: string[]) => Run;
-  // run -> its throwaway clone, deleted once no live run works in it
-  clones: Map<string, string>;
+  // queues a run; repo runs get git credentials and the named connections reach the MCP proxy, both at claim time
+  startRun: (req: Omit<JobRequest, 'id' | 'mcpNames' | 'gitHelper'>, mcpNames?: string[]) => Run;
   busyIn: (path: string) => boolean;
-  ownsRun: (uid: string, runId: string) => boolean;
+  ownsRun: (workspaceId: string, runId: string) => boolean;
 };
 
 export class HttpError extends Error {
@@ -85,6 +120,21 @@ export const BRANCH_RE = /^(?!-)[\w./-]{1,200}$/;
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const localOnly = (host: string | undefined) => LOCAL_HOSTS.has((host ?? '').replace(/:\d+$/, ''));
+
+const isLoopback = (addr: string) => addr === 'localhost' || addr === '::1' || addr === '::ffff:127.0.0.1' || /^127\./.test(addr);
+export const loopbackBind = (bind: string | null | undefined) => !bind || isLoopback(bind);
+
+// LEGOS_RUNNER=on|off wins; otherwise a control plane reached over the network leaves execution to remote runners.
+export const embeddedByDefault = (setting: string | undefined, networked: boolean) => (setting ? setting !== 'off' : !networked);
+
+// Decided by the socket's peer, never by headers a client controls.
+export function peerIsLocal(c: Context): boolean {
+  try {
+    return isLoopback(getConnInfo(c).remote.address ?? '');
+  } catch {
+    return false;
+  }
+}
 
 export const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -116,22 +166,31 @@ export const onError = (err: Error, c: Context) => {
   return c.text('Internal Server Error', 500);
 };
 
-export async function requireWorkbench(deps: Deps, uid: string, extra?: object) {
-  const wb = await deps.workbench(uid);
+export async function requireWorkbench(deps: Deps, workspaceId: string, extra?: object) {
+  const wb = await deps.workbench(workspaceId);
   if (!wb) throw new HttpError(409, NO_WB, extra);
   return wb;
 }
 
-// A short-lived Bitbucket token minted by the owner's workbench; never logged or stored.
-export async function gitToken(deps: Deps, uid: string, repo: RepoRef): Promise<string> {
-  const wb = await requireWorkbench(deps, uid);
-  const token = tokenFromCloneUrl(await upstream(wb.client.bitbucketCloneUrl(wb.token, repo.workspace, repo.slug)));
-  if (!token) throw new HttpError(502, 'workbench sent an unexpected clone URL');
-  return token;
+export async function requireForge(deps: Deps, workspaceId: string, extra?: object) {
+  const forge = await deps.forge(workspaceId);
+  if (!forge) throw new HttpError(409, NO_WB, extra);
+  return forge;
 }
 
-export function requireMyRepo(deps: Deps, uid: string, repo: string) {
-  if (!deps.myRepos.has(uid, repo)) throw new HttpError(403, 'repo is not in your repos', { needRepo: true });
+export async function requireWorkSource(deps: Deps, workspaceId: string, extra?: object) {
+  const source = await deps.workSource(workspaceId);
+  if (!source) throw new HttpError(409, NO_WB, extra);
+  return source;
+}
+
+// A short-lived git token minted by the workspace's forge; never logged or stored.
+export async function gitToken(deps: Deps, workspaceId: string, repo: RepoRef): Promise<string> {
+  return upstream((await requireForge(deps, workspaceId)).cloneToken(repo));
+}
+
+export function requireMyRepo(deps: Deps, workspaceId: string, repo: string) {
+  if (!deps.myRepos.has(workspaceId, repo)) throw new HttpError(403, 'repo is not in your repos', { needRepo: true });
 }
 
 // A body that isn't a JSON object reads as {}, so every field falls back to its default.

@@ -4,7 +4,7 @@ import { Workbench } from './workbench.ts';
 
 // Remote MCP servers every run can use, set up in Settings. Each one authenticates with either
 // OAuth 2.1 (dynamic client registration + PKCE) or static headers. A `workbench` connection is an
-// MCP gateway that also powers the apps, Jira and team-hub features. Each user has their own set.
+// MCP gateway that also powers the apps, Jira and team-hub features. Each workspace has its own set.
 
 export type ConnKind = 'workbench' | 'mcp';
 export type ConnAuth = 'oauth' | 'header';
@@ -35,8 +35,8 @@ export type ConnectionView = {
 export type NewConnection = { name: string; kind: ConnKind; url: string; auth: ConnAuth; headers?: Record<string, string> };
 
 type Metadata = { authorization_endpoint: string; token_endpoint: string; registration_endpoint?: string };
-// shared by every user's Connections so the one OAuth callback can find whose connect it was
-export type Pending = { owner: string; name: string; verifier: string; createdAt: number };
+// shared by every workspace's Connections so the one OAuth callback can find whose connect it was
+export type Pending = { workspaceId: string; name: string; verifier: string; createdAt: number };
 
 const PENDING_TTL_MS = 10 * 60_000;
 const REFRESH_SKEW_MS = 60_000;
@@ -64,25 +64,25 @@ export class Connections {
   private refreshing = new Map<string, Promise<string | null>>();
   private readonly http: typeof fetch;
 
-  constructor(private cfg: { callbackUrl: string; db: DatabaseSync; owner: string; fetch?: typeof fetch; pending?: Map<string, Pending> }) {
+  constructor(private cfg: { callbackUrl: string; db: DatabaseSync; workspaceId: string; fetch?: typeof fetch; pending?: Map<string, Pending> }) {
     this.http = cfg.fetch ?? fetch;
     this.pending = cfg.pending ?? new Map();
   }
 
   private async load() {
     if (this.loaded) return;
-    const rows = this.cfg.db.prepare(`select data from connections where owner = ? order by rowid`).all(this.cfg.owner) as { data: string }[];
+    const rows = this.cfg.db.prepare(`select data from connections where workspace_id = ? order by rowid`).all(this.cfg.workspaceId) as { data: string }[];
     this.list = rows.map((r) => JSON.parse(r.data));
     this.loaded = true;
   }
 
   private async save() {
-    const { db, owner } = this.cfg;
+    const { db, workspaceId } = this.cfg;
     db.exec('begin');
     try {
-      db.prepare(`delete from connections where owner = ?`).run(owner);
-      const put = db.prepare(`insert into connections (owner, name, data) values (?, ?, ?)`);
-      for (const c of this.list) put.run(owner, c.name, JSON.stringify(c));
+      db.prepare(`delete from connections where workspace_id = ?`).run(workspaceId);
+      const put = db.prepare(`insert into connections (workspace_id, name, data) values (?, ?, ?)`);
+      for (const c of this.list) put.run(workspaceId, c.name, JSON.stringify(c));
       db.exec('commit');
     } catch (err) {
       db.exec('rollback');
@@ -213,7 +213,7 @@ export class Connections {
     const state = b64url(randomBytes(16));
     const now = Date.now();
     for (const [k, p] of this.pending) if (now - p.createdAt > PENDING_TTL_MS) this.pending.delete(k);
-    this.pending.set(state, { owner: this.cfg.owner, name, verifier, createdAt: now });
+    this.pending.set(state, { workspaceId: this.cfg.workspaceId, name, verifier, createdAt: now });
     const url = new URL(meta.authorization_endpoint);
     url.search = new URLSearchParams({
       response_type: 'code',
@@ -242,7 +242,7 @@ export class Connections {
   // Trades the code for tokens without storing them; callback() stores, workbench sign-in hands them to the new user.
   async redeem(code: string, state: string): Promise<{ name: string; kind: ConnKind; url: string; oauth: OAuthState }> {
     const p = this.pending.get(state);
-    if (!p || p.owner !== this.cfg.owner) throw new Error('connect expired or was not started here — try again from Settings');
+    if (!p || p.workspaceId !== this.cfg.workspaceId) throw new Error('connect expired or was not started here — try again from Settings');
     this.pending.delete(state);
     if (Date.now() - p.createdAt > PENDING_TTL_MS) throw new Error('connect expired or was not started here — try again from Settings');
     const c = await this.find(p.name);

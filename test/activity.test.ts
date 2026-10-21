@@ -13,7 +13,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'lf-act-'));
 function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
   const now = new Date().toISOString();
   return {
-    id: 'r1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', stage: null, share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
+    id: 'r1', workspaceId: 'u1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', stage: null, share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
     cwd: '/work/acme/payments-api', prompt: 'Fix the thing\nwith details', permissionMode: 'default', status: 'running',
     requestedModel: 'default', model: 'claude-opus-5-5', startedAt: now, lastEventAt: now, endedAt: null, endedBy: null, turns: 1,
     error: null, estimatedCostUsd: 0.42, result: null, ...over,
@@ -33,10 +33,16 @@ describe('ActivityLog', () => {
     expect(items[0]).toMatchObject({ runId: 'r1', status: 'completed', title: 'Fix the thing', project: 'payments-api', estimatedCostUsd: 0.42 });
   });
 
-  it('marks runs that were still going as failed after a restart', async () => {
+  it('marks runs that were still going as failed after a restart, unless a job can resume them', async () => {
     const path = join(tmp(), 'factory.db');
-    await new ActivityLog(openDb(path)).record(run({ status: 'idle' }), 'u1');
-    expect((await new ActivityLog(openDb(path)).list('u1', 0))[0].status).toBe('failed');
+    const first = new ActivityLog(openDb(path));
+    await first.record(run({ id: 'gone', status: 'idle' }), 'u1');
+    await first.record(run({ id: 'queued', status: 'running' }), 'u1');
+    await first.record(run({ id: 'done', status: 'completed' }), 'u1');
+    const second = new ActivityLog(openDb(path));
+    second.failOrphans(new Set(['queued']));
+    const status = Object.fromEntries((await second.list('u1', 0)).map((i) => [i.runId, i.status]));
+    expect(status).toEqual({ gone: 'failed', queued: 'running', done: 'completed' });
   });
 
   it('keeps each owner to their own runs and sessions', async () => {

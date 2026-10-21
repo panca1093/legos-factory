@@ -10,7 +10,7 @@ import { RunManager, type StartRequest } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { MyRepos } from '../server/my-repos.ts';
 import { Users } from '../server/users.ts';
-import { tokenFromCloneUrl } from '../server/workbench.ts';
+import { tokenFromCloneUrl } from '../server/providers/bitbucket-workbench.ts';
 import { createWorkspace } from '../server/workspace.ts';
 import { alive, fakeServers, WB } from './fakes.ts';
 

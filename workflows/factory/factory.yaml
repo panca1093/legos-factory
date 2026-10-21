@@ -1,5 +1,10 @@
 # Read by the legos-factory engine only: stage order, personas and gates. What each stage does lives
-# in SKILL.md; the engine prompts "Run the <stage> stage of the factory skill for <ticket>".
+# in SKILL.md; the engine adds the persona and the stage's instructions to the run's prompt.
+#
+# Gates are facts reported by the forge or by a person, never claims made by an agent:
+#   pr.merged       the stage's pull request merged
+#   ci.passed       the forge reports the pull request's checks green
+#   human.approved  a person approved it in legos-factory
 name: factory
 start: ticket
 branch: feat/{ticket}
@@ -11,20 +16,20 @@ stages:
   - id: design
     persona: personas/foreman.md
     until: pr_open          # the stage's run is done once a PR from the branch exists
-    gate: pr_merged         # next stage unlocks when that PR merges
+    gate: [pr.merged]       # Build unlocks when that PR merges
 
   - id: build
     persona: personas/builder.md
+    start: manual           # only the "Start build" button begins it, once its gate is open
     until: pr_open
     on_pr_open: inspect     # start the Inspect stage as soon as PR #2 opens
-    gate: [no_blockers, approved]
+    gate: [ci.passed, human.approved]   # PR #2 is ready to merge
 
   - id: inspect
     persona: personas/inspector.md
     read_only: true         # engine denies edits, commits and pushes in this run
-    output: findings
+    output: findings        # a reject sends them back to Build, at most 3 times, then a person decides
 
   - id: catalog
     persona: personas/cataloger.md
-    after: merged           # runs once the build PR merges
-    gate: none
+    after: pr.merged        # runs once the build PR merges

@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { parseRepo, type RepoRef } from '../workspace.ts';
-import type { Pr, PrRow } from '../workbench.ts';
-import { BRANCH_RE, HttpError, TICKET_RE, errMsg, parse, readBody, requireMyRepo, requireWorkbench, text, upstream, type Deps, type Env, type WorkbenchClient } from '../http.ts';
+import type { Forge, Pr, PrRow } from '../ports.ts';
+import { BRANCH_RE, HttpError, TICKET_RE, errMsg, parse, readBody, requireForge, requireMyRepo, requireWorkbench, text, upstream, type Deps, type Env, type WorkbenchClient } from '../http.ts';
 
 // Review requests scan this many recently updated open PRs (each costs a get_pr and a comments call)
 const REVIEW_SCAN = 40;
@@ -40,21 +40,21 @@ export function prsRoutes(deps: Deps) {
   const { fixes } = deps;
   const routes = new Hono<Env>();
   const reviewCache = new Map<string, { at: number; body: object }>();
-  const myRepoRefs = (uid: string) => deps.myRepos.list(uid).map((r) => parseRepo(r.name)).filter((r) => r !== null);
+  const myRepoRefs = (ws: string) => deps.myRepos.list(ws).map((r) => parseRepo(r.name)).filter((r) => r !== null);
   const myPr = (c: Context<Env>) => {
     const ref = prRef(c);
-    requireMyRepo(deps, c.get('uid'), `${ref.workspace}/${ref.slug}`);
+    requireMyRepo(deps, c.get('ws'), `${ref.workspace}/${ref.slug}`);
     return ref;
   };
 
   // PRs for a ticket: its key in the source branch or title, looked up in my repos. The forge API can't search across repos.
   routes.get('/api/prs', async (c) => {
     const { ticket } = parse(ticketPrsQuery, c.req.query());
-    const wb = await requireWorkbench(deps, c.get('uid'));
-    const repos = myRepoRefs(c.get('uid'));
+    const forge = await requireForge(deps, c.get('ws'));
+    const repos = myRepoRefs(c.get('ws'));
     const hit = new RegExp(`(^|[^A-Z0-9])${ticket}([^0-9]|$)`, 'i');
     const prs = await upstream(
-      Promise.all(repos.flatMap((r) => (['OPEN', 'MERGED'] as const).map((st) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, st, st === 'OPEN' ? 50 : 30)))).then((found) =>
+      Promise.all(repos.flatMap((r) => (['OPEN', 'MERGED'] as const).map((st) => forge.listPrs(r, st, st === 'OPEN' ? 50 : 30)))).then((found) =>
         found
           .flat()
           .filter((p) => hit.test(p.source) || hit.test(p.title))
@@ -66,44 +66,39 @@ export function prsRoutes(deps: Deps) {
 
   routes.get('/api/prs/:ws/:slug/:id', async (c) => {
     const ref = myPr(c);
-    const wb = await requireWorkbench(deps, c.get('uid'));
-    const [pr, files, comments] = await upstream(
-      Promise.all([
-        wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
-        wb.client.bitbucketPrFiles(wb.token, ref.workspace, ref.slug, ref.id),
-        wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
-      ]),
-    );
+    const forge = await requireForge(deps, c.get('ws'));
+    const [pr, files, comments] = await upstream(Promise.all([forge.getPr(ref, ref.id), forge.files(ref, ref.id), forge.comments(ref, ref.id)]));
     return c.json({ pr, files, comments });
   });
 
   routes.get('/api/prs/:ws/:slug/:id/diff', async (c) => {
     const ref = myPr(c);
-    const wb = await requireWorkbench(deps, c.get('uid'));
-    return c.json(await upstream(wb.client.bitbucketPrDiff(wb.token, ref.workspace, ref.slug, ref.id)));
+    const forge = await requireForge(deps, c.get('ws'));
+    return c.json(await upstream(forge.diff(ref, ref.id)));
   });
 
   // Reply to a review comment, or post a general one. A reply lands on the same line, quoting the original.
   routes.post('/api/prs/:ws/:slug/:id/comments', async (c) => {
     const ref = myPr(c);
     const { text, replyTo } = parse(commentSchema, await readBody(c));
-    const wb = await requireWorkbench(deps, c.get('uid'));
-    const comment = await upstream(postComment(wb, ref, text, replyTo));
+    const forge = await requireForge(deps, c.get('ws'));
+    const comment = await upstream(postComment(forge, ref, text, replyTo));
     return c.json(comment, 201);
   });
 
   // Ask factory: work through the chosen comments one at a time (see pr-fixes.ts)
   routes.get('/api/prs/:ws/:slug/:id/fixes', (c) => {
     const ref = myPr(c);
-    return c.json({ queue: fixes.forPr(c.get('uid'), `${ref.workspace}/${ref.slug}`, ref.id) });
+    return c.json({ queue: fixes.forPr(c.get('ws'), `${ref.workspace}/${ref.slug}`, ref.id) });
   });
 
   routes.post('/api/prs/:ws/:slug/:id/fixes', async (c) => {
     const ref = myPr(c);
+    if (!deps.embedded) throw new HttpError(409, 'Ask factory works in a checkout on this machine: it needs the runner inside this app');
     const { commentIds } = parse(fixesSchema, await readBody(c));
-    const wb = await requireWorkbench(deps, c.get('uid'));
+    const forge = await requireForge(deps, c.get('ws'));
     const queue = await upstream(
-      startFixes(deps, c.get('uid'), wb, ref, commentIds).catch((err) => {
+      startFixes(deps, { uid: c.get('uid'), ws: c.get('ws') }, forge, ref, commentIds).catch((err) => {
         // FixQueues says 409 when the factory is already on this PR
         throw (err as { status?: number })?.status === 409 ? new HttpError(409, errMsg(err)) : err;
       }),
@@ -113,7 +108,7 @@ export function prsRoutes(deps: Deps) {
 
   const myQueue = (c: Context<Env>) => {
     const q = fixes.get(c.req.param('id')!);
-    if (!q || q.owner !== c.get('uid')) throw new HttpError(404, 'fix queue not found');
+    if (!q || q.workspaceId !== c.get('ws')) throw new HttpError(404, 'fix queue not found');
     return q;
   };
   for (const action of ['approve', 'skip', 'retry'] as const) {
@@ -134,15 +129,16 @@ export function prsRoutes(deps: Deps) {
   });
 
   routes.get('/api/reviews', async (c) => {
-    const uid = c.get('uid');
-    const wb = await requireWorkbench(deps, uid);
+    const ws = c.get('ws');
+    const wb = await requireWorkbench(deps, ws);
+    const forge = await requireForge(deps, ws);
     const { as } = parse(reviewsQuery, c.req.query());
-    const repos = myRepoRefs(uid);
+    const repos = myRepoRefs(ws);
     if (!repos.length) throw new HttpError(409, 'add the repos you review in Settings', { needRepos: true });
-    const key = `${uid}|${as}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
+    const key = `${ws}|${as}|${repos.map((r) => `${r.workspace}/${r.slug}`).join(',')}`;
     const hit = reviewCache.get(key);
     if (hit && Date.now() - hit.at < REVIEW_TTL_MS && c.req.query('refresh') !== '1') return c.json(hit.body);
-    const body = await upstream(reviewRequests(wb, repos, as));
+    const body = await upstream(reviewRequests(wb, forge, repos, as));
     reviewCache.set(key, { at: Date.now(), body });
     return c.json(body);
   });
@@ -153,25 +149,25 @@ export function prsRoutes(deps: Deps) {
 // Open PRs that want you: you're a reviewer, or someone @-mentioned you in a comment. The forge can't search
 // for that, so scan the latest open PRs of my repos. You are matched by Bitbucket user id when your name
 // resolves to one (looked up in the first repo's workspace), else by display name.
-async function reviewRequests(wb: WorkbenchClient, repos: RepoRef[], as: string) {
+async function reviewRequests(wb: WorkbenchClient, forge: Forge, repos: RepoRef[], as: string) {
   const me = as ? null : await wb.client.whoami(wb.token);
   const name = (as.includes('@') ? nameFromEmail(as) : as) || (me?.name ?? '').trim() || nameFromEmail(me?.email);
   if (!name) throw new HttpError(400, 'set your Bitbucket name to match review requests', { needName: true });
   const norm = (x: string | null) => (x ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
   const same = (a: string | null) => norm(a) === norm(name);
-  const uuid = (await wb.client.bitbucketSearchUsers(wb.token, repos[0].workspace, name).catch(() => [])).find((u) => same(u.name))?.uuid ?? null;
+  const uuid = (await forge.searchUsers(repos[0].workspace, name).catch(() => [])).find((u) => same(u.name))?.uuid ?? null;
   const isMe = (r: { name: string; uuid: string | null }) => (uuid && r.uuid ? r.uuid === uuid : same(r.name));
   const bareUuid = uuid?.replace(/[{}]/g, '');
   const mention = new RegExp(`@\\{?${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*')}`, 'i');
-  const open = (await pool(repos, 6, (r) => wb.client.bitbucketPrs(wb.token, r.workspace, r.slug, 'OPEN', 50)))
+  const open = (await pool(repos, 6, (r) => forge.listPrs(r, 'OPEN', 50)))
     .flat()
     .filter((p) => !same(p.author))
     .sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''))
     .slice(0, REVIEW_SCAN);
   const failed: string[] = [];
   const rows = await pool(open, 6, async (p): Promise<ReviewRequest | null> => {
-    const [ws, slug] = p.repo.split('/');
-    const read = await Promise.all([wb.client.bitbucketPr(wb.token, ws, slug, p.id), wb.client.bitbucketPrComments(wb.token, ws, slug, p.id)]).catch(() => null);
+    const [workspace, slug] = p.repo.split('/');
+    const read = await Promise.all([forge.getPr({ workspace, slug }, p.id), forge.comments({ workspace, slug }, p.id)]).catch(() => null);
     if (!read) return (failed.push(`${p.repo}#${p.id}`), null);
     const [pr, comments] = read;
     const mine = pr.reviewers.find(isMe);
@@ -208,34 +204,32 @@ async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): 
 
 type PrRef = ReturnType<typeof prRef>;
 
-async function postComment(wb: WorkbenchClient, ref: PrRef, text: string, replyTo: number | null) {
+async function postComment(forge: Forge, ref: PrRef, text: string, replyTo: number | null) {
   let inline: { path: string; line: number } | undefined;
   let full = text;
   if (replyTo !== null) {
-    const parent = (await wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id)).find((x) => x.id === replyTo);
+    const parent = (await forge.comments(ref, ref.id)).find((x) => x.id === replyTo);
     if (!parent) throw new HttpError(404, 'comment not found');
     if (parent.path && parent.line) inline = { path: parent.path, line: parent.line };
     const quoted = parent.text.split('\n').slice(0, 4).map((l) => `> ${l}`).join('\n');
     full = `${parent.author ? `> **${parent.author}:**\n` : ''}${quoted}\n\n${text}`;
   }
-  return wb.client.bitbucketAddComment(wb.token, ref.workspace, ref.slug, ref.id, full, inline);
+  return forge.addComment(ref, ref.id, full, inline);
 }
 
-async function startFixes({ fixes, workItems }: Deps, uid: string, wb: WorkbenchClient, ref: PrRef, commentIds: number[]) {
-  const [pr, comments] = await Promise.all([
-    wb.client.bitbucketPr(wb.token, ref.workspace, ref.slug, ref.id),
-    wb.client.bitbucketPrComments(wb.token, ref.workspace, ref.slug, ref.id),
-  ]);
+async function startFixes({ fixes, workItems }: Deps, who: { uid: string; ws: string }, forge: Forge, ref: PrRef, commentIds: number[]) {
+  const [pr, comments] = await Promise.all([forge.getPr(ref, ref.id), forge.comments(ref, ref.id)]);
   if (pr.state !== 'OPEN') throw new HttpError(409, 'only an open PR can take fixes');
   if (!BRANCH_RE.test(pr.source)) throw new HttpError(409, 'the PR branch name is not usable');
   const picked = [...new Set(commentIds)].map((id) => comments.find((x) => x.id === id));
   if (picked.some((x) => !x)) throw new HttpError(404, 'comment not found');
   return fixes.create({
-    owner: uid,
+    workspaceId: who.ws,
+    owner: who.uid,
     repo: `${ref.workspace}/${ref.slug}`,
     prId: ref.id,
     branch: pr.source,
-    ticket: workItems.ticketForPr(uid, `${ref.workspace}/${ref.slug}`, ref.id),
+    ticket: workItems.ticketForPr(who.ws, `${ref.workspace}/${ref.slug}`, ref.id),
     comments: picked.map((x) => ({ commentId: x!.id, author: x!.author, text: x!.text, path: x!.path, line: x!.line })),
   });
 }

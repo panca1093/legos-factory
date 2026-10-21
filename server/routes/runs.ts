@@ -7,6 +7,7 @@ import { getSession, listSessions } from '../claude-sessions.ts';
 import { gitBranch, loadSettings, settingsPath, shareFor } from '../policy.ts';
 import { HttpError, parse, readBody, text, type Deps, type Env } from '../http.ts';
 import { MODEL_RE, launchRun, launchSchema } from '../launch-run.ts';
+import { startBuild, startFirst } from '../stages.ts';
 
 const annotate = <T extends SessionSummary>(s: T, settings: Settings, tickets: Map<string, string>): T => ({
   ...s,
@@ -31,42 +32,47 @@ export function runsRoutes(deps: Deps) {
     return snap.type === 'snapshot' ? snap.decisions.find((d) => d.id === id) : undefined;
   };
 
-  // Other users' runs and decisions look like they don't exist.
+  // Other workspaces' runs and decisions look like they don't exist.
   routes.use('/api/runs/:id/*', async (c, next) => {
     const r = runs.get(c.req.param('id'));
-    if (r && r.owner !== c.get('uid')) return c.json({ error: 'run not found' }, 404);
+    if (r && r.workspaceId !== c.get('ws')) return c.json({ error: 'run not found' }, 404);
     await next();
   });
   routes.use('/api/decisions/:id/*', async (c, next) => {
     const d = decisionById(c.req.param('id'));
-    if (d && !ownsRun(c.get('uid'), d.runId)) return c.json({ error: 'decision no longer open' }, 410);
+    if (d && !ownsRun(c.get('ws'), d.runId)) return c.json({ error: 'decision no longer open' }, 410);
     await next();
   });
 
   routes.get('/api/sessions', async (c) => {
     const limit = Math.min(Number(c.req.query('limit') ?? 200) || 200, 1000);
     const active = runs.activeRunBySession();
-    const [list, settings] = await Promise.all([listSessions(activity.sessionIds(c.get('uid'), limit)), loadSettings()]);
-    const tickets = activity.sessionTickets(c.get('uid'));
+    const [list, settings] = await Promise.all([listSessions(activity.sessionIds(c.get('ws'), limit)), loadSettings()]);
+    const tickets = activity.sessionTickets(c.get('ws'));
     return c.json(list.map((s) => ({ ...annotate(s, settings, tickets), activeRunId: active.get(s.id) ?? null })));
   });
 
   routes.get('/api/sessions/:id', async (c) => {
     const id = c.req.param('id');
-    const s = activity.ownsSession(c.get('uid'), id) ? await getSession(id) : null;
+    const s = activity.ownsSession(c.get('ws'), id) ? await getSession(id) : null;
     if (!s) throw new HttpError(404, 'session not found');
-    return c.json({ ...annotate(s, await loadSettings(), activity.sessionTickets(c.get('uid'))), activeRunId: runs.activeRunBySession().get(s.id) ?? null });
+    return c.json({ ...annotate(s, await loadSettings(), activity.sessionTickets(c.get('ws'))), activeRunId: runs.activeRunBySession().get(s.id) ?? null });
   });
 
   routes.get('/api/runs/:id', (c) => {
     const r = runs.get(c.req.param('id'));
-    if (!r || r.owner !== c.get('uid')) throw new HttpError(404, 'run not found');
+    if (!r || r.workspaceId !== c.get('ws')) throw new HttpError(404, 'run not found');
     return c.json(r);
   });
 
   routes.post('/api/runs', async (c) => {
     const req = parse(launchSchema, await readBody(c));
-    return c.json(await launchRun(deps, c.get('uid'), req), 201);
+    const who = { uid: c.get('uid'), ws: c.get('ws') };
+    // a stage that needs a person's go-ahead goes through the engine, which checks its gate
+    if (req.repo && req.ticket && req.stage && deps.workflow.stages.find((s) => s.id === req.stage)?.manual)
+      return c.json(await startBuild(deps, who, req.ticket, req.repo, { model: req.model, permissionMode: req.permissionMode }), 201);
+    if (req.repo && req.ticket && req.stage === deps.workflow.stages[0].id) return c.json(await startFirst(deps, who, req), 201);
+    return c.json(await launchRun(deps, who, req), 201);
   });
 
   routes.post('/api/runs/:id/messages', async (c) => {
@@ -114,16 +120,21 @@ export function runsRoutes(deps: Deps) {
 
   routes.get('/api/stream', (c) =>
     streamSSE(c, async (stream) => {
-      const uid = c.get('uid');
+      const ws = c.get('ws');
+      // decision_closed carries only an id: pass it for decisions this client was shown
+      const shown = new Set<string>();
       const mine = (m: StreamMessage) =>
-        m.type === 'run' ? m.run.owner === uid
-        : m.type === 'run_event' ? ownsRun(uid, m.runId)
-        : m.type === 'decision' ? ownsRun(uid, m.decision.runId)
-        : true; // decision_closed carries only an id
+        m.type === 'run' ? m.run.workspaceId === ws
+        : m.type === 'run_event' ? ownsRun(ws, m.runId)
+        : m.type === 'decision' ? ownsRun(ws, m.decision.runId) && !!shown.add(m.decision.id)
+        : m.type === 'decision_closed' ? shown.delete(m.id)
+        : true;
       const send = (m: StreamMessage) => void (mine(m) && stream.writeSSE({ data: JSON.stringify(m) }));
       const snap = runs.snapshot();
-      if (snap.type === 'snapshot')
-        send({ ...snap, runs: snap.runs.filter((r) => r.owner === uid), decisions: snap.decisions.filter((d) => ownsRun(uid, d.runId)) });
+      if (snap.type === 'snapshot') {
+        for (const d of snap.decisions) if (ownsRun(ws, d.runId)) shown.add(d.id);
+        send({ ...snap, runs: snap.runs.filter((r) => r.workspaceId === ws), decisions: snap.decisions.filter((d) => ownsRun(ws, d.runId)) });
+      }
       runs.on('message', send);
       const ping = setInterval(() => void stream.writeSSE({ event: 'ping', data: '' }), 15000);
       await new Promise<void>((resolve) => stream.onAbort(resolve));

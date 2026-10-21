@@ -52,9 +52,9 @@ type Opts = { status?: string; transitions?: typeof TRANSITIONS; prs?: Record<st
 function setup(o: Opts = {}) {
   const jira = { status: o.status ?? 'To Do' };
   const calls: { tool: string; args: any; cloneExists?: boolean }[] = [];
+  const hooks: { onListPrs?: () => boolean } = {};
   let inFlight = 0;
   let maxInFlight = 0;
-  const hooks: { onListPrs?: () => boolean } = {};
   const srv = fakeServers({
     exec: async (tool, args) => {
       const call: (typeof calls)[number] = { tool, args };
@@ -231,17 +231,17 @@ describe('jira sync', () => {
   it('does not retry a comment that failed and records an error', async () => {
     const s = setup({ status: 'ON HOLD', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
-    const orig = s.deps.workbench;
-    s.deps.workbench = async (o: string) => {
-      const wb = await orig(o);
-      if (wb) wb.client.jiraAddComment = async () => Promise.reject(new Error('timed out'));
-      return wb;
+    const orig = s.deps.workSource;
+    s.deps.workSource = async (o: string) => {
+      const source = await orig(o);
+      if (source) source.comment = async () => Promise.reject(new Error('timed out'));
+      return source;
     };
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     const body = await s.item();
     expect(body.links[0].commented).toBe(true);
     expect(body.note.text).toMatch(/^Error: .*timed out/);
-    s.deps.workbench = orig;
+    s.deps.workSource = orig;
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect(s.tools('jira_add_comment')).toEqual([]);
   });
@@ -278,14 +278,14 @@ describe('jira sync', () => {
     const s = setup({ status: 'Code Review', prs: { 'acme/api#12': pr(12, 'OPEN') } });
     await withItem(s, [{ prId: 12 }]);
     const failure = 'Error: PR capture failed in acme/api: boom';
-    const orig = s.deps.workbench;
-    s.deps.workbench = async (o: string) => {
-      const wb = await orig(o);
-      if (wb) {
-        const get = wb.client.bitbucketPr.bind(wb.client);
-        wb.client.bitbucketPr = async (...a: Parameters<typeof get>) => (s.items.setNote('local', 'PROJ-1', failure), get(...a));
+    const orig = s.deps.forge;
+    s.deps.forge = async (o: string) => {
+      const forge = await orig(o);
+      if (forge) {
+        const get = forge.getPr.bind(forge);
+        forge.getPr = async (...a: Parameters<typeof get>) => (s.items.setNote('local', 'PROJ-1', failure), get(...a));
       }
-      return wb;
+      return forge;
     };
     await syncWorkItem(s.deps, 'local', 'PROJ-1');
     expect((await s.item()).note.text).toBe(failure);
@@ -490,10 +490,10 @@ describe('link a found PR', () => {
     expect((await linkIt(s)).status).toBe(502);
   });
 
-  it('keeps owners apart', async () => {
+  it('keeps workspaces apart', async () => {
     const s = await ready();
     s.items.create('u2', 'PROJ-2');
-    s.db.prepare(`insert into user_repos (owner, repo_key, name, main_branch, added_at) values ('u2', 'acme/api', 'acme/api', 'main', 'x')`).run();
+    s.db.prepare(`insert into workspace_repos (workspace_id, repo_key, name, main_branch, added_at) values ('u2', 'acme/api', 'acme/api', 'main', 'x')`).run();
     s.items.addRepo('u2', 'PROJ-2', 'acme/api');
     expect((await linkIt(s, { repo: 'acme/api', prId: 668, kind: 'impl' }, 'PROJ-2')).status).toBe(404);
     expect(s.items.links('u2', 'PROJ-2')).toEqual([]);
@@ -539,21 +539,23 @@ describe('PR capture', () => {
     const s = setup({ gitUrl: forge(), ...o });
     await s.connectWorkbench();
     await s.put('/api/work-items/PROJ-1', { repos: ['acme/api'] });
-    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'build' })).json();
+    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'build it', ticket: 'PROJ-1', stage: 'design' })).json();
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/api: earlier');
-    s.hooks.onListPrs = () => existsSync(join(run.cwd, 'README.md'));
+    s.hooks.onListPrs = () => existsSync(run.cwd);
     if (branch) git(run.cwd, 'checkout', '-qb', branch);
     await s.runs.end(run.id);
     await settle(() => !existsSync(run.cwd));
+    await settle(() => s.deps.runs.openJobs().length === 0);
     return { s, run };
   };
 
-  it('stores the open PR of the run branch as a link of the run stage, before the clone is deleted', async () => {
+  it('finds the run branch although the clone is gone by the time the PR is listed: the runner read it first', async () => {
     const open = { 'acme/api': [pr(7, 'OPEN', 'other', 'feat/other'), pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1')] };
     const { s, run } = await launch({ open, prs: { 'acme/api#12': pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1') } }, 'feat/PROJ-1');
-    expect(s.tools('bitbucket_list_prs').map((c) => [c.args.state, c.cloneExists])).toEqual([['OPEN', true]]);
+    await settle(() => s.tools('bitbucket_list_prs').length === 1);
+    expect(s.tools('bitbucket_list_prs').map((c) => [c.args.state, c.cloneExists])).toEqual([['OPEN', false]]);
     const links = s.items.links('local', 'PROJ-1');
-    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'impl', branch: 'feat/PROJ-1', runId: run.id })]);
+    expect(links).toEqual([expect.objectContaining({ repo: 'acme/api', prId: 12, kind: 'spec', branch: 'feat/PROJ-1', runId: run.id })]);
     expect(s.items.get('local', 'PROJ-1')!.note).toBeNull();
     await settle(() => s.tools('jira_add_comment').length === 1);
   });
@@ -562,7 +564,7 @@ describe('PR capture', () => {
     const open = { 'acme/api': [pr(12, 'OPEN', 'feat: PROJ-1 export', 'feat/PROJ-1')] };
     const { s } = await launch({ open }, 'feat/PROJ-1');
     s.items.setNote('local', 'PROJ-1', 'Error: PR capture failed in acme/web: later');
-    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'again', ticket: 'PROJ-1', stage: 'build' })).json();
+    const run = await (await s.post('/api/runs', { repo: 'acme/api', prompt: 'again', ticket: 'PROJ-1', stage: 'design' })).json();
     git(run.cwd, 'checkout', '-qb', 'feat/PROJ-1');
     await s.runs.end(run.id);
     await settle(() => !existsSync(run.cwd));

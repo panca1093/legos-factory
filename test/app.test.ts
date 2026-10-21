@@ -1,15 +1,13 @@
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ActivityLog } from '../server/activity.ts';
 import { createApp } from '../server/app.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import type { Run } from '../shared/types.ts';
+import { useEnv } from './fakes.ts';
 
-beforeAll(() => {
-  process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
-  process.env.LEGOS_SETTINGS = join(import.meta.dirname, 'fixtures/settings/app.json');
-});
+useEnv({ CLAUDE_PROJECTS_DIR: join(import.meta.dirname, 'fixtures/projects'), LEGOS_SETTINGS: join(import.meta.dirname, 'fixtures/settings/app.json') });
 
 const idle = (() => {
   const it = (async function* () {})() as any;
@@ -22,7 +20,7 @@ const MINE = '11111111-1111-1111-1111-111111111111';
 const db = openDb(':memory:');
 const now = new Date().toISOString();
 await new ActivityLog(db).record(
-  { id: 'r0', owner: 'local', sessionId: MINE, kind: 'chat', cwd: '/tmp', prompt: 'x', status: 'completed', startedAt: now, lastEventAt: now } as Run,
+  { id: 'r0', workspaceId: 'local', owner: 'local', sessionId: MINE, kind: 'chat', cwd: '/tmp', prompt: 'x', status: 'completed', startedAt: now, lastEventAt: now } as Run,
   'local',
 );
 const app = createApp(new RunManager(idle), { db });

@@ -2,8 +2,8 @@ import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'no
 import type { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 
-// Who may use this app. Two separate kinds of user: local ones (name + 6-digit PIN) and ones that
-// signed in with workbench. Sessions are stateless HMAC-signed cookies naming the user.
+// Who may use this app. Separate kinds of user: local ones (name + 6-digit PIN) and ones that signed in with an
+// outside provider (workbench, OpenID Connect). Sessions are stateless HMAC-signed cookies naming the user.
 
 const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
@@ -14,7 +14,7 @@ const BASE_LOCK_MS = 30_000;
 const MAX_LOCK_MS = 15 * 60_000;
 const COOKIE_RE = /^(v2\.([0-9a-f-]{36})\.(\d+))\.([\w-]+)$/;
 
-export type UserKind = 'pin' | 'workbench';
+export type UserKind = 'pin' | 'workbench' | 'oidc';
 export type User = { id: string; kind: UserKind; name: string; email: string | null };
 export type LoginResult = { ok: true; cookie: string } | { ok: false; retryAfterMs: number | null };
 
@@ -54,6 +54,13 @@ export class Users {
     return r && this.toUser(r);
   }
 
+  // Everyone an id, e-mail address or local name points at, for adding members to a workspace.
+  find(who: string): User[] {
+    return this.db
+      .prepare(`select id, kind, name, email from users where id = ? or (email_verified = 1 and lower(email) = lower(?)) or (kind = 'pin' and name = ? collate nocase) order by created_at`)
+      .all(who, who, who) as User[];
+  }
+
   async createPin(name: string, pin: string): Promise<{ user: User; cookie: string }> {
     if (!PIN_RE.test(pin)) throw new Error('PIN must be 6 digits');
     if (this.row(`kind = 'pin' and name = ? collate nocase`, name)) throw new Error(`a user named ${name} already exists`);
@@ -88,16 +95,17 @@ export class Users {
   }
 
   // Signed in elsewhere (workbench): one user per external id, name and email kept current.
-  upsertExternal(kind: Exclude<UserKind, 'pin'>, extId: string, name: string, email: string | null): User {
+  // An e-mail address only identifies the person to others (adding members) when the provider vouched for it.
+  upsertExternal(kind: Exclude<UserKind, 'pin'>, extId: string, name: string, email: string | null, emailVerified = true): User {
     const r = this.row('kind = ? and ext_id = ?', kind, extId);
     if (r) {
-      this.db.prepare(`update users set name = ?, email = ? where id = ?`).run(name, email, r.id);
+      this.db.prepare(`update users set name = ?, email = ?, email_verified = ? where id = ?`).run(name, email, Number(emailVerified), r.id);
       return { ...this.toUser(r), name, email };
     }
     const user: User = { id: randomUUID(), kind, name, email };
     this.db
-      .prepare(`insert into users (id, kind, name, email, ext_id, created_at) values (?, ?, ?, ?, ?, ?)`)
-      .run(user.id, kind, name, email, extId, new Date(this.now()).toISOString());
+      .prepare(`insert into users (id, kind, name, email, email_verified, ext_id, created_at) values (?, ?, ?, ?, ?, ?, ?)`)
+      .run(user.id, kind, name, email, Number(emailVerified), extId, new Date(this.now()).toISOString());
     return user;
   }
 
