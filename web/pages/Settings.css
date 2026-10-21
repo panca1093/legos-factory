@@ -1,0 +1,43 @@
+/* automation section of the settings page */
+.auto-wrap { margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--line); }
+.auto-head { display: flex; flex-direction: column; gap: 5px; margin-bottom: 18px; }
+.auto-head h2 { font-size: 22px; letter-spacing: -0.035em; }
+.auto-head p { color: var(--muted); font-size: 13px; }
+.auto-card { border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: var(--panel-shadow); padding: 20px 22px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 14px; }
+.auto-card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.auto-card-head h3 { font-size: 16px; letter-spacing: -0.02em; }
+.auto-card-head .meta { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.auto-line { display: flex; gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.auto-line.first { border-top: 0; padding-top: 0; }
+.auto-copy { flex: 1 1 320px; min-width: 0; }
+.auto-copy b { display: block; font-size: 13px; }
+.auto-copy span { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.auto-copy span.error { color: var(--bad); }
+.auto-lock { font-size: 11px; font-weight: 700; color: var(--muted); background: var(--field); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.auto-avatar { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: #fff; font-size: 13px; font-weight: 800; flex: none; }
+.auto-switch { width: 40px; height: 24px; border-radius: 99px; border: 0; padding: 3px; display: flex; flex: none; background: var(--off-tone); cursor: pointer; }
+.auto-switch.on { background: var(--accent); justify-content: flex-end; }
+.auto-switch span { width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; }
+.auto-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.auto-select { width: auto; min-width: 160px; }
+.auto-field { display: flex; flex-direction: column; gap: 5px; flex: 0 1 auto; font-size: 11.5px; color: var(--muted); }
+.auto-num { width: 90px; }
+.auto-value { width: auto; flex: 1 1 220px; }
+.auto-note { padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); border: 1px solid var(--watch-edge); color: var(--warn); font-size: 12px; line-height: 1.5; }
+.auto-error { color: var(--bad); font-size: 12.5px; }
+.auto-sub { font-size: 13px; font-weight: 650; margin-top: 4px; }
+.auto-chips { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.auto-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 5px 6px 5px 10px; }
+.auto-chip button { border: 0; background: transparent; color: var(--muted); cursor: pointer; width: 22px; height: 22px; border-radius: 6px; font-size: 14px; line-height: 1; }
+.auto-chip button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.auto-chip button:disabled { opacity: 0.5; cursor: not-allowed; }
+.auto-ask { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.auto-ask code { font-family: var(--mono); font-size: 12px; background: var(--code); color: var(--code-ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; overflow-wrap: anywhere; }
+.auto-ask .meta { flex: 1 1 220px; }
+.auto-save { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.auto-card .input:disabled { opacity: 0.55; }
+@media (max-width: 640px) {
+  .auto-card { padding: 16px 14px; }
+  .auto-card-head .meta { margin-left: 0; }
+  .auto-select, .auto-value { width: 100%; flex: 1 1 100%; }
+}

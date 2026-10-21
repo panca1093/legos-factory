@@ -9,15 +9,26 @@ import { Overview } from './pages/Overview.tsx';
 import { PrPage } from './pages/PrPage.tsx';
 import { Reviews } from './pages/Reviews.tsx';
 import { RunView } from './pages/RunView.tsx';
-import { Sessions, SessionView } from './pages/Sessions.tsx';
+import { SessionView } from './pages/Sessions.tsx';
 import { SettingsPage } from './pages/Settings.tsx';
 import { SignIn } from './pages/SignIn.tsx';
-import { Tasks } from './pages/Tasks.tsx';
+import { Work } from './pages/Work.tsx';
+import { WorkItem } from './pages/WorkItem.tsx';
+
+export function redirectTarget(hash: string): string | null {
+  const legacy = hash.replace(/^#\/?/, '').replace(/\/$/, '');
+  return legacy === 'tasks' ? '#/work' : legacy === 'sessions' ? '#/activity' : null;
+}
 
 function useRoute(): string[] {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
-    const on = () => setHash(location.hash);
+    const on = () => {
+      const target = redirectTarget(location.hash);
+      if (target) history.replaceState(null, '', target);
+      setHash(location.hash);
+    };
+    on();
     addEventListener('hashchange', on);
     return () => removeEventListener('hashchange', on);
   }, []);
@@ -79,13 +90,13 @@ function App({ me }: { me: Me }) {
       <div className={`app ${withInspector && inspector ? 'with-inspector show-inspector' : ''}`}>
         <Rail live={live} view={view} id={id} open={railOpen} onNew={newRun} me={me} />
         {!view && <Overview live={live} sessions={sessions.data} error={sessions.error} onNew={newRun} onContinue={continueSession} />}
-        {view === 'tasks' && <Tasks live={live} onNew={newRun} />}
+        {view === 'work' && !id && <Work onStart={(row) => setLaunch({ kind: 'task', defaults: { ticket: row.key } })} onNew={() => setLaunch({ kind: 'task' })} />}
+        {view === 'work' && id && <WorkItem ticket={decodeURIComponent(id)} live={live} />}
         {view === 'reviews' && <Reviews />}
         {view === 'prs' && route.length === 4 && <PrPage repo={`${route[1]}/${route[2]}`} id={Number(route[3])} />}
         {view === 'settings' && <SettingsPage />}
         {view === 'activity' && <MyActivity live={live} />}
         {view === 'team' && <TeamActivity />}
-        {view === 'sessions' && !id && <Sessions sessions={sessions.data} error={sessions.error} live={live} />}
         {view === 'sessions' && id && <SessionView id={id} live={live} onContinue={continueSession} />}
         {view === 'runs' && id && <RunView id={id} live={live} onContinue={continueSession} onNew={newRun} />}
       </div>
@@ -126,21 +137,21 @@ function Rail({ live, view, id, open, onNew, me }: { live: Live; view?: string; 
           </button>
         </div>
         <div className="eyebrow">Workspace</div>
-        <a className={`navrow ${!view ? 'active' : ''}`} href="#/">
+        <a className={`navrow ${!view ? 'active' : ''}`} href="#/" aria-current={!view ? 'page' : undefined}>
           <Icon name="box" /> Overview
           {live.decisions.size > 0 && <span className="count">{live.decisions.size}</span>}
         </a>
-        <a className={`navrow ${view === 'tasks' || runView?.kind === 'task' ? 'active' : ''}`} href="#/tasks">
-          <Icon name="spark" /> Tasks
+        <a className={`navrow ${view === 'work' || runView?.kind === 'task' ? 'active' : ''}`} href="#/work" aria-current={view === 'work' || runView?.kind === 'task' ? 'page' : undefined}>
+          <Icon name="spark" /> Work
           {activeTasks > 0 && <span className="later">{activeTasks} running</span>}
         </a>
-        <a className={`navrow ${view === 'reviews' ? 'active' : ''}`} href="#/reviews">
+        <a className={`navrow ${view === 'reviews' ? 'active' : ''}`} href="#/reviews" aria-current={view === 'reviews' ? 'page' : undefined}>
           <Icon name="check" /> Reviews
         </a>
-        <a className={`navrow ${view === 'sessions' ? 'active' : ''}`} href="#/sessions">
-          <Icon name="clock" /> Sessions
+        <a className={`navrow ${view === 'activity' || view === 'team' || view === 'sessions' ? 'active' : ''}`} href="#/activity" aria-current={view === 'activity' || view === 'team' || view === 'sessions' ? 'page' : undefined}>
+          <Icon name="clock" /> Activity
         </a>
-        <a className={`navrow ${view === 'settings' ? 'active' : ''}`} href="#/settings">
+        <a className={`navrow ${view === 'settings' ? 'active' : ''}`} href="#/settings" aria-current={view === 'settings' ? 'page' : undefined}>
           <Icon name="settings" /> Settings
         </a>
         <div className="eyebrow">Chats</div>

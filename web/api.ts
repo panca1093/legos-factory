@@ -1,8 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, AutomationSettings, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Persona, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
+  isOwner?: boolean;
   // "Sign in with workbench" is configured
   workbenchLogin: boolean;
   // local (PIN) users, for the sign-in screen
@@ -19,7 +20,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
   if (res.status === 401 && path.startsWith('/api/')) signedOutListeners.forEach((f) => f());
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true });
+  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true, url: body.url });
   return body as T;
 }
 
@@ -44,6 +45,15 @@ export type JiraDev = {
 export type RepoRow = { name: string; mainBranch: string | null; updated: string | null; description: string | null };
 export type MyRepo = { name: string; mainBranch: string | null; addedAt: string; projects: string[] };
 export type { Stage, WorkItem };
+// Declared here until shared/types.ts owns them (PR 3): two declarations of the same name must not collide.
+export type TeamWorkItem = WorkItem & { owner: { id: string; name: string | null; email: string | null } };
+export type RoutingInfo = {
+  at: string;
+  reasons: string[];
+  matches: { id: string; reason: string }[];
+  inspectorReasons: string[];
+  findings: string;
+};
 export const MY_REPOS_CAP = 25;
 export type PrRow = { repo: string; id: number; title: string; state: string; author: string | null; source: string; destination: string; updated: string | null };
 export type Pr = PrRow & { description: string; url: string | null; reviewers: { name: string; uuid: string | null; approved: boolean }[]; comments: number; tasks: number; created: string | null };
@@ -70,6 +80,9 @@ export const api = {
   connect: (integration: string) => call<{ url: string | null; connectionId: string | null }>('/api/workbench/connect', { method: 'POST', body: JSON.stringify({ integration }) }),
   jiraIssues: (filter: string, pageToken?: string) =>
     call<{ issues: JiraRow[]; nextPageToken: string | null }>(`/api/jira/issues?filter=${filter}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
+  // raw JQL, for the "my projects" backlog source
+  jiraSearch: (jql: string, pageToken?: string) =>
+    call<{ issues: JiraRow[]; nextPageToken: string | null }>(`/api/jira/issues?jql=${encodeURIComponent(jql)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`),
   me: () => call<Me>('/auth/me'),
   createUser: (name: string, pin: string) => call<{ ok: true }>('/auth/users', { method: 'POST', body: JSON.stringify({ name, pin }) }),
   login: (name: string, pin: string) => call<{ ok: true }>('/auth/login', { method: 'POST', body: JSON.stringify({ name, pin }) }),
@@ -104,18 +117,33 @@ export const api = {
   addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
+  automation: () => call<AutomationSettings>('/api/settings/automation'),
+  saveAutomation: (a: AutomationSettings) => call<AutomationSettings>('/api/settings/automation', { method: 'PUT', body: JSON.stringify(a) }),
+  approveSpec: (ticket: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/approve-spec`, { method: 'POST' }),
+  approvePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/approve`, { method: 'POST' }),
+  mergePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/merge`, { method: 'POST' }),
+  requestSpecChanges: (ticket: string, comment: string) =>
+    call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/request-spec-changes`, { method: 'POST', body: JSON.stringify({ comment }) }),
+  requestPrChanges: (ticket: string, repo: string, comment: string) =>
+    call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/request-changes`, { method: 'POST', body: JSON.stringify({ comment }) }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
+  // the team board, owners only (403 for the others)
+  teamWorkItems: () => call<{ items: TeamWorkItem[] }>('/api/team/work-items'),
   linkPr: (ticket: string, repo: string, prId: number, kind: 'spec' | 'impl') => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
   setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
   repos: (workspace?: string) => call<{ workspace: string; repos: RepoRow[] }>(`/api/repos${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
-  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; share?: ShareLevel }) =>
+  start: (b: { kind: RunKind; cwd?: string; repo?: string; branch?: string; prompt: string; permissionMode: PermissionMode; resume?: string; model?: string; ticket?: string; stage?: Stage; persona?: Persona; share?: ShareLevel }) =>
     call<Run>('/api/runs', { method: 'POST', body: JSON.stringify(b) }),
+  // the discussion is over: write the spec for this ticket
+  startSpec: (id: string, text?: string) =>
+    call<{ ok: true }>(`/api/runs/${id}/start-spec`, { method: 'POST', body: JSON.stringify({ text: text ?? '' }) }),
   send: (id: string, text: string) => call<{ ok: true }>(`/api/runs/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) }),
   setModel: (id: string, model: string) => call<{ ok: true }>(`/api/runs/${id}/model`, { method: 'POST', body: JSON.stringify({ model }) }),
   interrupt: (id: string) => call<{ ok: true }>(`/api/runs/${id}/interrupt`, { method: 'POST' }),
   end: (id: string) => call<{ ok: true }>(`/api/runs/${id}/end`, { method: 'POST' }),
   resumeTask: (id: string, text?: string) => call<{ ok: true }>(`/api/runs/${id}/resume-task`, { method: 'POST', body: JSON.stringify({ text }) }),
   discuss: (id: string, text: string) => call<{ runId: string }>(`/api/decisions/${id}/discuss`, { method: 'POST', body: JSON.stringify({ text }) }),
+  answer: (id: string, answer: DecisionAnswer, remember?: boolean) => call<{ ok: true }>(`/api/decisions/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ ...answer, remember }) }),
   decide: (id: string, a: DecisionAnswer) => call<{ ok: true }>(`/api/decisions/${id}`, { method: 'POST', body: JSON.stringify(a) }),
 };
 

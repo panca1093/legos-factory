@@ -1,9 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { TeamItem } from '../../shared/types.ts';
-import { api, ago, useFetch, useNow } from '../api.ts';
-import { TicketChip, StatusPill, runLabel, runTone } from '../components.tsx';
+import { api, ago, useFetch, useLive, useNow } from '../api.ts';
+import { TicketChip, StatusPill, LaunchDialog, runLabel, runTone } from '../components.tsx';
 import { Icon } from '../icons.tsx';
-import { ALIVE, type Live, Frame, initials } from '../chrome.tsx';
+import { ALIVE, RECENT_MS, type Live, type ResumeReq, Frame, initials } from '../chrome.tsx';
+
+import { Sessions } from './Sessions.tsx';
+import './Activity.css';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+function onTabKey(index: number, select: (next: number) => void) {
+  return (e: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+    if (next === null) return;
+    e.preventDefault();
+    tabs?.item(next).focus();
+    select(next);
+  };
+}
 
 const RANGES = [
   [1, 'Today'],
@@ -14,7 +37,8 @@ const RANGES = [
 const dayLabel = (iso: string) => {
   const d = new Date(iso);
   const today = new Date();
-  const y = new Date(Date.now() - 86_400_000);
+  const y = new Date();
+  y.setDate(y.getDate() - 1);
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === y.toDateString()) return 'Yesterday';
   return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' });
@@ -26,74 +50,59 @@ const took = (i: { startedAt: string; endedAt: string | null }) => {
   return s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
 };
 
-// since local midnight for "Today", else rolling days
-const sinceDays = (days: number) => (days === 1 ? Math.max(1, Math.ceil((Date.now() - new Date().setHours(0, 0, 0, 0)) / 86_400_000)) : days);
-
 export function MyActivity({ live }: { live: Live }) {
+  return <Activity live={live} />;
+}
+
+export function TeamActivity() {
+  const live = useLive();
+  return <Activity live={live} initialTab="team" />;
+}
+
+function Activity({ live, initialTab = 'mine' }: { live?: Live; initialTab?: 'mine' | 'team' }) {
+  const [tab, setTab] = useState(initialTab);
   const [days, setDays] = useState<number>(7);
-  const { data, error } = useFetch(() => api.myActivity(sinceDays(days)), [days]);
+  const [query, setQuery] = useState('');
+  const [resume, setResume] = useState<ResumeReq | null>(null);
+  const mineLive: Live = live ?? { conn: 'connected', runs: new Map(), decisions: new Map() };
+  return <Frame crumb={<><span>Workspace / </span>Activity</>}>
+    <div className="scroll"><div className="page activity-page">
+      <div className="page-heading"><div><h1>Activity</h1><p className="lead">{tab === 'mine' ? 'Everything you and your factory did, with outcome and est. cost.' : 'What everyone’s factory is doing right now, and who is waiting on whom.'}</p></div>
+        <div className="segmented" role="tablist" aria-label="Range">{RANGES.map(([d, label], i) => <button key={d} role="tab" aria-selected={days === d} tabIndex={days === d ? 0 : -1} className={days === d ? 'active' : ''} onClick={() => setDays(d)} onKeyDown={onTabKey(i, (n) => setDays(RANGES[n][0]))}>{label}</button>)}</div>
+      </div>
+      <div className="activity-toolbar"><div className="segmented" role="tablist" aria-label="Whose activity">{(['mine', 'team'] as const).map((value, i) => <button key={value} role="tab" aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} className={tab === value ? 'active' : ''} onClick={() => setTab(value)} onKeyDown={onTabKey(i, (n) => setTab((['mine', 'team'] as const)[n]))}>{value === 'mine' ? 'Mine' : 'Team'}</button>)}</div>
+        <input id="session-search" type="search" className="input" aria-label="Filter activity and sessions" placeholder={tab === 'mine' ? 'Filter by ticket, repo or text' : 'Filter by person, ticket, repo or text'} value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      <div role="tabpanel" aria-label={tab === 'mine' ? 'Mine' : 'Team'}>{tab === 'mine' ? <MineActivity live={mineLive} days={days} query={query} onContinue={setResume} /> : <TeamContent days={days} q={query} />}</div>
+    </div></div>
+    {resume && <LaunchDialog kind="chat" projects={[resume.cwd]} resume={resume} onClose={() => setResume(null)} />}
+  </Frame>;
+}
+
+function MineActivity({ live, days, query, onContinue }: { live: Live; days: number; query: string; onContinue: (r: ResumeReq) => void }) {
+  const runSig = [...live.runs.values()].map((r) => `${r.id}:${r.status}`).join();
+  const { data, error } = useFetch(() => api.myActivity(days), [days, runSig]);
+  const sessions = useFetch(api.sessions, [runSig]);
   const startOfToday = new Date().setHours(0, 0, 0, 0);
-  const items = (data?.items ?? []).filter((i) => days !== 1 || Date.parse(i.lastEventAt) >= startOfToday);
-  const tasks = items.filter((i) => i.kind === 'task');
-  const done = tasks.filter((i) => i.status === 'completed' && i.endedBy !== 'user').length;
-  const failed = items.filter((i) => i.status === 'failed').length;
-  const tickets = new Set(items.map((i) => i.ticket).filter(Boolean));
+  const items = (data?.items ?? []).filter((i) => (days !== 1 || Date.parse(i.lastEventAt) >= startOfToday) && `${i.title} ${i.ticket ?? ''} ${i.repo ?? ''} ${i.project}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   const priced = items.filter((i) => i.estimatedCostUsd !== null);
   const cost = priced.reduce((n, i) => n + i.estimatedCostUsd!, 0);
   const groups = new Map<string, typeof items>();
   for (const i of items) groups.set(dayLabel(i.startedAt), [...(groups.get(dayLabel(i.startedAt)) ?? []), i]);
 
   return (
-    <Frame
-      crumb={
-        <>
-          <span>You / </span>My activity
-        </>
-      }
-    >
-      <div className="scroll">
-        <div className="page">
-          <div className="page-heading" style={{ alignItems: 'center' }}>
-            <div>
-              <h1>My activity</h1>
-              <p className="lead">Chats and tasks you ran from legos-factory on this Mac.</p>
-            </div>
-            <div className="segmented" role="tablist">
-              {RANGES.map(([d, label]) => (
-                <button key={d} role="tab" aria-selected={days === d} className={days === d ? 'active' : ''} onClick={() => setDays(d)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+    <>
           {error && <p className="error">{error}</p>}
-          <div className="kpis kpis-4">
-            <div className="kpi">
-              <div className="label">Chats</div>
-              <strong>{items.length - tasks.length}</strong>
-              <small>interactive sessions</small>
-            </div>
-            <div className="kpi">
-              <div className="label">Tasks</div>
-              <strong>{tasks.length}</strong>
-              <small>
-                {done} done{failed ? ` · ${failed} failed` : ''}
-              </small>
-            </div>
-            <div className="kpi">
-              <div className="label">Tickets</div>
-              <strong>{tickets.size}</strong>
-              <small>{[...tickets].slice(0, 3).join(', ') || 'none tagged'}</small>
-            </div>
-            <div className="kpi cost">
-              <div className="label">Cost (est.)</div>
-              <strong>{priced.length ? `~$${cost.toFixed(2)}` : 'Unknown'}</strong>
-              <small>API-equivalent · only you see this</small>
-            </div>
+          <div className="activity-stats">
+            <div><b>{data ? items.length : '—'}</b><span>runs</span></div>
+            <div><b>—</b><span>tickets shipped</span><small>Shipping history is not available</small></div>
+            <div><b>—</b><span>gates you passed</span><small>Gate history is not available</small></div>
+            <div><b>{data ? items.filter((i) => i.status === 'awaiting_decision').length : '—'}</b><span>runs paused for you</span></div>
+            <div><b>{priced.length ? `~$${cost.toFixed(2)}` : '—'}</b><span>est. cost{items.length > priced.length ? ` · ${items.length - priced.length} runs “—”` : ''}</span></div>
           </div>
-          {!data ? (
+          {!data && !error ? (
             <div className="empty">Loading…</div>
-          ) : items.length === 0 ? (
+          ) : data && items.length === 0 ? (
             <div className="empty">Nothing in this range yet.</div>
           ) : (
             [...groups].map(([day, rows]) => (
@@ -103,76 +112,60 @@ export function MyActivity({ live }: { live: Live }) {
                   <span className="meta">{rows.length} run{rows.length === 1 ? '' : 's'}</span>
                 </div>
                 <div className="list-card">
+                  <div className="activity-row activity-columns" aria-hidden="true"><span /><span>What</span><span>Stage</span><span>Outcome</span><span>Took</span><span>Cost</span><span /></div>
                   {rows.map((i) => {
                     const href = live.runs.has(i.runId) ? `#/runs/${i.runId}` : i.sessionId ? `#/sessions/${i.sessionId}` : undefined;
                     return (
-                      <a key={i.runId} className="list-item" href={href}>
+                      <div key={i.runId} className="activity-row">
                         <span className={`glyph tone-${runTone(i)}`}>
                           <Icon name={i.kind === 'task' ? 'spark' : 'chat'} size={16} />
                         </span>
                         <div className="copy">
                           <b>{i.title}</b>
                           <span>
-                            {i.ticket && <TicketChip ticket={i.ticket} />} {i.kind === 'task' ? 'Task' : 'Chat'} · {i.project} ·{' '}
+                            {i.ticket && <TicketChip ticket={i.ticket} />} {i.repo ?? i.project} ·{' '}
                             {new Date(i.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             {took(i) && ` · ${took(i)}`}
                           </span>
                         </div>
-                        <div className="side">
-                          <StatusPill run={i} />
-                          <div style={{ marginTop: 4 }}>{i.estimatedCostUsd === null ? '' : `~$${i.estimatedCostUsd.toFixed(2)}`}</div>
+                        <span>{i.stage === 'design' ? 'Spec' : i.stage === 'build' ? 'Build' : i.kind === 'chat' ? 'Chat' : 'Task'}</span>
+                        <StatusPill run={i} />
+                        <span className="meta">{took(i) ?? '—'}</span>
+                        <span className="meta">{i.estimatedCostUsd === null ? '—' : `~$${i.estimatedCostUsd.toFixed(2)}`}</span>
+                        <div className="activity-actions">
+                          {href ? <a href={href}>Open</a> : <span className="meta">No transcript</span>}
+                          {i.kind === 'chat' && !ALIVE.includes(i.status) && sessions.data?.some((session) => session.id === i.sessionId && session.cwd) && <button className="btn sm" onClick={() => {
+                            const session = sessions.data!.find((row) => row.id === i.sessionId)!;
+                            onContinue({ sessionId: session.id, cwd: session.cwd!, recentlyActive: !!session.lastActivityAt && Date.now() - Date.parse(session.lastActivityAt) < RECENT_MS });
+                          }}>Continue</button>}
                         </div>
-                      </a>
+                      </div>
                     );
                   })}
                 </div>
               </div>
             ))
           )}
-          <p className="footnote">Kept in ~/.legos-factory/activity.jsonl. Costs are Claude Code's API-equivalent estimates, not invoices.</p>
-        </div>
-      </div>
-    </Frame>
+          <p className="footnote">Cost is Claude Code's API-equivalent estimate; “—” means no usage was available, not zero. A partial total includes priced runs only.</p>
+          <Sessions sessions={sessions.data} error={sessions.error} live={live} embedded query={query} onContinue={onContinue} />
+    </>
   );
 }
 
-export function TeamActivity() {
+function TeamContent({ days, q }: { days: number; q: string }) {
   const now = useNow(30000);
-  const [days, setDays] = useState<number>(1);
-  const [q, setQ] = useState('');
   const [tick, setTick] = useState(0);
-  const { data, error } = useFetch(() => api.team(sinceDays(days)), [days, tick]);
+  const { data, error } = useFetch(() => api.team(days), [days, tick]);
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, []);
-  const notConfigured = error?.includes('not configured');
-  const match = (i: TeamItem) => !q || `${i.ticket ?? ''} ${i.title} ${i.project}`.toLowerCase().includes(q.toLowerCase());
-  const members = (data?.members ?? []).map((m) => ({ ...m, items: m.items.filter(match) })).filter((m) => !q || m.items.length);
-
+  const notConfigured = data?.configured === false || error?.includes('not configured');
+  const cutoff = days === 1 ? new Date(now).setHours(0, 0, 0, 0) : now - days * 86400000;
+  const match = (i: TeamItem) => !q || `${i.ticket ?? ''} ${i.title} ${i.repo ?? ''} ${i.project}`.toLowerCase().includes(q.toLowerCase());
+  const members = (data?.members ?? []).map((m) => ({ ...m, items: m.items.filter((i) => Date.parse(i.lastEventAt) >= cutoff && (m.email.toLowerCase().includes(q.toLowerCase()) || match(i))) })).filter((m) => !q || m.items.length);
   return (
-    <Frame
-      crumb={
-        <>
-          <span>Team / </span>Team activity
-        </>
-      }
-    >
-      <div className="scroll">
-        <div className="page">
-          <div className="page-heading" style={{ alignItems: 'center' }}>
-            <div>
-              <h1>Team activity</h1>
-              <p className="lead">What everyone's agents are working on. Status only — no conversations, no costs.</p>
-            </div>
-            <div className="segmented" role="tablist">
-              {RANGES.map(([d, label]) => (
-                <button key={d} role="tab" aria-selected={days === d} className={days === d ? 'active' : ''} onClick={() => setDays(d)}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+    <>
           {notConfigured ? (
             <div className="empty">
               <p>
@@ -188,9 +181,6 @@ export function TeamActivity() {
             <div className="empty">Asking the team hub…</div>
           ) : (
             <>
-              <div className="tool-bar">
-                <input className="input" placeholder="Filter by ticket, title or project (e.g. PROJ-123)" value={q} onChange={(e) => setQ(e.target.value)} />
-              </div>
               {members.length === 0 ? (
                 <div className="empty">{q ? 'Nobody matches.' : 'No shared activity in this range yet. Private folders never show up here.'}</div>
               ) : (
@@ -240,9 +230,7 @@ export function TeamActivity() {
               )}
             </>
           )}
-          <p className="footnote">Every signed-in member sees everyone. Only runs from folders shared as Status (e.g. work repos) are sent; refreshes every 30s.</p>
-        </div>
-      </div>
-    </Frame>
+          <p className="footnote">Status only: no conversations, no costs. Folders set to Private never show up here. Refreshes every 30s.</p>
+    </>
   );
 }

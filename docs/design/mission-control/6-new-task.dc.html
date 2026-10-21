@@ -145,7 +145,7 @@ const n = repos.filter((r) => r.on).length;
 const names = repos.filter((r) => r.on).map((r) => r.name).join(', ');
 let cta, summary, fine;
 if (s.intent === 'chat') { cta = 'Start chat'; summary = ''; fine = ''; }
-else if (!s.ticket) { cta = n ? 'Start task' : 'Pick a repo'; summary = n ? 'One task in ' + names + ', in auto mode' : 'Pick a repo'; fine = 'Runs to the end on its own. A command outside the allowlist pauses it and comes to Home.'; }
+else if (!s.ticket) { cta = n ? 'Start task' : 'Pick a repo'; summary = n ? 'One task in ' + names + ', in auto mode' : 'Pick a repo'; fine = 'Runs to the end on its own. A command outside the allowlist pauses it and comes to Overview.'; }
 else if (s.start === 'brain') { cta = 'Start brainstorm'; summary = 'A brainstorm chat on PROJ-142, then a spec for ' + (n || 'no') + ' repo' + (n === 1 ? '' : 's'); fine = 'Spec, build and agent review then run on their own. You are asked at spec review, at PR review if rules route it, and to merge.'; }
 else { cta = n ? 'Start · ' + n + ' repo' + (n === 1 ? '' : 's') : 'Pick a repo'; summary = 'Spec PR for ' + (names || 'no repo') + ', then build and agent review on their own'; fine = 'You are asked at spec review, at PR review if rules route it, and to merge. Jira follows each step.'; }
 return {

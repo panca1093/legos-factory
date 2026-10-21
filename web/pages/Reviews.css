@@ -1,0 +1,41 @@
+.reviews-page { gap: 18px; }
+.reviews-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--field); border: 1px solid rgba(31,42,72,.09); border-radius: 12px; align-self: flex-start; }
+.reviews-tabs button { border: 0; background: transparent; padding: 9px 13px; border-radius: 9px; font: inherit; font-size: 13px; font-weight: 650; color: var(--muted); cursor: pointer; }
+.reviews-tabs button[aria-selected=true] { background: var(--paper); color: var(--ink); box-shadow: var(--panel-shadow); }
+.reviews-gates { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+.reviews-gate-list { flex: 1 1 300px; max-width: 440px; overflow: hidden; border: 1px solid rgba(31,42,72,.1); border-radius: 14px; background: var(--paper); }
+.reviews-gate-row { display: flex; gap: 12px; width: 100%; text-align: left; padding: 14px 16px; border: 0; border-top: 1px solid rgba(31,42,72,.08); background: var(--paper); font: inherit; color: var(--ink); cursor: pointer; }
+.reviews-gate-row:first-child { border-top: 0; }
+.reviews-gate-row:hover { background: var(--hover); }
+.reviews-gate-row.selected { background: var(--run-tint); box-shadow: inset 3px 0 0 var(--accent); }
+.reviews-row-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.reviews-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.reviews-gate-you { font-size: 9.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--warn); background: var(--warn-bg); border-radius: 5px; padding: 0 5px; }
+.reviews-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.reviews-rule { font-size: 11.5px; font-weight: 650; color: var(--warn); background: var(--warn-bg); border-radius: 6px; padding: 1px 7px; }
+.reviews-rule.agent { color: var(--bad); background: var(--bad-bg); }
+.reviews-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 6px; }
+.reviews-dot.spec { background: var(--accent); }
+.reviews-dot.pr { background: var(--warn); }
+.reviews-tag { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 99px; padding: 2px 9px; }
+.reviews-tag.spec { background: var(--soft); color: var(--soft-ink); }
+.reviews-tag.pr { background: var(--warn-bg); color: var(--warn); }
+.reviews-detail { flex: 999 1 380px; min-width: 0; padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; border: 1px solid rgba(31,42,72,.1); border-radius: 14px; background: var(--paper); overflow-wrap: anywhere; }
+.reviews-detail h2 { margin: 0; font-size: 20px; font-weight: 800; }
+.reviews-detail p { margin: 0; }
+.reviews-summary, .reviews-routing { display: flex; flex-direction: column; gap: 8px; font-size: 13px; padding: 14px 16px; border-radius: 12px; background: var(--field); border: 1px solid rgba(31,42,72,.08); }
+.reviews-routing { background: var(--watch-tint); border-color: var(--watch-edge); color: var(--warn); }
+.reviews-routing b { color: var(--warn); }
+.reviews-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.reviews-actions .primary { margin-left: auto; }
+.reviews-actions > .muted { flex: 1 1 250px; font-size: 12px; }
+.reviews-team-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.reviews-team-heading h2 { margin: 0; font-size: 18px; }
+.reviews-comment-list { display: flex; flex-direction: column; gap: 16px; }
+.reviews-comments { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; border: 1px solid rgba(31,42,72,.1); border-radius: 14px; background: var(--paper); }
+.reviews-comment-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.reviews-comment { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid rgba(31,42,72,.1); border-radius: 10px; }
+.reviews-comment input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); flex: none; }
+.reviews-comment > span { min-width: 0; overflow-wrap: anywhere; }
+.reviews-comment-text { display: block; white-space: pre-wrap; margin-top: 4px; }
+@media (max-width: 640px) { .reviews-gate-list { max-width: none; } .reviews-detail { padding: 16px; } .reviews-tabs { align-self: stretch; } .reviews-tabs button { flex: 1 1 auto; } }
