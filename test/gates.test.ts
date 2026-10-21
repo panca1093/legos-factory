@@ -7,6 +7,7 @@ import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { syncWorkItem } from '../server/jira-sync.ts';
 import { pipelineRunEnded } from '../server/pipeline.ts';
+import { MERGE_TOOL } from '../server/routes/prs.ts';
 import type { Run } from '../shared/types.ts';
 
 let root: string;
@@ -121,6 +122,26 @@ it('merge calls the forge merge tool when there is one', async () => {
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ ok: true });
   expect(toolCalls).toEqual([{ name: 'bitbucket_merge_pr', args: { workspace: 'acme', repoSlug: 'api', pullRequestId: 7 } }]);
+});
+
+it('an unrelated tool with merge in its name is never called', async () => {
+  fakeWb.client.listTools = async () => [{ name: 'bitbucket_merge_pull_request' }];
+  deps.workItems.setStage('local', 'PROJ-123', 'acme/api', 'ready');
+  linkImpl();
+  const res = await post('/api/work-items/PROJ-123/prs/acme%2Fapi/merge');
+  expect(res.status).toBe(409);
+  expect(await res.json()).toEqual({ error: 'merge in the forge', url: 'https://forge.example.com/acme/api/pull/7' });
+  expect(toolCalls).toEqual([]);
+});
+
+it('the merge is called with the exact tool name', async () => {
+  fakeWb.client.listTools = async () => [{ name: MERGE_TOOL }];
+  deps.workItems.setStage('local', 'PROJ-123', 'acme/api', 'ready');
+  linkImpl();
+  const res = await post('/api/work-items/PROJ-123/prs/acme%2Fapi/merge');
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ ok: true });
+  expect(toolCalls).toEqual([{ name: MERGE_TOOL, args: { workspace: 'acme', repoSlug: 'api', pullRequestId: 7 } }]);
 });
 
 it('request spec changes sends the spec back to the Foreman', async () => {
