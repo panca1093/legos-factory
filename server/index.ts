@@ -5,6 +5,7 @@ import { RunManager } from './claude-runs.ts';
 import { openDb } from './db.ts';
 import { startSyncLoop } from './jira-sync.ts';
 import { createHub } from './hub.ts';
+import { embeddedByDefault, loopbackBind } from './http.ts';
 import { Users } from './users.ts';
 import { Workbench } from './workbench.ts';
 
@@ -43,11 +44,11 @@ async function startApp() {
     : null;
   if (oidc && (!oidc.clientId || !oidc.clientSecret)) throw new Error('LEGOS_OIDC_CLIENT_ID and LEGOS_OIDC_CLIENT_SECRET are required with LEGOS_OIDC_ISSUER');
   const publicUrl = process.env.LEGOS_PUBLIC_URL?.replace(/\/$/, '') || null;
-  const embeddedRunner = process.env.LEGOS_RUNNER !== 'off';
   const leaseMs = Number(process.env.LEGOS_LEASE_MS) || undefined;
   const maxAttempts = Number(process.env.LEGOS_MAX_ATTEMPTS) || undefined;
   // loopback unless this is a team control plane that runners on other machines must reach (then put TLS in front)
   const hostname = process.env.LEGOS_BIND || '127.0.0.1';
+  const embeddedRunner = embeddedByDefault(process.env.LEGOS_RUNNER, !loopbackBind(hostname) || !!publicUrl);
   const opts = { users, db, selfUrl, bind: hostname, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
   const deps = buildDeps(runs, opts);
   sweepOrphans(deps);

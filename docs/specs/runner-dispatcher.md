@@ -38,7 +38,7 @@ Clones of runs that will not resume are deleted; the rest are kept.
 `PollRequest { capacity, running[] }` → `{ jobs[], commands[], lost[] }`; `lost` lists runs whose lease moved on, which the runner stops. Messages in a report are the existing stream messages plus `finished { runId, branch }` (sent after the runner read the clone's branch and deleted the clone, so the control plane can capture the PR) and `launch_failed { runId, error }`. A runner keeps unsent messages and retries; a lease stays alive until `finished` is delivered.
 
 ## Configuration
-Control plane: `LEGOS_RUNNER=off`, `LEGOS_BIND`, `LEGOS_PUBLIC_URL` (its host is accepted next to localhost), `LEGOS_LEASE_MS`, `LEGOS_MAX_ATTEMPTS`. Runner: `LEGOS_CONTROL_URL`, `LEGOS_RUNNER_TOKEN`, `LEGOS_MAX_RUNS`, `LEGOS_WORKSPACES`, `LEGOS_GIT_URL`.
+Control plane: `LEGOS_RUNNER=on|off` (default off when bound beyond loopback or behind `LEGOS_PUBLIC_URL`, where local-folder runs are refused too), `LEGOS_BIND`, `LEGOS_PUBLIC_URL` (its host is accepted next to localhost), `LEGOS_LEASE_MS`, `LEGOS_MAX_ATTEMPTS`. Runner: `LEGOS_CONTROL_URL`, `LEGOS_RUNNER_TOKEN`, `LEGOS_MAX_RUNS`, `LEGOS_WORKSPACES`, `LEGOS_GIT_URL`.
 
 ## Tests
 Priority and FIFO; capacity; heartbeat and lease expiry; bounded attempts; scoping by workspace and local jobs; restart (resume, idle chat, non-recoverable, attempts); permission requests relayed both ways; a remote runner over HTTP that clones, takes commands and cleans up; token auth; host check.

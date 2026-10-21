@@ -124,6 +124,9 @@ export const localOnly = (host: string | undefined) => LOCAL_HOSTS.has((host ?? 
 const isLoopback = (addr: string) => addr === 'localhost' || addr === '::1' || addr === '::ffff:127.0.0.1' || /^127\./.test(addr);
 export const loopbackBind = (bind: string | null | undefined) => !bind || isLoopback(bind);
 
+// LEGOS_RUNNER=on|off wins; otherwise a control plane reached over the network leaves execution to remote runners.
+export const embeddedByDefault = (setting: string | undefined, networked: boolean) => (setting ? setting !== 'off' : !networked);
+
 // Decided by the socket's peer, never by headers a client controls.
 export function peerIsLocal(c: Context): boolean {
   try {

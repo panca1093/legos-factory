@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildDeps, createApp, sweepOrphans } from '../server/app.ts';
+import { embeddedByDefault } from '../server/http.ts';
 import { RunManager, type QueryFn } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { MyRepos } from '../server/my-repos.ts';
@@ -198,5 +199,30 @@ describe('boot sweep', () => {
     const live = clone(workspaces, 'local', 'acme', 'app', 'PROJ-1');
     buildDeps(new RunManager(alive), { db: openDb(':memory:'), workspaces });
     expect(existsSync(join(live, 'work.txt'))).toBe(true);
+  });
+});
+
+describe('a control plane reached over the network', () => {
+  const run = (bind: string | null, body: object) => {
+    const manager = new RunManager(alive);
+    const db = openDb(':memory:');
+    new MyRepos(db).add('local', { name: 'acme/app', mainBranch: 'main' });
+    const options = { db, workspaces: mkdtempSync(join(tmpdir(), 'lf-ws-')), gitUrl: forge(), bind };
+    return createApp(manager, options).request('http://localhost:4317/api/runs', {
+      method: 'POST',
+      headers: { host: 'localhost:4317', 'x-legos': '1', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  };
+
+  it('refuses runs in local folders but still runs repos', async () => {
+    const folder = { cwd: tmpdir(), prompt: 'x' };
+    expect((await run('0.0.0.0', folder)).status).toBe(403);
+    expect((await run('0.0.0.0', { repo: 'acme/app', prompt: 'x' })).status).toBe(201);
+    expect((await run('127.0.0.1', folder)).status).toBe(201);
+  });
+
+  it('leaves execution to remote runners unless asked', () => {
+    expect([embeddedByDefault(undefined, true), embeddedByDefault(undefined, false), embeddedByDefault('on', true), embeddedByDefault('off', false)]).toEqual([false, true, true, false]);
   });
 });

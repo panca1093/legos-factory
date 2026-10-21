@@ -74,6 +74,8 @@ export async function launchRun(deps: Deps, { uid, ws }: { uid: string; ws: stri
     if (!deps.embedded) cwd = '';
   } else if (!deps.embedded) {
     throw new HttpError(409, 'this control plane has no runner of its own: start the run on a repo');
+  } else if (deps.networked) {
+    throw new HttpError(403, 'local folders are not available on a control plane reached over the network: pass repo');
   } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
     throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
   } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
