@@ -59,6 +59,38 @@ export type JiraFlow = { todo: string; inProgress: string; codeReview: string; r
 // design = write the spec and open a PR for it; build = implement it and open a PR
 export type Stage = 'design' | 'build';
 
+export type PipelineStage = 'backlog' | 'shaping' | 'spec_review' | 'building' | 'pr_review' | 'ready' | 'done';
+
+export type PlanTask = {
+  id: string;
+  do: string;
+  repo: string;
+  test: string;
+  needs: string[];
+  touches: string[];
+  state: 'waiting' | 'running' | 'paused' | 'done' | 'failed';
+};
+
+export type Plan = { tasks: PlanTask[]; error: string | null };
+
+export type Persona = 'foreman' | 'builder' | 'inspector' | 'cataloger';
+
+export type RoutingRule = {
+  id: string;
+  kind: 'paths' | 'lines' | 'jira' | 'repo';
+  value: string;
+  on: boolean;
+};
+
+export type AutomationSettings = {
+  allowlist: string[];
+  routing: RoutingRule[];
+  models: Record<Persona, string>;
+  parallelBuilders: number;
+  reviewAttempts: number;
+  brainstorm: 'optional' | 'always';
+};
+
 // chat = interactive discussion; task = one prompt, runs to completion, no follow-ups
 export type RunKind = 'chat' | 'task';
 
@@ -74,6 +106,8 @@ export type Run = {
   ticket: string | null;
   // design or build when started from a work item; null otherwise (fix-queue runs have a ticket but no stage)
   stage: Stage | null;
+  task: string | null;
+  persona: Persona | null;
   share: ShareLevel;
   runtime: 'claude-code';
   sessionId: string | null;
@@ -204,7 +238,9 @@ export type TicketLink = {
 export type WorkItemNote = { text: string; at: string };
 export type WorkItem = {
   ticket: string;
-  repos: { name: string; addedAt: string }[];
+  source: 'jira' | 'local';
+  plan: Plan | null;
+  repos: { name: string; addedAt: string; stage: PipelineStage; attempt: number }[];
   links: TicketLink[];
   note: WorkItemNote | null;
   // the Jira status last read

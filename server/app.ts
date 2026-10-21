@@ -16,6 +16,7 @@ import { jiraRoutes } from './routes/jira.ts';
 import { myReposRoutes } from './routes/my-repos.ts';
 import { prsRoutes } from './routes/prs.ts';
 import { runsRoutes } from './routes/runs.ts';
+import { settingsRoutes } from './routes/settings.ts';
 import { workItemsRoutes } from './routes/work-items.ts';
 import { Workbench } from './workbench.ts';
 import { WorkItems } from './work-items.ts';
@@ -48,6 +49,7 @@ export function createApp(runs: RunManager, opts: AppOptions = {}, deps = buildD
   app.route('/', jiraRoutes(deps));
   app.route('/', myReposRoutes(deps));
   app.route('/', workItemsRoutes(deps));
+  app.route('/', settingsRoutes());
   app.onError(onError);
   return app;
 }

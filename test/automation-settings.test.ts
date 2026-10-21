@@ -1,0 +1,99 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createApp } from '../server/app.ts';
+import { RunManager } from '../server/claude-runs.ts';
+import { loadSettings } from '../server/policy.ts';
+
+const defaults = {
+  allowlist: ['npm test', 'npm run build', 'npm run lint', 'go test', 'go vet'],
+  routing: [],
+  models: { foreman: 'opus', builder: 'sonnet', inspector: 'opus', cataloger: 'haiku' },
+  parallelBuilders: 0,
+  reviewAttempts: 3,
+  brainstorm: 'optional',
+};
+
+let root: string;
+let path: string;
+let originalSettings: string | undefined;
+const app = createApp(new RunManager());
+const get = () => app.request('http://localhost/api/settings/automation', { headers: { host: 'localhost' } });
+const put = (body: unknown) => app.request('http://localhost/api/settings/automation', {
+  method: 'PUT', headers: { host: 'localhost', 'x-legos': '1', 'content-type': 'application/json' }, body: JSON.stringify(body),
+});
+
+beforeEach(async () => {
+  originalSettings = process.env.LEGOS_SETTINGS;
+  root = await mkdtemp(join(tmpdir(), 'lf-automation-'));
+  path = join(root, 'settings.json');
+  process.env.LEGOS_SETTINGS = path;
+});
+
+afterEach(async () => {
+  if (originalSettings === undefined) delete process.env.LEGOS_SETTINGS;
+  else process.env.LEGOS_SETTINGS = originalSettings;
+  await rm(root, { recursive: true, force: true });
+});
+
+describe('automation settings', () => {
+  it('returns defaults when settings.json has no automation key', async () => {
+    await writeFile(path, JSON.stringify({ share: { default: 'private', rules: [] } }));
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(defaults);
+    expect(await loadSettings()).toMatchObject({ automation: defaults });
+  });
+
+  it('returns defaults when settings.json is missing or broken', async () => {
+    expect(await loadSettings()).toMatchObject({ automation: defaults, error: null });
+    await writeFile(path, '{');
+    expect(await loadSettings()).toMatchObject({ automation: defaults, error: expect.stringContaining('could not read') });
+  });
+
+  it('returns defaults when stored automation is invalid', async () => {
+    for (const automation of [null, {}, { ...defaults, reviewAttempts: 6 }, { ...defaults, models: { ...defaults.models, inspector: 'sonnet' } }]) {
+      await writeFile(path, JSON.stringify({ automation }));
+      expect(await loadSettings()).toMatchObject({ automation: defaults });
+    }
+  });
+
+  it('keeps other keys when saving', async () => {
+    const other = { share: { default: 'full', rules: [] }, jiraFlow: { todo: 'Queued' }, custom: { nested: [1, 'acme'] } };
+    await writeFile(path, JSON.stringify(other));
+    const automation = { ...defaults, allowlist: ['go vet'], routing: [{ id: 'r1', kind: 'repo', value: 'acme/api', on: true }], parallelBuilders: 2, brainstorm: 'always' };
+    const res = await put(automation);
+    expect(res.status).toBe(200);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ ...other, automation });
+    expect(await (await get()).json()).toEqual(automation);
+  });
+
+  it('saves automation when settings.json does not exist', async () => {
+    expect((await put(defaults)).status).toBe(200);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ automation: defaults });
+  });
+
+  it('rejects an inspector model equal to the builder model', async () => {
+    const res = await put({ ...defaults, models: { ...defaults.models, inspector: 'sonnet' } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/inspector.*differ.*builder/i);
+    expect(await readFile(path, 'utf8').catch(() => null)).toBeNull();
+  });
+
+  it('rejects reviewAttempts outside 1–5', async () => {
+    for (const reviewAttempts of [0, 6, 1.5]) {
+      expect((await put({ ...defaults, reviewAttempts })).status).toBe(400);
+    }
+    for (const reviewAttempts of [1, 5]) {
+      expect((await put({ ...defaults, reviewAttempts })).status).toBe(200);
+    }
+  });
+
+  it('rejects empty allowlist entries and invalid parallel builder counts', async () => {
+    for (const body of [{ ...defaults, allowlist: [' '] }, { ...defaults, parallelBuilders: -1 }, { ...defaults, parallelBuilders: 5 }, { ...defaults, parallelBuilders: 0.5 }]) {
+      expect((await put(body)).status).toBe(400);
+    }
+    expect((await put({ ...defaults, parallelBuilders: 4 })).status).toBe(200);
+  });
+});

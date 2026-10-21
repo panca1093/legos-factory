@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { TicketLink, WorkItemNote } from '../shared/types.ts';
+import type { TicketLink, WorkItem, WorkItemNote } from '../shared/types.ts';
 
 const keyOf = (repo: string) => repo.trim().toLowerCase();
 const now = () => new Date().toISOString();
@@ -12,11 +12,11 @@ const LINK_COLS = `name as repo, l.kind, l.pr_id as prId, l.branch, l.title, l.s
 export class WorkItems {
   constructor(private db: DatabaseSync) {}
 
-  get(owner: string, ticket: string): { status: string | null; done: boolean; note: WorkItemNote | null } | null {
-    const row = this.db.prepare(`select status, done, note, note_at from work_items where owner = ? and ticket = ?`).get(owner, ticket) as
-      | { status: string | null; done: number; note: string | null; note_at: string | null }
+  get(owner: string, ticket: string): (Pick<WorkItem, 'source' | 'plan'> & { status: string | null; done: boolean; note: WorkItemNote | null }) | null {
+    const row = this.db.prepare(`select status, done, note, note_at, source, plan from work_items where owner = ? and ticket = ?`).get(owner, ticket) as
+      | { status: string | null; done: number; note: string | null; note_at: string | null; source: WorkItem['source']; plan: string | null }
       | undefined;
-    return row ? { status: row.status, done: !!row.done, note: row.note ? { text: row.note, at: row.note_at! } : null } : null;
+    return row ? { source: row.source, plan: row.plan === null ? null : JSON.parse(row.plan), status: row.status, done: !!row.done, note: row.note ? { text: row.note, at: row.note_at! } : null } : null;
   }
 
   setNote(owner: string, ticket: string, text: string | null) {
@@ -40,8 +40,8 @@ export class WorkItems {
     this.db.prepare(`update work_items set status = ?, done = ? where owner = ? and ticket = ?`).run(status, done ? 1 : 0, owner, ticket);
   }
 
-  repos(owner: string, ticket: string): { name: string; addedAt: string }[] {
-    return this.db.prepare(`select name, added_at as addedAt from work_item_repos where owner = ? and ticket = ? order by repo_key`).all(owner, ticket) as { name: string; addedAt: string }[];
+  repos(owner: string, ticket: string): WorkItem['repos'] {
+    return this.db.prepare(`select name, added_at as addedAt, stage, attempt from work_item_repos where owner = ? and ticket = ? order by repo_key`).all(owner, ticket) as WorkItem['repos'];
   }
 
   hasRepo(owner: string, ticket: string, repo: string): boolean {
