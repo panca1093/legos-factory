@@ -290,6 +290,15 @@ export class Workbench {
     }
   }
 
+  // The tools the workbench offers; a merge tool means the forge can be merged from here.
+  async listTools(token: string): Promise<{ name: string }[]> {
+    const sid = await this.session(token);
+    const { res, msg } = await this.post(token, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, sid);
+    if (!res.ok) throw new Error(`workbench tools/list failed (HTTP ${res.status})`);
+    if (msg?.error) throw new Error(msg.error.message ?? 'workbench tools/list failed');
+    return (msg?.result?.tools ?? []).map((tool: any) => ({ name: String(tool?.name ?? '') })).filter((tool: { name: string }) => !!tool.name);
+  }
+
   // Runs one integration tool through execute_tools; `salvage` rescues an answer workbench cut off at ~60k chars.
   async execute(token: string, tool: string, args: object, salvage?: (raw: string) => unknown): Promise<any> {
     const out = await this.call(token, 'execute_tools', { executions: [{ tool, args }] });

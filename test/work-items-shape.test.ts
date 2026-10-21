@@ -50,7 +50,7 @@ describe('work item API shape', () => {
     }] });
   });
 
-  it('the three new endpoints answer 501', async () => {
+  it('the three gate endpoints are served', async () => {
     const { req } = setup();
     const responses = [];
     for (const path of [
@@ -60,7 +60,9 @@ describe('work item API shape', () => {
     ]) {
       responses.push(await req(path, 'POST'));
     }
-    expect(responses.map((response) => response.status)).toEqual([501, 501, 501]);
-    for (const response of responses) expect(await response.json()).toEqual({ error: 'not implemented yet' });
+    expect(responses.map((response) => response.status)).toEqual([200, 409, 409]);
+    expect(await responses[0].json()).toEqual({ ok: true });
+    expect(await responses[1].json()).toEqual({ error: 'that PR is not waiting for a review' });
+    expect(await responses[2].json()).toEqual({ error: 'that PR is not ready to merge' });
   });
 });
