@@ -1,10 +1,26 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { loadSettings, saveAutomation } from '../server/policy.ts';
+
+// Lets a test make the temp write fail the way a full disk would, without touching the real settings file.
+const fsFailure = vi.hoisted(() => ({ writeFails: false }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    default: actual,
+    writeFile: async (file: unknown, data: unknown, options?: unknown) => {
+      if (fsFailure.writeFails && typeof file === 'string' && file !== path) {
+        throw Object.assign(new Error('ENOSPC: no space left on device, open'), { code: 'ENOSPC' });
+      }
+      return actual.writeFile(file as any, data as any, options as any);
+    },
+  };
+});
 
 const defaults = {
   allowlist: ['npm test', 'npm run build', 'npm run lint', 'go test', 'go vet'],
@@ -88,9 +104,29 @@ describe('automation settings', () => {
   it('a failed write leaves the old settings.json intact', async () => {
     const old = JSON.stringify({ custom: 'acme', automation: defaults });
     await writeFile(path, old);
-    await mkdir(`${path}.tmp`);
-    await expect(saveAutomation({ ...defaults, allowlist: ['go vet'] })).rejects.toThrow();
+    fsFailure.writeFails = true;
+    try {
+      await expect(saveAutomation({ ...defaults, allowlist: ['go vet'] })).rejects.toThrow();
+    } finally {
+      fsFailure.writeFails = false;
+    }
     expect(await readFile(path, 'utf8')).toBe(old);
+  });
+
+  it('two saves at the same time do not collide', async () => {
+    const a = { ...defaults, allowlist: ['go vet'] };
+    const b = { ...defaults, allowlist: ['npm run build'], parallelBuilders: 2 };
+    await Promise.all([saveAutomation(a), saveAutomation(b)]);
+    const raw = JSON.parse(await readFile(path, 'utf8'));
+    expect([a, b]).toContainEqual(raw.automation);
+    expect((await readdir(root)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('the settings file keeps its mode', async () => {
+    await writeFile(path, JSON.stringify({ automation: defaults }));
+    await chmod(path, 0o600);
+    await saveAutomation({ ...defaults, allowlist: ['go vet'] });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
   it('keeps other keys when saving', async () => {
