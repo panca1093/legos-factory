@@ -15,12 +15,16 @@ import { SignIn } from './pages/SignIn.tsx';
 import { Work } from './pages/Work.tsx';
 import { WorkItem } from './pages/WorkItem.tsx';
 
+export function redirectTarget(hash: string): string | null {
+  const legacy = hash.replace(/^#\/?/, '').replace(/\/$/, '');
+  return legacy === 'tasks' ? '#/work' : legacy === 'sessions' ? '#/activity' : null;
+}
+
 function useRoute(): string[] {
   const [hash, setHash] = useState(location.hash);
   useEffect(() => {
     const on = () => {
-      const legacy = location.hash.replace(/^#\/?/, '').replace(/\/$/, '');
-      const target = legacy === 'tasks' ? '#/work' : legacy === 'sessions' ? '#/activity' : null;
+      const target = redirectTarget(location.hash);
       if (target) history.replaceState(null, '', target);
       setHash(location.hash);
     };

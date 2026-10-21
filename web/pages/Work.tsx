@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react';
 import type { PipelineStage } from '../../shared/types.ts';
 import { api, useFetch, type JiraRow, type WorkItem } from '../api.ts';
 import { Chrome, Frame, initials } from '../chrome.tsx';
@@ -11,13 +11,13 @@ const STAGES: PipelineStage[] = ['backlog', 'shaping', 'spec_review', 'building'
 type Column = { stage: PipelineStage; name: string; dot: string; hint: string; gate?: boolean };
 
 const COLUMNS: Column[] = [
-  { stage: 'backlog', name: 'Backlog', dot: '#cdd1dc', hint: 'From Jira, or created here' },
-  { stage: 'shaping', name: 'Shaping', dot: '#a6adbd', hint: 'Brainstorm and spec draft' },
-  { stage: 'spec_review', name: 'Spec review', dot: '#8f87f5', hint: 'A person approves the spec', gate: true },
-  { stage: 'building', name: 'Building', dot: '#6259db', hint: 'Build and agent review, on their own' },
-  { stage: 'pr_review', name: 'PR review', dot: '#c98a2e', hint: 'Rules routed it to a person', gate: true },
-  { stage: 'ready', name: 'Ready to merge', dot: '#3d7bd9', hint: 'Low risk, passed agent review' },
-  { stage: 'done', name: 'Done', dot: '#2f9c74', hint: 'Merged; Jira at Ready for QA' },
+  { stage: 'backlog', name: 'Backlog', dot: 'var(--faint)', hint: 'From Jira, or created here' },
+  { stage: 'shaping', name: 'Shaping', dot: 'var(--off-tone)', hint: 'Brainstorm and spec draft' },
+  { stage: 'spec_review', name: 'Spec review', dot: 'var(--accent)', hint: 'A person approves the spec', gate: true },
+  { stage: 'building', name: 'Building', dot: 'var(--soft-ink)', hint: 'Build and agent review, on their own' },
+  { stage: 'pr_review', name: 'PR review', dot: 'var(--warn)', hint: 'Rules routed it to a person', gate: true },
+  { stage: 'ready', name: 'Ready to merge', dot: 'var(--run-tone)', hint: 'Low risk, passed agent review' },
+  { stage: 'done', name: 'Done', dot: 'var(--good)', hint: 'Merged; Jira at Ready for QA' },
 ];
 
 const REPO_STATE: Record<PipelineStage, { label: string; tone: string }> = {
@@ -45,6 +45,15 @@ const SOURCES = [
   { value: 'sprint', label: 'Backlog: current sprint' },
 ] as const;
 
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
 type Source = (typeof SOURCES)[number]['value'];
 
 type Card = {
@@ -62,7 +71,7 @@ type Card = {
 const workHref = (ticket: string) => `#/work/${encodeURIComponent(ticket)}`;
 
 // A ticket sits in the stage of its slowest repo: the earliest stage any of its repos reached.
-function stageOf(item: WorkItem): PipelineStage {
+export function stageOf(item: WorkItem): PipelineStage {
   if (!item.repos.length) return 'shaping';
   return item.repos.reduce((slowest, repo) => (STAGES.indexOf(repo.stage) < STAGES.indexOf(slowest) ? repo.stage : slowest), item.repos[0].stage);
 }
@@ -191,11 +200,18 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
   const [source, setSource] = useState<Source>('mine');
   const [q, setQ] = useState('');
   const readOnly = scope === 'team';
+  const onTabKey = (index: number) => (e: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+    if (next === null) return;
+    e.preventDefault();
+    tabs?.item(next).focus();
+  };
 
   const work = useFetch(() => (readOnly ? api.teamWorkItems() : api.workItems()), [scope]);
   const mine = useFetch(api.myRepos, []);
   const projects = useMemo(() => [...new Set((mine.data?.repos ?? []).flatMap((r) => r.projects))], [mine.data]);
-  const jql = projects.length ? `project in (${projects.join(',')})` : null;
+  const jql = projects.length ? `project in (${projects.join(',')}) AND statusCategory != Done` : null;
   const backlog = useFetch(
     () =>
       source === 'mine'
@@ -292,15 +308,15 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
           <div className="work-toolbar">
             {isOwner && (
               <div className="segmented" role="tablist" aria-label="Whose work">
-                <button role="tab" aria-selected={!readOnly} className={!readOnly ? 'active' : ''} onClick={() => setScope('mine')}>
+                <button role="tab" aria-selected={!readOnly} tabIndex={!readOnly ? 0 : -1} className={!readOnly ? 'active' : ''} onKeyDown={onTabKey(0)} onClick={() => setScope('mine')}>
                   Mine
                 </button>
-                <button role="tab" aria-selected={readOnly} className={readOnly ? 'active' : ''} onClick={() => setScope('team')}>
+                <button role="tab" aria-selected={readOnly} tabIndex={readOnly ? 0 : -1} className={readOnly ? 'active' : ''} onKeyDown={onTabKey(1)} onClick={() => setScope('team')}>
                   Team
                 </button>
               </div>
             )}
-            <input className="input" type="search" placeholder="Filter by key, title or repo" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" type="search" placeholder="Filter by key, title or repo" aria-label="Filter by key, title or repo" value={q} onChange={(e) => setQ(e.target.value)} />
             <select className="input" aria-label="Backlog source" value={source} onChange={(e) => setSource(e.target.value as Source)}>
               {SOURCES.map((s) => (
                 <option key={s.value} value={s.value}>
