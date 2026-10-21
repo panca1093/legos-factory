@@ -10,7 +10,7 @@ import { MyRepos } from '../server/my-repos.ts';
 import { allowed, Workspaces } from '../server/tenancy.ts';
 import { Users } from '../server/users.ts';
 import { WorkItems } from '../server/work-items.ts';
-import { alive } from './fakes.ts';
+import { alive, peer } from './fakes.ts';
 
 beforeAll(() => {
   process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
@@ -23,7 +23,7 @@ function setup() {
   const db = openDb(':memory:');
   const app = createApp(new RunManager(alive), { users: new Users(db), db });
   const req = (path: string, cookie: string, init: RequestInit = {}) =>
-    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', cookie, 'x-legos': '1', 'content-type': 'application/json', ...(init.headers as any) } });
+    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', cookie, 'x-legos': '1', 'content-type': 'application/json', ...(init.headers as any) } }, peer());
   const send = (method: string) => (path: string, cookie: string, body: unknown = {}) => req(path, cookie, { method, body: JSON.stringify(body) });
   const post = send('POST');
   const put = send('PUT');
@@ -33,7 +33,7 @@ function setup() {
       method: 'POST',
       body: JSON.stringify({ name, pin: '123456' }),
       headers: { host: 'localhost:4317', 'x-legos': '1', 'content-type': 'application/json' },
-    });
+    }, peer());
     return cookieOf(res);
   };
   const json = async (res: Response) => res.json() as Promise<any>;

@@ -5,7 +5,7 @@ import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { Oidc, OidcError, type OidcConfig } from '../server/oidc.ts';
 import { Users } from '../server/users.ts';
-import { alive } from './fakes.ts';
+import { alive, peer } from './fakes.ts';
 
 const ISSUER = 'https://idp.example.com';
 const REDIRECT = 'https://factory.example.com/auth/oidc/callback';
@@ -153,7 +153,7 @@ describe('OpenID Connect sign-in routes', () => {
     const options = { db, users: new Users(db), publicUrl: PUBLIC, oidc: cfg, fetch: p.http, selfUrl: 'http://localhost:4317' };
     const deps = buildDeps(manager, options);
     const app = createApp(manager, options, deps);
-    const call = (path: string, init: RequestInit = {}, host = 'factory.example.com') => app.request(`${PUBLIC}${path}`, { ...init, headers: { host, ...(init.headers as object) } });
+    const call = (path: string, init: RequestInit = {}, host = 'factory.example.com') => app.request(`${PUBLIC}${path}`, { ...init, headers: { host, ...(init.headers as object) } }, peer(host.startsWith('localhost') ? '127.0.0.1' : '203.0.113.9'));
     const post = (path: string, body: unknown = {}, host?: string) => call(path, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } }, host);
     const secrets = new Map<string, string>();
     const start = async (attempt = 'attempt-0123456789abcdef') => {
@@ -165,10 +165,10 @@ describe('OpenID Connect sign-in routes', () => {
   }
   const cookieOf = (r: Response) => r.headers.get('set-cookie')!.split(';')[0];
 
-  it('offers the provider by label, and PIN only on this machine', async () => {
+  it('offers the provider by label, and no PIN behind a public URL', async () => {
     const { call } = setup();
     expect(await (await call('/auth/me')).json()).toMatchObject({ providers: [{ id: 'oidc', label: 'Acme SSO' }], pin: false, users: [] });
-    expect(await (await call('/auth/me', {}, 'localhost:4317')).json()).toMatchObject({ providers: [{ id: 'oidc', label: 'Acme SSO' }], pin: true });
+    expect(await (await call('/auth/me', {}, 'localhost:4317')).json()).toMatchObject({ providers: [{ id: 'oidc', label: 'Acme SSO' }], pin: false });
   });
 
   it('signs a person in from the callback, and hands the cookie to the app that was waiting', async () => {
@@ -225,7 +225,25 @@ describe('OpenID Connect sign-in routes', () => {
     const { post } = setup();
     expect((await post('/auth/users', { name: 'Eve', pin: '123456' })).status).toBe(403);
     expect((await post('/auth/login', { name: 'Eve', pin: '123456' })).status).toBe(403);
-    expect((await post('/auth/users', { name: 'Eve', pin: '123456' }, 'localhost:4317')).status).toBe(200);
+    expect((await post('/auth/users', { name: 'Eve', pin: '123456' }, 'localhost:4317')).status).toBe(403);
+  });
+
+  it('trusts the socket, not the Host header, for who is on this machine', async () => {
+    const lie = { method: 'POST', body: JSON.stringify({ name: 'Eve', pin: '123456' }), headers: { 'x-legos': '1', 'content-type': 'application/json' } };
+    const app = (opts: object) => {
+      const manager = new RunManager(alive);
+      const options = { db: openDb(':memory:'), users: new Users(openDb(':memory:')), ...opts };
+      return createApp(manager, options, buildDeps(manager, options));
+    };
+    const ask = (a: ReturnType<typeof app>, from: string, path = '/auth/users') =>
+      a.request(`http://localhost:4317${path}`, { ...lie, headers: { host: 'localhost:4317', ...lie.headers } }, peer(from));
+    expect((await ask(app({}), '127.0.0.1')).status).toBe(200);
+    expect((await ask(app({}), '203.0.113.9')).status).toBe(403);
+    expect((await ask(app({}), '203.0.113.9', '/auth/login')).status).toBe(403);
+    expect((await ask(app({ bind: '0.0.0.0' }), '127.0.0.1')).status).toBe(403);
+    expect((await ask(app({ bind: '0.0.0.0' }), '127.0.0.1', '/auth/login')).status).toBe(403);
+    const me = await app({ bind: '0.0.0.0' }).request('http://localhost:4317/auth/me', { headers: { host: 'localhost:4317' } }, peer());
+    expect(await me.json()).toMatchObject({ pin: false, users: [] });
   });
 
   it('answers 404 for a provider that is not configured', async () => {

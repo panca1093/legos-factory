@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context } from 'hono';
 import type { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -27,6 +28,8 @@ export type AppOptions = {
   // defaults to a throwaway in-memory database
   db?: DatabaseSync;
   selfUrl?: string;
+  // the address the server listens on (LEGOS_BIND); anything but loopback makes this a network-facing control plane
+  bind?: string | null;
   // where runners on other machines reach this app (put TLS in front); its host is accepted next to localhost
   publicUrl?: string | null;
   // false: this process only coordinates, runs execute on remote runners
@@ -66,6 +69,8 @@ export type Deps = {
   // false when no runner lives in this process: runs there need a repo, so a runner can clone it
   embedded: boolean;
   hostOk: (host: string | undefined) => boolean;
+  // reachable beyond this machine (bound past loopback, or behind a public URL): no PIN users, no runs in local folders
+  networked: boolean;
   opts: AppOptions;
   users: Users | null;
   workspaces: Workspaces;
@@ -115,6 +120,18 @@ export const BRANCH_RE = /^(?!-)[\w./-]{1,200}$/;
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const localOnly = (host: string | undefined) => LOCAL_HOSTS.has((host ?? '').replace(/:\d+$/, ''));
+
+const isLoopback = (addr: string) => addr === 'localhost' || addr === '::1' || addr === '::ffff:127.0.0.1' || /^127\./.test(addr);
+export const loopbackBind = (bind: string | null | undefined) => !bind || isLoopback(bind);
+
+// Decided by the socket's peer, never by headers a client controls.
+export function peerIsLocal(c: Context): boolean {
+  try {
+    return isLoopback(getConnInfo(c).remote.address ?? '');
+  } catch {
+    return false;
+  }
+}
 
 export const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
 

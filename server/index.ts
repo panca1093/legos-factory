@@ -46,7 +46,9 @@ async function startApp() {
   const embeddedRunner = process.env.LEGOS_RUNNER !== 'off';
   const leaseMs = Number(process.env.LEGOS_LEASE_MS) || undefined;
   const maxAttempts = Number(process.env.LEGOS_MAX_ATTEMPTS) || undefined;
-  const opts = { users, db, selfUrl, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
+  // loopback unless this is a team control plane that runners on other machines must reach (then put TLS in front)
+  const hostname = process.env.LEGOS_BIND || '127.0.0.1';
+  const opts = { users, db, selfUrl, bind: hostname, publicUrl, oidc, embeddedRunner, leaseMs, maxAttempts, hubUrl, workbenchUrl, bitbucketWorkspace };
   const deps = buildDeps(runs, opts);
   sweepOrphans(deps);
   const app = createApp(runs, opts, deps);
@@ -59,8 +61,6 @@ async function startApp() {
     app.get('*', serveStatic({ path: './dist/index.html' }));
   }
 
-  // loopback unless this is a team control plane that runners on other machines must reach (then put TLS in front)
-  const hostname = process.env.LEGOS_BIND || '127.0.0.1';
   serve({ fetch: app.fetch, hostname, port }, () => {
     console.log(
       `legos-factory api on ${selfUrl} · sign-in ${users ? ['PIN', workbenchUrl && 'workbench', oidc && 'OpenID Connect'].filter(Boolean).join(' + ') : 'off (LEGOS_AUTH=off)'} · team hub ${hubUrl ?? 'off'} · runner ${embeddedRunner ? 'embedded' : 'remote only'}`,

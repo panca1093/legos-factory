@@ -8,7 +8,7 @@ import { openDb } from './db.ts';
 import { Dispatcher, EMBEDDED } from './dispatcher.ts';
 import { capturePr, syncWorkItem } from './jira-sync.ts';
 import { MyRepos } from './my-repos.ts';
-import { HttpError, NO_WB, gitToken, localOnly, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
+import { HttpError, NO_WB, gitToken, localOnly, loopbackBind, onError, type AppOptions, type Deps, type Env, type Repos, type WorkbenchClient } from './http.ts';
 import { FixQueues } from './pr-fixes.ts';
 import { RunnerRegistry } from './runner-auth.ts';
 import type { Forge } from './ports.ts';
@@ -95,6 +95,7 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   };
   const grants = new Map<string, string>();
   const wsRoot = opts.workspaces ?? workspacesDir();
+  const networked = !loopbackBind(opts.bind) || !!opts.publicUrl;
   const embedded = opts.embeddedRunner !== false;
   const runs = new Runs(new Dispatcher(db, { leaseMs: opts.leaseMs ?? 60_000, maxAttempts: opts.maxAttempts ?? 3 }), {
     selfUrl,
@@ -200,7 +201,7 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
     return load;
   };
 
-  const deps: Deps = { runs, runners: new RunnerRegistry(db), oidc: opts.oidc ? new Oidc(opts.oidc, http) : null, embedded, hostOk, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, forge, workSource, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
+  const deps: Deps = { runs, runners: new RunnerRegistry(db), oidc: opts.oidc ? new Oidc(opts.oidc, http) : null, embedded, hostOk, networked, opts, users, workspaces, db, activity, myRepos, workItems, stages: new StageStore(db), workflow: loadWorkflow(opts.workflowDir), syncs: new Map(), http, fixes, wsRoot, connsFor, pending, workbench, forge, workSource, workspaceRepos, grants, selfUrl, startRun, busyIn, ownsRun };
 
   deps.stages.onNewFact((ws, ticket, repo) => void settle(deps, ws, ticket, repo).catch((err) => console.warn('stage engine failed:', err.message)));
   runs.recover();

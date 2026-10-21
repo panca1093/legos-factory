@@ -4,7 +4,7 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { PIN_RE } from '../users.ts';
 import type { User } from '../users.ts';
-import { HttpError, domain, errMsg, localOnly, parse, readBody, text, type Deps, type Env } from '../http.ts';
+import { HttpError, domain, errMsg, localOnly, parse, peerIsLocal, readBody, text, type Deps, type Env } from '../http.ts';
 
 export const SID_COOKIE = 'lf_sid';
 // workspace id of sign-in's own workbench client registration; no workspace has an empty id
@@ -22,14 +22,15 @@ const newUserSchema = z.object({
 const loginSchema = z.object({ name: text(), pin: text() });
 const attemptSchema = z.object({ attempt: text().refine((a) => !a || ATTEMPT_RE.test(a), 'invalid attempt') });
 
-export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, hostOk, selfUrl }: Deps) {
+export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, hostOk, networked, selfUrl }: Deps) {
   const routes = new Hono<Env>();
   // Lax, not Strict: the sign-in callbacks are cross-site redirects that must still set it.
   const signedIn = (c: Context, cookie: string) =>
     setCookie(c, SID_COOKIE, cookie, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 30 * 24 * 3600, secure: !!opts.publicUrl?.startsWith('https:') });
   // PIN users are for this machine: a control plane reached over the network signs people in through a provider
+  const pinAllowed = (c: Context) => !networked && localOnly(c.req.header('host')) && peerIsLocal(c);
   const localPin = (c: Context) => {
-    if (!localOnly(c.req.header('host'))) throw new HttpError(403, 'PIN sign-in is only for this machine');
+    if (!pinAllowed(c)) throw new HttpError(403, 'PIN sign-in is only for this machine');
   };
   const providers = () => [...(opts.workbenchUrl ? [{ id: 'workbench', label: 'workbench' }] : []), ...(oidc ? [{ id: 'oidc', label: oidc.label }] : [])];
   // workbench sign-in: OAuth state -> the attempt the app is polling; every provider: finished attempts -> cookie
@@ -79,7 +80,7 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
   routes.get('/auth/me', async (c) => {
     if (!users) return c.json({ authEnabled: false, pin: false, providers: [], users: [], authenticated: true, user: null });
     const user = users.verify(getCookie(c, SID_COOKIE));
-    const pin = localOnly(c.req.header('host'));
+    const pin = pinAllowed(c);
     return c.json({ authEnabled: true, pin, providers: providers(), users: pin ? users.pinNames() : [], authenticated: !!user, user });
   });
 

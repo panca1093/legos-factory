@@ -3,6 +3,8 @@ import type { QueryFn } from '../server/claude-runs.ts';
 
 export const WB = 'https://wb.test';
 export const OTHER = 'https://tools.test';
+// what Hono's node adapter hands requests: the socket's remote address
+export const peer = (address = '127.0.0.1') => ({ incoming: { socket: { remoteAddress: address } } });
 export const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 
 // Fake workbench (its own authorization server) plus a generic MCP server that delegates auth to it.

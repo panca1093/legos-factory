@@ -6,7 +6,7 @@ import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { openDb } from '../server/db.ts';
 import { Users } from '../server/users.ts';
-import { alive, fakeServers, OTHER, WB } from './fakes.ts';
+import { alive, fakeServers, OTHER, peer, WB } from './fakes.ts';
 
 beforeAll(() => {
   process.env.CLAUDE_PROJECTS_DIR = join(import.meta.dirname, 'fixtures/projects');
@@ -87,7 +87,7 @@ function setup(opts: { workbench?: boolean } = {}) {
   const deps = buildDeps(runs, options);
   const app = createApp(runs, options, deps);
   const req = (path: string, init: RequestInit = {}, cookie?: string) =>
-    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', ...(cookie && { cookie }), ...(init.headers as any) } });
+    app.request(`http://localhost:4317${path}`, { ...init, headers: { host: 'localhost:4317', ...(cookie && { cookie }), ...(init.headers as any) } }, peer());
   const post = (path: string, body: unknown, cookie?: string) =>
     req(path, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } }, cookie);
   const signUp = async (name: string, pin = '123456') => cookieOf(await post('/auth/users', { name, pin }));
