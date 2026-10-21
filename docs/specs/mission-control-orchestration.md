@@ -15,7 +15,7 @@ Four pull requests, each with its own integration branch. A work package belongs
 | PR | Integration branch | Cut from | Work packages | Title |
 |---|---|---|---|---|
 | 1 | `mc/pr1-contract` | `main` | WP-01, WP-02, WP-03, WP-04 | feat: mission control 1/4 contract |
-| 2 | `mc/pr2-automode` | `main` after PR 1 merged | WP-10, WP-11 | feat: mission control 2/4 auto mode |
+| 2 | `mc/pr2-automode` | `main` after PR 1 merged | WP-10, WP-11, WP-12, WP-13 | feat: mission control 2/4 auto mode |
 | 3 | `mc/pr3-pipeline` | `mc/pr2-automode` (WP-33 needs WP-10) | WP-30 to WP-37 | feat: mission control 3/4 pipeline |
 | 4 | `mc/pr4-frontend` | `main` after PR 1 merged | WP-20 to WP-27 | feat: mission control 4/4 front end |
 
@@ -65,9 +65,20 @@ Track B, auto mode → PR 2:
 - Read the allowlist from `loadSettings().automation` when the run starts.
 - Tests: `runs an allowlisted command without a decision`, `pauses on a command outside the allowlist`, `allows edits inside the clone`, `pauses on an edit outside the clone`.
 
-**WP-11 Add to allowlist from a paused run** · WP-10 · `server/routes/runs.ts`, `test/automode.test.ts`
+**WP-11 Add to allowlist from a paused run** · WP-10, WP-12 · `server/routes/runs.ts`, `test/automode.test.ts`
 - The decision answer accepts `remember: true` for a Bash decision; the command's first two words are appended to the allowlist with `saveAutomation`, then the decision is allowed.
-- Tests: `remember adds the command prefix to the allowlist`, `remember is ignored for non-Bash decisions`.
+- `remember: true` is honoured only for an owner (WP-12); for anyone else the decision is allowed once and the allowlist is unchanged.
+- Tests: `remember adds the command prefix to the allowlist`, `remember is ignored for non-Bash decisions`, `remember from a non-owner does not change the allowlist`.
+
+**WP-12 Owners** · PR 1 merged · `server/owners.ts` (new), `server/routes/settings.ts`, `server/routes/auth.ts`, `test/owners.test.ts` (new)
+- Owners come from `LEGOS_OWNERS` (comma-separated user names or e-mails, case-insensitive). With sign-in off (`LEGOS_AUTH=off`) the local user is an owner. Unset with sign-in on: nobody is an owner.
+- `isOwner(user)` in `server/owners.ts`. `PUT /api/settings/automation` answers 403 `{"error":"only owners can change automation"}` for non-owners. `GET /auth/me` adds `isOwner: boolean`.
+- Tests: `an owner can save automation`, `a non-owner gets 403`, `me reports isOwner`, `sign-in off makes the local user an owner`.
+
+**WP-13 Settings robustness** · PR 1 merged · `server/policy.ts`, `test/automation-settings.test.ts`
+- Read `automation` key by key: each valid key is kept, each missing or invalid key falls back to its default, and `loadSettings` returns `automationErrors: string[]` naming the keys that fell back.
+- `saveAutomation` writes to `settings.json.tmp` in the same folder and renames it over `settings.json`.
+- Tests: `keeps valid keys when one key is invalid`, `reports which keys fell back`, `a failed write leaves the old settings.json intact`.
 
 Track A, front end → PR 4. **WP-20 runs first; WP-21 to WP-27 run in parallel after it.** New styles go in a CSS file next to the page (`web/pages/Work.css`, imported by `Work.tsx`); only WP-20 edits `web/styles.css`. Match `docs/design/mission-control/<n>-*.dc.html` for layout, copy and classes.
 
@@ -83,7 +94,7 @@ Track A, front end → PR 4. **WP-20 runs first; WP-21 to WP-27 run in parallel 
 
 **WP-22 Work board** · WP-20 · `web/pages/Work.tsx` (new), `web/pages/Work.css`, `web/pages/Jira.tsx`, `web/pages/Tasks.tsx` (delete when unused) · design `2-work-board`
 - Columns Backlog · Shaping · Spec review · Building · PR review · Ready to merge · Done. Backlog = `api.jiraIssues(filter)` minus tickets that already have a work item. Other columns = work items by the slowest repo's `stage`. Gate columns show a "You" tag. Start on a backlog card opens New task with the ticket attached.
-- Mine/Team switch is shown only when `me.isOwner` is true; until an owner flag exists, hide it.
+- Mine/Team switch is shown only when `me.isOwner` is true (from WP-12; until PR 2 is merged, treat a missing `isOwner` as false).
 
 **WP-23 Work item page** · WP-20 · `web/pages/WorkItem.tsx` (new), `web/pages/WorkItem.css` · design `5-work-item`
 - Header, stage stepper with personas, paused bar (answers through the existing decision call), Flow graph from `plan.tasks` (columns by dependency depth, node = id, state, repo tag, title, needs, Builder), Pull requests box per repo, runs list, What happened, cost.
@@ -119,7 +130,9 @@ Track C, pipeline → PR 3. WP-30, WP-31, WP-32 and WP-34 may run in parallel; t
 
 **WP-33 Pipeline wiring** · WP-30, WP-31, WP-32, and WP-10 (in mc/pr2-automode) · `server/pipeline.ts`, `server/jira-sync.ts`, `server/work-items.ts`, `test/pipeline-wiring.test.ts` (new)
 - On spec approval, run end and each sync tick, build facts, call `next`, execute the actions (start runs through `launchRun`, Inspector runs read-only, write stages and attempts). One run per task at a time; respect the run queue.
-- Tests with fakes: `approving the spec starts the first wave`, `a passing review with no matching rule marks the repo ready`, `a failing review starts the same task again`.
+- Backfill once at startup: a repo whose stage is still the default `building` and that has no run in the pipeline gets its stage from `ticket_links` (impl PR merged → `done`, impl PR open → `pr_review`, spec PR open → `spec_review`, nothing → keep).
+- `WorkItems.get` parses `plan` defensively: unparsable JSON returns `{ tasks: [], error: 'stored plan is unreadable' }` instead of throwing.
+- Tests with fakes: `approving the spec starts the first wave`, `a passing review with no matching rule marks the repo ready`, `a failing review starts the same task again`, `backfills stages of existing work items from their links`, `an unreadable stored plan does not break the list`.
 
 **WP-34 Routing rules** · PR 1 merged · `server/routing.ts` (new), `test/routing.test.ts` (new)
 - `route(pr: { files: string[]; changedLines: number; repo: string; jiraType: string | null; labels: string[] }, rules: RoutingRule[], inspectorReasons: string[]): { toPerson: boolean; reasons: string[] }`. Glob match for paths (no new dependency).
@@ -137,7 +150,7 @@ Track C, pipeline → PR 3. WP-30, WP-31, WP-32 and WP-34 may run in parallel; t
 - After a repo's PR merges and the Cataloger model is not `off`, start one Cataloger run on that repo.
 - Tests: `starts the cataloger after merge`, `skips it when off`.
 
-**PR checks:** PR 2 when WP-10 and WP-11 are merged into `mc/pr2-automode`; PR 3 when WP-30 to WP-37 are in `mc/pr3-pipeline`; PR 4 when WP-20 to WP-27 are in `mc/pr4-frontend`. At each, the orchestrator pushes the branch, opens the PR (titles in the table above), and **stops for the human**.
+**PR checks:** PR 2 when WP-10 to WP-13 are merged into `mc/pr2-automode`; PR 3 when WP-30 to WP-37 are in `mc/pr3-pipeline`; PR 4 when WP-20 to WP-27 are in `mc/pr4-frontend`. At each, the orchestrator pushes the branch, opens the PR (titles in the table above), and **stops for the human**.
 
 ## Rules every worker follows (paste into every worker prompt)
 
