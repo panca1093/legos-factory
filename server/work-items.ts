@@ -69,6 +69,11 @@ export class WorkItems {
     return (this.db.prepare(`select ticket from work_items where owner = ? order by created_at desc`).all(owner) as { ticket: string }[]).map((r) => r.ticket);
   }
 
+  // every work item of every owner, newest first
+  all(): { owner: string; ticket: string }[] {
+    return this.db.prepare(`select owner, ticket from work_items order by created_at desc`).all() as { owner: string; ticket: string }[];
+  }
+
   // every owner's items the factory hasn't finished with
   pending(): { owner: string; ticket: string }[] {
     return this.db.prepare(`select owner, ticket from work_items where done = 0 order by owner, ticket`).all() as { owner: string; ticket: string }[];
