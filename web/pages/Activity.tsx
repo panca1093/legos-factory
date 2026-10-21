@@ -60,8 +60,9 @@ function Activity({ live, initialTab = 'mine' }: { live?: Live; initialTab?: 'mi
 }
 
 function MineActivity({ live, days, query, onContinue }: { live: Live; days: number; query: string; onContinue: (r: ResumeReq) => void }) {
-  const { data, error } = useFetch(() => api.myActivity(days), [days, live.runs]);
-  const sessions = useFetch(api.sessions, [live.runs]);
+  const runSig = [...live.runs.values()].map((r) => `${r.id}:${r.status}`).join();
+  const { data, error } = useFetch(() => api.myActivity(days), [days, runSig]);
+  const sessions = useFetch(api.sessions, [runSig]);
   const startOfToday = new Date().setHours(0, 0, 0, 0);
   const items = (data?.items ?? []).filter((i) => (days !== 1 || Date.parse(i.lastEventAt) >= startOfToday) && `${i.title} ${i.ticket ?? ''} ${i.repo ?? ''} ${i.project}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   const priced = items.filter((i) => i.estimatedCostUsd !== null);
