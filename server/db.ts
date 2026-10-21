@@ -52,6 +52,7 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
   addColumn(db, 'work_items', 'note_at', 'text');
   addColumn(db, 'work_items', 'source', `text not null default 'jira'`);
   addColumn(db, 'work_items', 'plan', 'text');
+  addColumn(db, 'work_items', 'routing', 'text');
   addColumn(db, 'work_item_repos', 'stage', `text not null default 'building'`);
   addColumn(db, 'work_item_repos', 'attempt', 'integer not null default 0');
   addColumn(db, 'runs', 'task', 'text');

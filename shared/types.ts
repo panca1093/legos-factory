@@ -82,6 +82,15 @@ export type RoutingRule = {
   on: boolean;
 };
 
+// Why a PR came to a person: the rules that matched, what the Inspector asked for and what it found.
+export type RoutingInfo = {
+  at: string;
+  reasons: string[];
+  matches: { id: string; reason: string }[];
+  inspectorReasons: string[];
+  findings: string;
+};
+
 export type AutomationSettings = {
   allowlist: string[];
   routing: RoutingRule[];
@@ -243,6 +252,8 @@ export type WorkItem = {
   repos: { name: string; addedAt: string; stage: PipelineStage; attempt: number }[];
   links: TicketLink[];
   note: WorkItemNote | null;
+  // the routing decision per repo, keyed by lower-cased repo name
+  routing?: Record<string, RoutingInfo> | null;
   // the Jira status last read
   status: string | null;
 };
