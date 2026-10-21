@@ -5,7 +5,7 @@ import { Empty, ShareBadge, TicketChip, Thread, UsageRows, totalTokens } from '.
 import { Icon } from '../icons.tsx';
 import { ALIVE, RECENT_MS, type Live, type ResumeReq, useStickyScroll, Frame } from '../chrome.tsx';
 
-export function Sessions({ sessions, error, live }: { sessions: SessionSummary[] | null; error: string | null; live: Live }) {
+export function Sessions({ sessions, error, live, embedded = false, query, onContinue }: { sessions: SessionSummary[] | null; error: string | null; live: Live; embedded?: boolean; query?: string; onContinue?: (r: ResumeReq) => void }) {
   const now = useNow();
   const [q, setQ] = useState('');
   const [project, setProject] = useState('');
@@ -16,27 +16,19 @@ export function Sessions({ sessions, error, live }: { sessions: SessionSummary[]
   const filtered = (sessions ?? []).filter(
     (s) =>
       (!project || s.cwd === project) &&
-      (!q || `${s.title} ${s.cwd} ${s.gitBranch}`.toLowerCase().includes(q.toLowerCase())) &&
-      (filter === 'all' || (filter === 'live' ? liveIds.has(s.id) : !!s.lastActivityAt && now - Date.parse(s.lastActivityAt) < 86400000)),
+      (!(query ?? q) || `${s.title} ${s.ticket ?? ''} ${s.cwd} ${s.gitBranch}`.toLowerCase().includes((query ?? q).toLowerCase())) &&
+      (filter === 'all' || (filter === 'live' ? liveIds.has(s.id) : !!s.lastActivityAt && Date.parse(s.lastActivityAt) >= new Date(now).setHours(0, 0, 0, 0))),
   );
-  return (
-    <Frame
-      crumb={
-        <>
-          <span>Workspace / </span>Sessions
-        </>
-      }
-    >
-      <div className="scroll">
-        <div className="page">
+  const content = (
+    <>
           <div className="page-heading">
             <div>
-              <h1>Sessions</h1>
+              {embedded ? <h2>Sessions</h2> : <h1>Sessions</h1>}
               <p className="lead">Your chats and tasks started from legos-factory. Read-only until you continue one.</p>
             </div>
           </div>
           <div className="tool-bar">
-            <input id="session-search" className="input" placeholder="Search conversations…" value={q} onChange={(e) => setQ(e.target.value)} />
+            {query === undefined && <input id="session-search" aria-label="Search sessions" className="input" placeholder="Search conversations…" value={q} onChange={(e) => setQ(e.target.value)} />}
             <select className="input" aria-label="Project" value={project} onChange={(e) => setProject(e.target.value)}>
               <option value="">All projects</option>
               {projects.map((p) => (
@@ -45,7 +37,7 @@ export function Sessions({ sessions, error, live }: { sessions: SessionSummary[]
                 </option>
               ))}
             </select>
-            <div className="segmented" role="tablist">
+            <div className="segmented" role="tablist" aria-label="Session status">
               {(['all', 'live', 'today'] as const).map((f) => (
                 <button key={f} role="tab" aria-selected={filter === f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
                   {f === 'all' ? 'All' : f === 'live' ? 'Live' : 'Today'}
@@ -65,12 +57,12 @@ export function Sessions({ sessions, error, live }: { sessions: SessionSummary[]
                 const total = totalTokens(s.usage);
                 const isLive = liveIds.has(s.id);
                 return (
-                  <a key={s.id} className="list-item" href={`#/sessions/${s.id}`}>
+                  <div key={s.id} className="list-item">
                     <span className={`glyph ${isLive ? 'run' : ''}`}>
                       <Icon name="chat" size={16} />
                     </span>
                     <div className="copy">
-                      <b>{s.title}</b>
+                      <a href={`#/sessions/${s.id}`}><b>{s.title}</b></a>
                       <span>
                         {s.ticket && <TicketChip ticket={s.ticket} />} {projectName(s.cwd)}
                         {s.gitBranch && ` · ${s.gitBranch}`} · {s.turns} prompt{s.turns === 1 ? '' : 's'} · {s.toolCalls} tool calls
@@ -82,16 +74,19 @@ export function Sessions({ sessions, error, live }: { sessions: SessionSummary[]
                       <ShareBadge share={s.share} />{' '}
                       {total === null ? 'tokens unknown' : `${fmtTokens(total)} tokens`}
                     </div>
-                  </a>
+                    <div className="activity-actions">
+                      <a href={`#/sessions/${s.id}`}>Open</a>
+                      {isLive ? <a className="btn sm" href={`#/runs/${[...live.runs.values()].find((r) => r.sessionId === s.id && ALIVE.includes(r.status))!.id}`}>Watch</a> : onContinue && <button className="btn sm" disabled={!s.cwd} onClick={() => s.cwd && onContinue({ sessionId: s.id, cwd: s.cwd, recentlyActive: !!s.lastActivityAt && now - Date.parse(s.lastActivityAt) < RECENT_MS })}>Continue</button>}
+                    </div>
+                  </div>
                 );
               })}
             </div>
           )}
           <p className="footnote">Only sessions you started here are listed; terminal sessions stay private. Titles come from /rename or the first prompt.</p>
-        </div>
-      </div>
-    </Frame>
+    </>
   );
+  return embedded ? <section className="activity-sessions" aria-label="Sessions">{content}</section> : <Frame crumb={<><span>Workspace / </span>Sessions</>}><div className="scroll"><div className="page">{content}</div></div></Frame>;
 }
 
 // ---------- chat views ----------
