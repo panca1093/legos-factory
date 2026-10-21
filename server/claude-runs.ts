@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { query as sdkQuery, type CanUseTool, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, Stage, StreamMessage, TimelineEvent } from '../shared/types.ts';
 import { toEvents } from './claude-sessions.ts';
+import { loadSettings } from './policy.ts';
 
 export type QueryFn = typeof sdkQuery;
 
@@ -177,6 +179,7 @@ export class RunManager extends EventEmitter {
   private launch(run: Run, req: StartRequest) {
     const input = new InputQueue();
     const abort = new AbortController();
+    const allowlist = loadSettings().then(({ automation }) => automation.allowlist);
     const q = this.queryFn({
       prompt: input,
       options: {
@@ -187,7 +190,7 @@ export class RunManager extends EventEmitter {
         ...(req.mcp && { mcpServers: Object.fromEntries(Object.entries(req.mcp).map(([name, m]) => [name, { type: 'http' as const, ...m }])) }),
         ...(req.env && { env: { ...process.env, ...req.env } }),
         abortController: abort,
-        canUseTool: req.readOnly ? READ_ONLY : this.canUseTool(run),
+        canUseTool: req.readOnly ? READ_ONLY : this.canUseTool(run, allowlist),
       },
     });
     const live: Live = {
@@ -321,16 +324,28 @@ export class RunManager extends EventEmitter {
     }
   }
 
-  private canUseTool(run: Run): CanUseTool {
-    return (toolName, input, opts) =>
-      new Promise<PermissionResult>((resolve) => {
+  private canUseTool(run: Run, allowlist: Promise<string[]>): CanUseTool {
+    return async (toolName, input, opts) => {
+      const prefixes = await allowlist;
+      const command = input.command;
+      if (toolName === 'Bash' && typeof command === 'string' && prefixes.some((prefix) => command.trim().startsWith(prefix.trim()))) {
+        return { behavior: 'allow', updatedInput: input };
+      }
+      if (['Edit', 'Write', 'NotebookEdit'].includes(toolName)) {
+        const path = toolName === 'NotebookEdit' ? input.notebook_path : input.file_path;
+        if (typeof path === 'string' && path) {
+          const inside = relative(resolve(run.cwd), resolve(run.cwd, path));
+          if (inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) return { behavior: 'allow', updatedInput: input };
+        }
+      }
+      return new Promise<PermissionResult>((resolve) => {
         const decision: PendingDecision = {
           id: randomUUID(),
           runId: run.id,
           cwd: run.cwd,
           toolName,
           title: opts.title ?? null,
-          reason: opts.decisionReason ?? null,
+          reason: toolName === 'Bash' ? 'outside the allowlist' : opts.decisionReason ?? null,
           input,
           createdAt: new Date().toISOString(),
         };
@@ -342,6 +357,7 @@ export class RunManager extends EventEmitter {
           once: true,
         });
       });
+    };
   }
 
   decide(id: string, answer: DecisionAnswer): boolean {
