@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, relative } from 'node:path';
+import { mkdir, readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PermissionMode, Run, ShareLevel, Stage } from '../shared/types.ts';
 import { syncWorkItem } from './jira-sync.ts';
@@ -50,6 +51,11 @@ export function stageGuide(stage: Stage, ticket: string): string {
 
 export type LaunchRequest = z.output<typeof launchSchema>;
 
+// A chat with no folder works here, in the app's own scratch folder, so its transcript is found again later.
+export function chatsDir(): string {
+  return process.env.LEGOS_CHATS_DIR ?? join(homedir(), '.legos-factory', 'chats');
+}
+
 // Runs in cwd or a fresh clone of repo, with the owner's connections reached through this app's proxy.
 export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Promise<Run> {
   const { runs, activity, opts, wsRoot } = deps;
@@ -63,6 +69,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   // A repo run works in a fresh clone; continuing one re-clones into the same path.
   let cwd = req.cwd;
   let clone: { path: string; repo: RepoRef } | null = null;
+  const scratch = !req.cwd && !req.repo;
   if (req.repo) {
     const repo = parseRepo(req.repo);
     if (!repo) throw new HttpError(400, 'repo must look like workspace/repo');
@@ -72,6 +79,9 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
       ? req.task ? `${req.ticket}-${safeName(req.task)}`.slice(0, 100) : req.ticket
       : `run-${randomBytes(4).toString('hex')}`;
     clone = { path: workspacePath(wsRoot, uid, repo, key), repo };
+  } else if (scratch) {
+    cwd = chatsDir();
+    await mkdir(cwd, { recursive: true, mode: 0o700 });
   } else if (isAbsolute(cwd) && managedWorkspace(wsRoot, cwd)) {
     const m = managedWorkspace(wsRoot, cwd)!;
     if (m.owner !== uid) throw new HttpError(404, 'session not found');
@@ -84,15 +94,15 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
     const { repo } = clone;
     const author = deps.users?.get(uid);
     if (req.repo || !(await exists(cwd))) await domain(createWorkspace({ path: cwd, repo, branch, urlTemplate: opts.gitUrl, credential: () => gitToken(deps, uid, repo), author }));
-  } else if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) {
-    throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
-  } else if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) {
-    throw new HttpError(400, 'cwd must be an existing absolute directory, or pass repo');
+  } else if (!scratch) {
+    if (isAbsolute(cwd) && !relative(wsRoot, cwd).startsWith('..')) throw new HttpError(400, 'cwd is inside the factory workspaces: pass repo instead');
+    if (!isAbsolute(cwd) || !(await stat(cwd).then((s) => s.isDirectory(), () => false))) throw new HttpError(400, 'cwd must be an existing absolute directory, or pass repo');
   }
   const started = (run: Run) => (clone && deps.clones.set(run.id, clone.path), run);
   const repo = clone ? `${clone.repo.workspace}/${clone.repo.slug}` : null;
   const ticket = req.ticket || null;
-  const share = req.share ?? shareFor(cwd, settings);
+  // The scratch folder is the app's own: a chat there is never published to the team hub.
+  const share = req.share ?? (resolve(cwd) === resolve(chatsDir()) ? 'private' : shareFor(cwd, settings));
   const connected = opts.selfUrl ? (await deps.connsFor(uid).all()).filter((x) => x.connected).map((x) => x.name) : [];
   let runPrompt = stage ? `${prompt}\n\n${kind === 'chat' ? DISCUSSION_GUIDE(req.ticket) : stageGuide(stage, req.ticket)}` : prompt;
   if (req.persona) runPrompt += `\n\n${await readFile(new URL(`../workflows/factory/personas/${req.persona}.md`, import.meta.url), 'utf8')}`;
