@@ -1,9 +1,10 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import type { ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
 import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type RepoRow, type Theme } from './api.ts';
 import { Icon } from './icons.tsx';
+import { visibleEvents } from './lib/thread.ts';
 
 export const go = (hash: string) => {
   location.hash = hash;
@@ -462,8 +463,8 @@ function toItems(events: TimelineEvent[]): Item[] {
   return items;
 }
 
-function ToolCard({ use, result, pending }: { use: TimelineEvent; result: TimelineEvent | null; pending: 'running' | 'waiting' | null }) {
-  const status = result ? (result.isError ? 'Error' : 'Completed') : pending === 'waiting' ? 'Waiting for you' : pending === 'running' ? 'Running…' : 'No result';
+function ToolCard({ use, result, pending }: { use: TimelineEvent; result: TimelineEvent | null; pending: 'running' | null }) {
+  const status = result ? (result.isError ? 'Error' : 'Completed') : pending === 'running' ? 'Running…' : 'No result';
   return (
     <details className="tool-card">
       <summary>
@@ -486,21 +487,24 @@ function ToolCard({ use, result, pending }: { use: TimelineEvent; result: Timeli
 export function Thread({
   events,
   working,
-  waiting,
+  queued,
+  showTools = true,
   title,
   children,
 }: {
   events: TimelineEvent[];
+  // the agent is mid-turn
   working?: boolean;
-  // a permission request is open, so the latest tool call is blocked on the user
-  waiting?: boolean;
+  // waiting for a free slot, so nothing is running yet
+  queued?: boolean;
+  // tool calls clutter a live run; the transcript keeps them
+  showTools?: boolean;
   title?: ReactNode;
   children?: ReactNode;
 }) {
   const [showSide, setShowSide] = useState(false);
   const sideCount = events.filter((e) => e.sidechain).length;
-  // thinking is noise in a chat view; it stays in the raw transcript
-  const items = toItems(events.filter((e) => e.kind !== 'thinking' && (showSide || !e.sidechain)));
+  const items = toItems(visibleEvents(events, { showTools, showSide }));
   const lastTool = [...items].reverse().find((i) => i.kind === 'tool');
 
   return (
@@ -513,7 +517,7 @@ export function Thread({
           </button>
         )}
       </div>
-      {items.length === 0 && !working && <Empty>No messages yet.</Empty>}
+      {items.length === 0 && !working && !queued && <Empty>No messages yet.</Empty>}
       {items.map((it, i) => {
         if (it.kind === 'user')
           return (
@@ -537,7 +541,7 @@ export function Thread({
               <Markdown text={it.e.text} />
             </>
           ) : (
-            <ToolCard use={it.use} result={it.result} pending={it !== lastTool ? null : waiting ? 'waiting' : working ? 'running' : null} />
+            <ToolCard use={it.use} result={it.result} pending={it !== lastTool ? null : working ? 'running' : null} />
           );
         return (
           <div key={it.kind === 'tool' ? it.use.id : it.e.id} className="message" style={continues ? { marginTop: -16 } : undefined}>
@@ -547,12 +551,23 @@ export function Thread({
         );
       })}
       {children}
-      {working && (
-        <div className="working">
-          <span className="pulse" /> Claude is working…
-        </div>
-      )}
+      {working && <Thinking label="thinking" />}
+      {queued && <Thinking label="queued" />}
     </>
+  );
+}
+
+// The agent's turn in progress: a trail of cells whose light sweeps back and forth.
+function Thinking({ label }: { label: string }) {
+  return (
+    <div className="thinking" role="status" aria-live="polite">
+      <span className="thinking-cells" aria-hidden="true">
+        {Array.from({ length: 10 }, (_, i) => (
+          <i key={i} style={{ '--i': i } as CSSProperties} />
+        ))}
+      </span>
+      <span className="thinking-label">{label}</span>
+    </div>
   );
 }
 

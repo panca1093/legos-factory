@@ -177,8 +177,10 @@ export function RunView({
         <div className="thread" ref={scroll.ref} onScroll={scroll.onScroll}>
           <Thread
             events={run.events}
-            working={working && pending.length === 0}
-            waiting={pending.length > 0}
+            // a queued run hasn't started: the queue notice stands in for the working cursor
+            working={working && pending.length === 0 && run.status !== 'queued'}
+            queued={run.status === 'queued'}
+            showTools={false}
             title={
               <>
                 {projectName(run.cwd)} · started {new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

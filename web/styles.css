@@ -380,7 +380,26 @@ details.usage[open] summary .meta svg { transform: rotate(180deg); }
 .choice:hover { background: var(--hover); }
 .choice.on { border-color: var(--accent); background: var(--soft); }
 .choice small { display: block; color: var(--muted); font-size: 11px; }
-.working { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin: 0 0 18px 45px; }
+/* the agent's turn in progress: a trail of cells whose light sweeps back and forth */
+@property --head {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+@property --i {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}
+.thinking { display: flex; align-items: center; gap: 10px; margin: 0 0 18px 45px; animation: rise var(--motion) var(--ease), head-sweep 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate; }
+.thinking-cells { display: flex; align-items: center; gap: 2px; }
+.thinking-cells i { width: 8px; height: 8px; border-radius: 1px; background: var(--accent); --d: max(var(--i) - var(--head), var(--head) - var(--i)); opacity: clamp(0.14, 1 - var(--d) * 0.24, 1); transform: scale(clamp(0.42, 1 - var(--d) * 0.14, 1)); }
+.thinking-label { font-size: 11.5px; color: var(--muted); }
+/* the light crosses the row, then comes back: the trail reads the same both ways */
+@keyframes head-sweep {
+  from { --head: 0; }
+  to { --head: 9; }
+}
 .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px #6259db1f; animation: pulse 1s infinite alternate; }
 @keyframes pulse { to { opacity: 0.35; } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
