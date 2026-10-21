@@ -1,8 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { api, ago, storage, useFetch, useNow, type ReviewRequest, type RoutingInfo, type WorkItem, type PrComment, type FixQueue } from '../api.ts';
 import { Empty } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 import './Reviews.css';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+// automatic activation: moving focus with the arrows also selects that tab
+const onTabKey = (index: number) => (e: KeyboardEvent<HTMLButtonElement>) => {
+  const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+  if (next === null) return;
+  e.preventDefault();
+  tabs?.item(next).focus();
+  tabs?.item(next).click();
+};
 
 function Teammates() {
   const now = useNow(60000);
@@ -260,7 +279,7 @@ export function Reviews() {
   const uniquePrs = factoryPrs.filter((p, i) => factoryPrs.findIndex((other) => other.link.repo === p.link.repo && other.link.prId === p.link.prId) === i);
   return <Frame crumb={<span>Workspace / Reviews</span>}><div className="scroll"><div className="page reviews-page">
     <div className="page-heading"><div><h1>Reviews</h1><p className="lead">Code that waits on you: gates the factory routed to you, teammates' PRs, and comments on PRs the factory opened for you.</p></div><button className="btn sm ghost" onClick={() => setRefresh((n) => n + 1)}>Refresh</button></div>
-    <div className="reviews-tabs" role="tablist" aria-label="Review type">{[['gates', `Factory gates · ${data ? gates.length : '—'}`], ['team', 'Teammates'], ['comments', 'Comments on your PRs']].map(([id, label]) => <button type="button" key={id} id={`reviews-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`reviews-panel-${id}`} onClick={() => setTab(id)}>{label}</button>)}</div>
+    <div className="reviews-tabs" role="tablist" aria-label="Review type">{[['gates', `Factory gates · ${data ? gates.length : '—'}`], ['team', 'Teammates'], ['comments', 'Comments on your PRs']].map(([id, label], i) => <button type="button" key={id} id={`reviews-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`reviews-panel-${id}`} tabIndex={tab === id ? 0 : -1} onKeyDown={onTabKey(i)} onClick={() => setTab(id)}>{label}</button>)}</div>
     <div role="tabpanel" id={`reviews-panel-${tab}`} aria-labelledby={`reviews-tab-${tab}`}>
       {tab === 'team' ? <Teammates key={refresh} /> : error ? <p className="error" role="alert">{error}</p> : !data ? <Empty>Loading factory work…</Empty> : tab === 'gates' ? <FactoryGates items={items} reload={reload} /> : uniquePrs.length ? <div className="reviews-comment-list">{uniquePrs.map(({ item, link }) => <FactoryComments key={`${link.repo}/${link.prId}/${refresh}`} item={item} link={link} />)}</div> : <Empty>No comments on factory PRs.</Empty>}
     </div>
