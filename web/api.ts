@@ -19,9 +19,13 @@ export const onSignedOut = (f: () => void) => (signedOutListeners.add(f), () => 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
   if (res.status === 401 && path.startsWith('/api/')) signedOutListeners.forEach((f) => f());
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true, url: body.url });
-  return body as T;
+  const json = (res.headers.get('content-type') ?? '').includes('json');
+  const body = json ? await res.json().catch(() => null) : null;
+  if (!res.ok) {
+    if (body === null) throw Object.assign(new Error(`the API answered HTTP ${res.status} with something that is not JSON — is the API running?`), { status: res.status });
+    throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true, url: body.url });
+  }
+  return (body ?? {}) as T;
 }
 
 export type Connection = {
