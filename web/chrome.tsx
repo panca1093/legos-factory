@@ -17,7 +17,7 @@ export const Chrome = createContext<{ conn: Conn; openRail: () => void; inspecto
 export const useReview = () => useContext(Chrome).review;
 
 export function openSearch() {
-  go('#/sessions');
+  go('#/activity');
   setTimeout(() => document.getElementById('session-search')?.focus(), 50);
 }
 

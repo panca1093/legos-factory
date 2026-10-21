@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { ActivityItem, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
+import type { ActivityItem, AutomationSettings, DecisionAnswer, FixQueue, ModelOption, TeamMember, PendingDecision, PermissionMode, Run, RunKind, SessionDetail, SessionSummary, ShareLevel, Stage, StreamMessage, WorkItem } from '../shared/types.ts';
 
 export type Me = {
   authEnabled: boolean;
@@ -104,6 +104,11 @@ export const api = {
   addMyRepo: (repo: string) => call<MyRepo>('/api/my-repos', { method: 'POST', body: JSON.stringify({ repo }) }),
   removeMyRepo: (repo: string) => call<unknown>(`/api/my-repos/${repo}`, { method: 'DELETE' }),
   repoProjects: (repo: string, projects: string[]) => call<MyRepo>(`/api/my-repos/${repo}`, { method: 'PATCH', body: JSON.stringify({ projects }) }),
+  automation: () => call<AutomationSettings>('/api/settings/automation'),
+  saveAutomation: (a: AutomationSettings) => call<AutomationSettings>('/api/settings/automation', { method: 'PUT', body: JSON.stringify(a) }),
+  approveSpec: (ticket: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/approve-spec`, { method: 'POST' }),
+  approvePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/approve`, { method: 'POST' }),
+  mergePr: (ticket: string, repo: string) => call<{ ok: true }>(`/api/work-items/${encodeURIComponent(ticket)}/prs/${encodeURIComponent(repo)}/merge`, { method: 'POST' }),
   workItems: () => call<{ items: WorkItem[] }>('/api/work-items'),
   linkPr: (ticket: string, repo: string, prId: number, kind: 'spec' | 'impl') => call<WorkItem>(`/api/work-items/${ticket}/links`, { method: 'POST', body: JSON.stringify({ repo, prId, kind }) }),
   setWorkItemRepos: (ticket: string, repos: string[]) => call<WorkItem>(`/api/work-items/${ticket}`, { method: 'PUT', body: JSON.stringify({ repos }) }),
@@ -116,6 +121,7 @@ export const api = {
   end: (id: string) => call<{ ok: true }>(`/api/runs/${id}/end`, { method: 'POST' }),
   resumeTask: (id: string, text?: string) => call<{ ok: true }>(`/api/runs/${id}/resume-task`, { method: 'POST', body: JSON.stringify({ text }) }),
   discuss: (id: string, text: string) => call<{ runId: string }>(`/api/decisions/${id}/discuss`, { method: 'POST', body: JSON.stringify({ text }) }),
+  answer: (id: string, answer: DecisionAnswer, remember?: boolean) => call<{ ok: true }>(`/api/decisions/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ ...answer, remember }) }),
   decide: (id: string, a: DecisionAnswer) => call<{ ok: true }>(`/api/decisions/${id}`, { method: 'POST', body: JSON.stringify(a) }),
 };
 
