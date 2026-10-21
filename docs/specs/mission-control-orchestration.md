@@ -8,16 +8,28 @@ How to run `mission-control-redesign.md` with one orchestrator and many small wo
 - **Worker** (one session per work package, short-lived). Does exactly one work package in its own git worktree and branch, then reports.
 - **Human.** Answers stop-questions, reviews and merges milestone PRs into `main`.
 
-## Branches
+## Pull requests and branches
 
-- `mc/integration` is cut from `main` once. Every work package branches from the current `mc/integration` as `mc/wp-XX`, in its own worktree: `git worktree add ../lf-wp-XX -b mc/wp-XX mc/integration`.
-- The orchestrator merges a verified `mc/wp-XX` into `mc/integration` with `git merge --no-ff`. Nothing merges into `main` without the human.
+Four pull requests, each with its own integration branch. A work package belongs to exactly one PR:
+
+| PR | Integration branch | Cut from | Work packages | Title |
+|---|---|---|---|---|
+| 1 | `mc/pr1-contract` | `main` | WP-01, WP-02, WP-03, WP-04 | feat: mission control 1/4 contract |
+| 2 | `mc/pr2-automode` | `main` after PR 1 merged | WP-10, WP-11 | feat: mission control 2/4 auto mode |
+| 3 | `mc/pr3-pipeline` | `mc/pr2-automode` (WP-33 needs WP-10) | WP-30 to WP-37 | feat: mission control 3/4 pipeline |
+| 4 | `mc/pr4-frontend` | `main` after PR 1 merged | WP-20 to WP-27 | feat: mission control 4/4 front end |
+
+- Every work package branches from its PR's integration branch as `mc/wp-XX`, in its own worktree: `git worktree add ../lf-wp-XX -b mc/wp-XX <integration branch>`.
+- The orchestrator merges a verified `mc/wp-XX` into that same integration branch with `git merge --no-ff`, never into another PR's branch.
+- PR 3 is stacked on PR 2: open it with base `mc/pr2-automode`; after PR 2 merges, rebase `mc/pr3-pipeline` on `main` and change the PR base to `main`.
+- PRs 2, 3 and 4 run in parallel after PR 1 is merged. Merge order into `main`: 1, 2, 3, 4. Before each merge, rebase that PR's branch on the updated `main` and run the full suite.
+- Nothing merges into `main` without the human.
 
 ## Work packages
 
 Columns: id · depends on · files the worker may change (nothing else) · what to build · tests that must exist and pass.
 
-### Milestone M0: contract (all four may run in parallel; their files do not overlap)
+### PR 1: contract (WP-01 and WP-02 in parallel, then WP-03 and WP-04)
 
 **WP-01 Types** · none · `shared/types.ts`
 - Add `PipelineStage = 'backlog' | 'shaping' | 'spec_review' | 'building' | 'pr_review' | 'ready' | 'done'`.
@@ -42,13 +54,13 @@ Columns: id · depends on · files the worker may change (nothing else) · what 
 - Add `POST /api/work-items/:ticket/approve-spec`, `POST /api/work-items/:ticket/prs/:repo/approve` and `POST /api/work-items/:ticket/prs/:repo/merge`, each answering `501 {"error":"not implemented yet"}`.
 - Tests: `returns the new fields with defaults`, `the three new endpoints answer 501`.
 
-**Milestone check M0:** all four merged into `mc/integration`; `npm test`, `npm run typecheck`, `npm run build` green. Orchestrator pushes `mc/integration`, opens PR "feat: mission control contract (M0)" to `main`, and **stops for the human**.
+**PR 1 check:** all four merged into `mc/pr1-contract`; `npm test`, `npm run typecheck`, `npm run build` green. Orchestrator pushes it, opens PR 1 to `main`, and **stops for the human**.
 
-### Milestone M1: tracks in parallel (after M0 is on `main` and `mc/integration` is rebased on it)
+### PRs 2, 3 and 4 in parallel (after PR 1 is on `main`)
 
-Track B, auto mode:
+Track B, auto mode → PR 2:
 
-**WP-10 Allowlist and pause** · M0 · `server/claude-runs.ts`, `test/automode.test.ts` (new)
+**WP-10 Allowlist and pause** · PR 1 merged · `server/claude-runs.ts`, `test/automode.test.ts` (new)
 - In `canUseTool`: for the Bash tool, if the command starts with any allowlist entry (after trimming), resolve allow without creating a decision. Edit, Write and NotebookEdit inside the run's cwd: allow. Everything else: today's decision flow, with `reason` set to `outside the allowlist` for Bash.
 - Read the allowlist from `loadSettings().automation` when the run starts.
 - Tests: `runs an allowlisted command without a decision`, `pauses on a command outside the allowlist`, `allows edits inside the clone`, `pauses on an edit outside the clone`.
@@ -57,9 +69,9 @@ Track B, auto mode:
 - The decision answer accepts `remember: true` for a Bash decision; the command's first two words are appended to the allowlist with `saveAutomation`, then the decision is allowed.
 - Tests: `remember adds the command prefix to the allowlist`, `remember is ignored for non-Bash decisions`.
 
-Track A, front end. **WP-20 runs first; WP-21 to WP-27 run in parallel after it.** New styles go in a CSS file next to the page (`web/pages/Work.css`, imported by `Work.tsx`); only WP-20 edits `web/styles.css`. Match `docs/design/mission-control/<n>-*.dc.html` for layout, copy and classes.
+Track A, front end → PR 4. **WP-20 runs first; WP-21 to WP-27 run in parallel after it.** New styles go in a CSS file next to the page (`web/pages/Work.css`, imported by `Work.tsx`); only WP-20 edits `web/styles.css`. Match `docs/design/mission-control/<n>-*.dc.html` for layout, copy and classes.
 
-**WP-20 Shell and API client** · M0 · `web/App.tsx`, `web/chrome.tsx`, `web/api.ts`, `web/styles.css`
+**WP-20 Shell and API client** · PR 1 merged · `web/App.tsx`, `web/chrome.tsx`, `web/api.ts`, `web/styles.css`
 - Rail: New chat / New task, then Overview · Work · Reviews · Activity · Settings, then Chats. Routes: `#/` Overview, `#/work`, `#/work/:ticket`, `#/reviews`, `#/activity`, `#/settings`; old `#/tasks` and `#/sessions` redirect to `#/work` and `#/activity` (keep `#/sessions/:id` and `#/runs/:id`).
 - `api.ts`: add `automation()`, `saveAutomation(a)`, `approveSpec(ticket)`, `approvePr(ticket, repo)`, `mergePr(ticket, repo)`, and `answer(id, answer, remember?)` if the decision call lacks `remember`.
 - Pages that do not exist yet render a placeholder heading only; WP-21 to WP-27 replace them.
@@ -89,27 +101,27 @@ Track A, front end. **WP-20 runs first; WP-21 to WP-27 run in parallel after it.
 **WP-27 Settings → Automation** · WP-20 · `web/pages/Settings.tsx`, `web/pages/Settings.css` · design `7-settings-automation`
 - New Automation section: gates, personas' models (show the server's 400 message when inspector equals builder), parallel builders, routing rules (toggle, add, remove), allowlist (chips, add, remove). Loads with `api.automation()`, saves with `api.saveAutomation()`.
 
-Track C, pipeline. WP-30, WP-31, WP-32 and WP-34 may run in parallel; the rest follow their dependencies.
+Track C, pipeline → PR 3. WP-30, WP-31, WP-32 and WP-34 may run in parallel; the rest follow their dependencies.
 
-**WP-30 Plan parser** · M0 · `server/plan.ts` (new), `test/plan.test.ts` (new)
+**WP-30 Plan parser** · PR 1 merged · `server/plan.ts` (new), `test/plan.test.ts` (new)
 - `parsePlan(prDescription: string, repos: string[]): Plan` reads the fenced `plan` block (YAML subset in the spec; write a small parser, no new dependency unless `npm ls` shows one already).
 - `waves(plan): string[][]` groups task ids into columns by dependency depth; `canRunTogether(a, b)` per the spec rule.
 - Errors (no block, bad YAML, unknown repo, unknown id in needs, cycle) → `{ tasks: one task per repo in order, error: '<reason>' }`.
 - Tests: one per error case, `groups independent tasks into one wave`, `keeps tasks with overlapping touches apart`.
 
-**WP-31 Stage machine** · M0 · `server/pipeline.ts` (new), `test/pipeline.test.ts` (new)
+**WP-31 Stage machine** · PR 1 merged · `server/pipeline.ts` (new), `test/pipeline.test.ts` (new)
 - Pure function `next(state, facts): Action[]` with no I/O. State: per repo stage and attempt, plan task states. Facts: spec approved, run ended (task, persona, ok, verdict), PR opened/merged/declined, rule matched, attempts limit. Actions: start run (task, persona, repo), set stage, escalate, mark ready.
 - Tests: a table with one row per transition in the spec's Decisions 6, 8, 10, 11 and 12, plus `escalates after reviewAttempts failed reviews` and `a review finding re-runs the same task`.
 
-**WP-32 Persona and model per run** · M0 · `server/launch-run.ts`, `test/launch-persona.test.ts` (new)
+**WP-32 Persona and model per run** · PR 1 merged · `server/launch-run.ts`, `test/launch-persona.test.ts` (new)
 - When a run has a persona, append the text of `workflows/factory/personas/<persona>.md` to its prompt after the stage guide, and use `automation.models[persona]` unless the request names a model. Store `task` and `persona` on the run.
 - Tests: `adds the builder persona to a build run`, `uses the persona model when none is given`, `keeps an explicit model`.
 
-**WP-33 Pipeline wiring** · WP-30, WP-31, WP-32, WP-10 · `server/pipeline.ts`, `server/jira-sync.ts`, `server/work-items.ts`, `test/pipeline-wiring.test.ts` (new)
+**WP-33 Pipeline wiring** · WP-30, WP-31, WP-32, and WP-10 (in mc/pr2-automode) · `server/pipeline.ts`, `server/jira-sync.ts`, `server/work-items.ts`, `test/pipeline-wiring.test.ts` (new)
 - On spec approval, run end and each sync tick, build facts, call `next`, execute the actions (start runs through `launchRun`, Inspector runs read-only, write stages and attempts). One run per task at a time; respect the run queue.
 - Tests with fakes: `approving the spec starts the first wave`, `a passing review with no matching rule marks the repo ready`, `a failing review starts the same task again`.
 
-**WP-34 Routing rules** · M0 · `server/routing.ts` (new), `test/routing.test.ts` (new)
+**WP-34 Routing rules** · PR 1 merged · `server/routing.ts` (new), `test/routing.test.ts` (new)
 - `route(pr: { files: string[]; changedLines: number; repo: string; jiraType: string | null; labels: string[] }, rules: RoutingRule[], inspectorReasons: string[]): { toPerson: boolean; reasons: string[] }`. Glob match for paths (no new dependency).
 - Tests: one per rule kind, `the inspector can add a reason`, `an empty rule list sends nothing to a person`.
 
@@ -125,7 +137,7 @@ Track C, pipeline. WP-30, WP-31, WP-32 and WP-34 may run in parallel; the rest f
 - After a repo's PR merges and the Cataloger model is not `off`, start one Cataloger run on that repo.
 - Tests: `starts the cataloger after merge`, `skips it when off`.
 
-**Milestone checks:** M1-B after WP-10, WP-11; M1-A after WP-20 to WP-27; M1-C after WP-30 to WP-37. At each, the orchestrator pushes `mc/integration`, opens or updates one PR per milestone to `main`, and **stops for the human**. Merge order into `main`: M0, M1-B, M1-C, M1-A.
+**PR checks:** PR 2 when WP-10 and WP-11 are merged into `mc/pr2-automode`; PR 3 when WP-30 to WP-37 are in `mc/pr3-pipeline`; PR 4 when WP-20 to WP-27 are in `mc/pr4-frontend`. At each, the orchestrator pushes the branch, opens the PR (titles in the table above), and **stops for the human**.
 
 ## Rules every worker follows (paste into every worker prompt)
 
@@ -145,7 +157,7 @@ Track C, pipeline. WP-30, WP-31, WP-32 and WP-34 may run in parallel; the rest f
 You are a worker on the legos-factory repo. You do exactly one work package and then report.
 
 Work package: <WP id and title>
-Your worktree: <path>   Your branch: <mc/wp-XX>   Base: mc/integration
+Your worktree: <path>   Your branch: <mc/wp-XX>   Base: <integration branch of this package's PR>
 
 <paste the full work package text from docs/specs/mission-control-orchestration.md>
 
@@ -158,7 +170,7 @@ When done, reply with exactly this block and nothing after it:
 REPORT
 wp: <id>
 status: done | blocked | question
-files_changed: <git diff --name-only mc/integration...HEAD, one per line>
+files_changed: <git diff --name-only <base>...HEAD, one per line>
 tests_added: <test names>
 npm_test: <last 20 lines>
 typecheck: <last 20 lines>
@@ -175,27 +187,28 @@ You are the orchestrator for building the mission control redesign in the legos-
 Read docs/specs/mission-control-redesign.md and docs/specs/mission-control-orchestration.md completely before doing anything.
 
 Setup once:
-- git fetch; create mc/integration from origin/main if it does not exist.
+- git fetch. Read the table "Pull requests and branches": it says which work packages belong to which PR and which branch each PR uses. Create an integration branch only when its "Cut from" condition is true.
 
-Loop until every work package of the current milestone is merged into mc/integration:
-1. Ready = packages whose dependencies are all merged into mc/integration and that are not started.
-2. From Ready, pick packages whose file lists do not overlap each other or any running package. Start at most <K, e.g. 4> workers at once.
-3. For each picked package: git worktree add ../lf-<wp> -b mc/<wp> mc/integration, then start a worker with the "Worker prompt" from the orchestration doc, filled in for that package.
+Loop, per PR, until every work package of that PR is merged into the PR's integration branch:
+1. Ready = packages of an open PR whose dependencies are merged (into this PR's branch, or for WP-33's dependency WP-10, into mc/pr2-automode) and that are not started.
+2. From Ready, pick packages whose file lists do not overlap each other or any running package, across all PRs. Start at most <K, e.g. 4> workers at once.
+3. For each picked package: git worktree add ../lf-<wp> -b mc/<wp> <its PR's integration branch>, then start a worker with the "Worker prompt" from the orchestration doc, filled in for that package and that base branch.
 4. When a worker reports, verify it yourself in its worktree. Do not trust the report:
-   a. git diff --name-only mc/integration...mc/<wp> lists only files the package allows.
+   a. git diff --name-only <base>...mc/<wp> lists only files the package allows.
    b. Every test named in the package exists (grep the test file for each name).
    c. npm test, npm run typecheck and npm run build all pass when you run them.
-   d. git log mc/integration..mc/<wp> contains no "Co-Authored-By" and no "Generated with".
-   e. git diff mc/integration...mc/<wp> contains no real company names, hostnames, e-mails or tokens.
-5. If all checks pass: git checkout mc/integration && git merge --no-ff mc/<wp>, then run npm test again on mc/integration. If that fails, revert the merge and treat it as a failure.
+   d. git log <base>..mc/<wp> contains no "Co-Authored-By" and no "Generated with".
+   e. git diff <base>...mc/<wp> contains no real company names, hostnames, e-mails or tokens.
+5. If all checks pass: merge with --no-ff into that package's PR branch only, then run npm test on that branch. If that fails, revert the merge and treat it as a failure.
 6. On a failure: send the same worker the exact failing output and the check that failed, once. On a second failure, mark the package blocked and tell the human with the output.
 7. If a worker reports BLOCKED or QUESTION: answer it from the spec if the spec answers it unambiguously; otherwise ask the human and pause only that package.
 
-At the end of each milestone (M0, M1-B, M1-C, M1-A as defined in the orchestration doc):
-- Push mc/integration and open (or update) a PR to main titled "feat: mission control <milestone> | <short description>". Body: work packages included, what was deliberately not done, open questions, risks.
-- Stop and wait for the human. Continue to the next milestone only when told, after rebasing mc/integration on the updated main.
+Order:
+- PR 1 first, alone. When its packages are merged and green: push mc/pr1-contract, open PR 1 to main, stop and wait for the human to merge it.
+- Then PRs 2, 3 and 4 in parallel as the table says (PR 3 stacked on PR 2). When a PR's packages are all merged and green: push its branch, open the PR with the title from the table and a body listing its work packages, what was deliberately not done, open questions and risks; stop for the human.
+- Before the human merges a PR, rebase its branch on the latest main and run the full suite; after PR 2 merges, rebase PR 3 on main and change its base to main.
 
-Keep a status table in your replies: package · state (waiting/running/verifying/merged/blocked) · worker · last check result.
+Keep a status table in your replies: PR · package · state (waiting/running/verifying/merged/blocked) · worker · last check result.
 ```
 
 ## Notes for cheaper models
