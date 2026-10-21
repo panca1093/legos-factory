@@ -22,7 +22,6 @@ export type Inline = { path: string; line: number };
 
 // Where the code and its pull requests live.
 export interface Forge {
-  readonly kind: string;
   listRepos(namespace: string): Promise<RepoRow[]>;
   listPrs(repo: RepoRef, state: PrState, limit?: number): Promise<PrRow[]>;
   getPr(repo: RepoRef, id: number): Promise<Pr>;
@@ -30,7 +29,6 @@ export interface Forge {
   diff(repo: RepoRef, id: number): Promise<{ diff: string; truncated: boolean }>;
   comments(repo: RepoRef, id: number): Promise<PrComment[]>;
   addComment(repo: RepoRef, id: number, text: string, inline?: Inline): Promise<{ id: number }>;
-  merge(repo: RepoRef, id: number): Promise<void>;
   // a short-lived token git can clone, pull and push the repo with
   cloneToken(repo: RepoRef): Promise<string>;
   searchUsers(namespace: string, query: string): Promise<{ name: string; uuid: string }[]>;
@@ -67,7 +65,6 @@ export type WorkItemDetail = WorkItemRow & {
 
 // Where tickets live.
 export interface WorkSource {
-  readonly kind: string;
   // `filter` names one of the source's own presets; `query` is its query language, taking precedence
   list(q: { filter: string; query?: string }, limit: number, page?: string): Promise<{ items: WorkItemRow[]; next: string | null }>;
   get(key: string): Promise<WorkItemDetail>;

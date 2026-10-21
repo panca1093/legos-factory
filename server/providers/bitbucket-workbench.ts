@@ -49,7 +49,6 @@ export function salvageComments(raw: string): unknown[] | null {
 export function bitbucketForge(wb: Workbench, token: string): Forge {
   const run = (tool: string, args: object, salvage?: (raw: string) => unknown) => wb.execute(token, tool, args, salvage);
   return {
-    kind: 'bitbucket',
 
     // Every repo in a workspace, most recently updated first. The tool has no search, so page through all.
     async listRepos(workspace): Promise<RepoRow[]> {
@@ -149,11 +148,6 @@ export function bitbucketForge(wb: Workbench, token: string): Forge {
     async addComment({ workspace, slug }, id, text, inline?: Inline) {
       const r = await run('bitbucket_add_pr_comment', { workspace, repoSlug: slug, prId: id, text, ...(inline && { inline }) });
       return { id: Number(r?.id) };
-    },
-
-    // workbench documents no merge tool; this name follows its sibling tools, so a missing one fails loudly
-    async merge({ workspace, slug }, id) {
-      await run('bitbucket_merge_pr', { workspace, repoSlug: slug, prId: id });
     },
 
     // workbench hands out https://x-token-auth:<token>@bitbucket.org/<ws>/<slug>.git, good for ≤2h; never log or persist it

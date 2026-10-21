@@ -97,14 +97,12 @@ function forgeContract(name: string, make: () => Forge, writes: boolean, ci: 'pa
       expect((await make().cloneToken(repo)).length).toBeGreaterThan(3);
     });
 
-    it(writes ? 'comments and merges' : 'refuses to comment or merge', async () => {
+    it(writes ? 'comments' : 'refuses to comment', async () => {
       const forge = make();
       if (writes) {
         expect(await forge.addComment(repo, 7, 'ok')).toEqual({ id: 9 });
-        await expect(forge.merge(repo, 7)).resolves.toBeUndefined();
       } else {
         await expect(forge.addComment(repo, 7, 'ok')).rejects.toThrow(/read-only/);
-        await expect(forge.merge(repo, 7)).rejects.toThrow(/read-only/);
       }
     });
   });
@@ -149,7 +147,6 @@ describe('the core without Jira or Bitbucket', () => {
     const log: string[] = [];
     let status = 'In Progress';
     const source: WorkSource = {
-      kind: 'memory',
       list: async () => ({ items: [], next: null }),
       get: async () => {
         throw new Error('unused');
@@ -158,7 +155,7 @@ describe('the core without Jira or Bitbucket', () => {
       transitionTo: async (key, to) => (log.push(`${key} -> ${to}`), (status = to), true),
       comment: async (key, body) => void log.push(`comment ${key}: ${body}`),
     };
-    const forge: Forge = { ...github(), kind: 'memory', getPr: async (r, id) => ({ ...(await github().getPr(r, id)), id, state: 'OPEN' }) };
+    const forge: Forge = { ...github(), getPr: async (r, id) => ({ ...(await github().getPr(r, id)), id, state: 'OPEN' }) };
     deps.workSource = async () => source;
     deps.forge = async () => forge;
     await syncWorkItem(deps, 'local', 'PROJ-1');

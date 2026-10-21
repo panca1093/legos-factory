@@ -135,7 +135,6 @@ export function adfToMarkdown(doc: unknown): string | null {
 export function jiraWorkSource(wb: Workbench, token: string): WorkSource {
   const run = (tool: string, args: object) => wb.execute(token, tool, args);
   return {
-    kind: 'jira',
 
     async list({ filter, query }, maxResults, nextPageToken) {
       const jql = query || PRESETS[filter];

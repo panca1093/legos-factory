@@ -29,7 +29,6 @@ export function githubForge(opts: { token: string; http?: typeof fetch; apiUrl?:
   const name = ({ workspace, slug }: { workspace: string; slug: string }) => `${workspace}/${slug}`;
 
   return {
-    kind: 'github',
 
     async listRepos(owner): Promise<RepoRow[]> {
       const repos = (await json(`/users/${owner}/repos?per_page=100&sort=updated`)) as any[];
@@ -79,10 +78,6 @@ export function githubForge(opts: { token: string; http?: typeof fetch; apiUrl?:
 
     async addComment() {
       throw readOnly('comment');
-    },
-
-    async merge() {
-      throw readOnly('merge');
     },
 
     // a token authorises HTTPS git as x-access-token; this provider holds one for the whole deployment
