@@ -32,10 +32,10 @@ On startup the control plane rebuilds the mirror from `jobs` and the persisted a
 - chat that was idle → ended as completed (Sessions can continue it);
 - Ask factory runs (`recoverable: false`) → failed;
 - activity items still marked running with no job (before this change) → failed.
-Clones of runs that will not resume are deleted; the rest are kept.
+Clones of runs that will not resume are deleted at process start (not when the app is built), and only directories carrying the factory's marker inside `.git`; the rest are kept. Runs that ended but whose end was not handled yet are replayed through the stage engine.
 
 ## Runner protocol
-`PollRequest { capacity, running[] }` → `{ jobs[], commands[], lost[] }`; `lost` lists runs whose lease moved on, which the runner stops. Messages in a report are the existing stream messages plus `finished { runId, branch }` (sent after the runner read the clone's branch and deleted the clone, so the control plane can capture the PR) and `launch_failed { runId, error }`. A runner keeps unsent messages and retries; a lease stays alive until `finished` is delivered.
+`PollRequest { capacity, running[] }` → `{ jobs[], commands[], lost[] }`; `lost` lists runs whose lease moved on, which the runner stops. Messages in a report are the existing stream messages plus `finished { runId, branch }` (sent after the runner read the clone's branch and deleted the clone, so the control plane can capture the PR) and `launch_failed { runId, error }`. A runner keeps unsent messages and retries; a lease stays alive until `finished` is delivered and the control plane has handled it (PR capture, stage engine). Each poll answer carries `leaseMs`; a runner that got no poll through for that long stops its runs and removes their clones, since the control plane hands the jobs to someone else. A poll with nothing running gives back jobs the runner never received, without costing an attempt. Reports change a run's progress only, never its repo, ticket, stage, folder, workspace or owner.
 
 ## Configuration
 Control plane: `LEGOS_RUNNER=on|off` (default off when bound beyond loopback or behind `LEGOS_PUBLIC_URL`, where local-folder runs are refused too), `LEGOS_BIND`, `LEGOS_PUBLIC_URL` (its host is accepted next to localhost), `LEGOS_LEASE_MS`, `LEGOS_MAX_ATTEMPTS`. Runner: `LEGOS_CONTROL_URL`, `LEGOS_RUNNER_TOKEN`, `LEGOS_MAX_RUNS`, `LEGOS_WORKSPACES`, `LEGOS_GIT_URL`.
@@ -45,3 +45,9 @@ Priority and FIFO; capacity; heartbeat and lease expiry; bounded attempts; scopi
 
 ## Out of scope
 Events persisted on the control plane or streamed from a remote runner's transcript; Ask factory and `/api/models` on a control plane without an embedded runner; routing a run to a chosen runner; autoscaling.
+
+## Known gaps
+- A run receives every connection of its workspace through `/mcp/:name`, so a prompt-injected agent can act as the workspace owner there. Scoping connections per run is not done.
+- The GitHub forge's `cloneToken` returns the whole deployment token, not one scoped to the repo.
+- `server/hub.ts` and CORS handling were not part of the review.
+- Claiming a finished sign-in needs a secret only the app that started it holds, which stops anyone who merely learns the attempt id. A person who is talked into opening a link the attacker started in the same window still signs in for the attacker: closing that needs a confirmation code shown in the app and typed at the provider's return page.
