@@ -121,15 +121,20 @@ export function runsRoutes(deps: Deps) {
   routes.get('/api/stream', (c) =>
     streamSSE(c, async (stream) => {
       const ws = c.get('ws');
+      // decision_closed carries only an id: pass it for decisions this client was shown
+      const shown = new Set<string>();
       const mine = (m: StreamMessage) =>
         m.type === 'run' ? m.run.workspaceId === ws
         : m.type === 'run_event' ? ownsRun(ws, m.runId)
-        : m.type === 'decision' ? ownsRun(ws, m.decision.runId)
-        : true; // decision_closed carries only an id
+        : m.type === 'decision' ? ownsRun(ws, m.decision.runId) && !!shown.add(m.decision.id)
+        : m.type === 'decision_closed' ? shown.delete(m.id)
+        : true;
       const send = (m: StreamMessage) => void (mine(m) && stream.writeSSE({ data: JSON.stringify(m) }));
       const snap = runs.snapshot();
-      if (snap.type === 'snapshot')
+      if (snap.type === 'snapshot') {
+        for (const d of snap.decisions) if (ownsRun(ws, d.runId)) shown.add(d.id);
         send({ ...snap, runs: snap.runs.filter((r) => r.workspaceId === ws), decisions: snap.decisions.filter((d) => ownsRun(ws, d.runId)) });
+      }
       runs.on('message', send);
       const ping = setInterval(() => void stream.writeSSE({ event: 'ping', data: '' }), 15000);
       await new Promise<void>((resolve) => stream.onAbort(resolve));

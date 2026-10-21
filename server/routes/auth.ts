@@ -11,6 +11,9 @@ export const SID_COOKIE = 'lf_sid';
 const LOGIN_WORKSPACE = '';
 const ATTEMPT_RE = /^[\w-]{16,64}$/;
 const ATTEMPT_TTL_MS = 10 * 60_000;
+// begin is unauthenticated, so what it leaves in memory is capped and the calls are rate limited
+const MAX_OPEN = 1000;
+const BEGINS_PER_MINUTE = 30;
 const page = (title: string, body: string, close = false, link = '/#/settings', linkText = 'Open Settings') =>
   `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font:14px system-ui;padding:40px;color:#151a29;text-align:center"><h2>${title}</h2><p>${body}</p><p><a href="${link}">${linkText}</a></p>${close ? '<script>setTimeout(()=>window.close(),800)</script>' : ''}</body>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
@@ -38,6 +41,14 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
   const claims = new Map<string, { secret: string; cookie?: string; at: number }>();
   const prune = (m: Map<string, { at: number }>) => {
     for (const [k, v] of m) if (Date.now() - v.at > ATTEMPT_TTL_MS) m.delete(k);
+    if (m.size >= MAX_OPEN) throw new HttpError(429, 'too many sign-ins in progress: try again in a few minutes');
+  };
+  const begins: number[] = [];
+  const throttle = () => {
+    const now = Date.now();
+    while (begins.length && now - begins[0] > 60_000) begins.shift();
+    if (begins.length >= BEGINS_PER_MINUTE) throw new HttpError(429, 'too many sign-in attempts: try again in a minute');
+    begins.push(now);
   };
   // The secret goes only to the app that began the sign-in; /auth/claim wants it, so knowing an attempt id is not enough.
   const openAttempt = (attempt: string): string | undefined => {
@@ -121,6 +132,7 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
     const id = c.req.param('id');
     if (!providers().some((p) => p.id === id)) throw new HttpError(404, `${id} sign-in is not configured`);
     const { attempt } = parse(attemptSchema, await readBody(c));
+    throttle();
     const secret = openAttempt(attempt);
     try {
       const url = await domain(id === 'oidc' ? oidc!.begin(`${opts.publicUrl ?? selfUrl}/auth/oidc/callback`, attempt) : startWorkbenchLogin(opts.workbenchUrl!, attempt));
@@ -138,7 +150,7 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
     if (error || !code || !state) return c.html(page('Sign-in was not completed', esc(error_description ?? error ?? 'missing code'), false, '/', 'Back to sign-in'), 400);
     try {
       const { identity, attempt } = await oidc.complete(code, state);
-      const user = users.upsertExternal('oidc', identity.sub, identity.name, identity.email);
+      const user = users.upsertExternal('oidc', identity.sub, identity.name, identity.email, identity.emailVerified);
       workspaces.ensurePersonal(user.id, user.name);
       return welcome(c, user, attempt || undefined);
     } catch (err) {

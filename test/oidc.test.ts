@@ -76,7 +76,7 @@ describe('OpenID Connect', () => {
     const p = idp();
     const o = new Oidc(cfg, p.http);
     const { state } = p.authorize(await o.begin(REDIRECT, 'a1'));
-    expect(await o.complete('good-code', state)).toEqual({ attempt: 'a1', identity: { sub: 'u-1', email: 'ada@acme.test', name: 'Ada' } });
+    expect(await o.complete('good-code', state)).toEqual({ attempt: 'a1', identity: { sub: 'u-1', email: 'ada@acme.test', emailVerified: true, name: 'Ada' } });
     await expect(o.complete('good-code', state)).rejects.toThrow(/expired or was not started/);
   });
 
@@ -132,6 +132,21 @@ describe('OpenID Connect', () => {
     await expect(signIn(o, p)).rejects.toThrow(/not allowed/);
     p.state.claims.email = undefined;
     await expect(signIn(o, p)).rejects.toThrow(/not allowed/);
+  });
+
+  it('wants the issuer to vouch for the e-mail address when domains are restricted', async () => {
+    const p = idp();
+    const o = new Oidc({ ...cfg, allowedDomains: ['acme.test'] }, p.http);
+    p.state.claims.email_verified = undefined;
+    await expect(signIn(o, p)).rejects.toThrow(/not vouched/);
+    expect((await signIn(new Oidc(cfg, p.http), p)).identity).toMatchObject({ email: 'ada@acme.test', emailVerified: false });
+  });
+
+  it('caps the sign-ins it keeps waiting for', async () => {
+    const p = idp();
+    const o = new Oidc(cfg, p.http);
+    for (let i = 0; i < 1000; i++) await o.begin(REDIRECT, `a${i}`);
+    await expect(o.begin(REDIRECT, 'one-too-many')).rejects.toMatchObject({ status: 429 });
   });
 
   it('asks the userinfo endpoint for an e-mail address the token left out', async () => {
@@ -244,6 +259,32 @@ describe('OpenID Connect sign-in routes', () => {
     expect((await ask(app({ bind: '0.0.0.0' }), '127.0.0.1', '/auth/login')).status).toBe(403);
     const me = await app({ bind: '0.0.0.0' }).request('http://localhost:4317/auth/me', { headers: { host: 'localhost:4317' } }, peer());
     expect(await me.json()).toMatchObject({ pin: false, users: [] });
+  });
+
+  it('rate limits sign-in starts, which anyone can make', async () => {
+    const { post } = setup();
+    const statuses: number[] = [];
+    for (let i = 0; i < 31; i++) statuses.push((await post('/auth/providers/oidc', { attempt: `attempt-${String(i).padStart(16, '0')}` })).status);
+    expect(statuses.slice(0, 30).every((s) => s === 200)).toBe(true);
+    expect(statuses[30]).toBe(429);
+  });
+
+  it('adds members by an e-mail address only when the provider vouched for it', async () => {
+    const { deps, call, start, p } = setup();
+    const { state } = await start();
+    p.state.claims.email_verified = undefined;
+    const cb = await call(`/auth/oidc/callback?code=good-code&state=${state}`);
+    expect(cb.status).toBe(200);
+    expect(deps.users!.find('ada@acme.test')).toEqual([]);
+    deps.users!.upsertExternal('oidc', 'u-1', 'Ada', 'ada@acme.test', true);
+    expect(deps.users!.find('ada@acme.test')).toHaveLength(1);
+  });
+
+  it('refuses a plain-http public URL once bound beyond loopback', () => {
+    const build = (o: object) => buildDeps(new RunManager(alive), { db: openDb(':memory:'), ...o });
+    expect(() => build({ publicUrl: 'http://factory.example.com', bind: '0.0.0.0' })).toThrow(/https/);
+    expect(() => build({ publicUrl: 'https://factory.example.com', bind: '0.0.0.0' })).not.toThrow();
+    expect(() => build({ publicUrl: 'http://localhost:4317' })).not.toThrow();
   });
 
   it('answers 404 for a provider that is not configured', async () => {

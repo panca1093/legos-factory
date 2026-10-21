@@ -73,6 +73,8 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
     create index if not exists runs_workspace on runs (workspace_id, last_event_at);
   `);
   addColumn(db, 'users', 'active_workspace', 'text');
+  addColumn(db, 'users', 'email_verified', 'integer not null default 0');
+  db.exec(`update users set email_verified = 1 where kind = 'workbench'`);
   addColumn(db, 'workspaces', 'config', `text not null default '{}'`);
   // tables made before these columns existed
   addColumn(db, 'workspace_repos', 'jira_projects', `text not null default ''`);

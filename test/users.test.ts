@@ -234,5 +234,16 @@ describe('isolation between users', () => {
     expect(bobSnap.runs).toEqual([]);
     expect(bobSnap.decisions).toEqual([]);
     expect((await (await req('/api/activity/me', {}, bob)).json()).items).toEqual([]);
+
+    const closedSeenBy = async (cookie: string) => {
+      const reader = (await req('/api/stream', {}, cookie)).body!.getReader();
+      await reader.read();
+      board.emit('message', { type: 'decision_closed', id: 'd1', outcome: 'withdrawn' });
+      const next = await Promise.race([reader.read(), new Promise<null>((r) => setTimeout(() => r(null), 100))]);
+      await reader.cancel();
+      return next?.value ? JSON.parse(new TextDecoder().decode(next.value).replace(/^data: /, '')) : null;
+    };
+    expect(await closedSeenBy(ada)).toMatchObject({ type: 'decision_closed', id: 'd1' });
+    expect(await closedSeenBy(bob)).toBeNull();
   });
 });

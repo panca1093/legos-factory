@@ -96,6 +96,7 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
   const grants = new Map<string, string>();
   const wsRoot = opts.workspaces ?? workspacesDir();
   const networked = !loopbackBind(opts.bind) || !!opts.publicUrl;
+  if (opts.publicUrl && !loopbackBind(opts.bind) && !opts.publicUrl.startsWith('https://')) throw new Error('LEGOS_PUBLIC_URL must be https when the server is bound beyond loopback');
   const embedded = opts.embeddedRunner !== false;
   const runs = new Runs(new Dispatcher(db, { leaseMs: opts.leaseMs ?? 60_000, maxAttempts: opts.maxAttempts ?? 3 }), {
     selfUrl,

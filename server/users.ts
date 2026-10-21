@@ -57,7 +57,7 @@ export class Users {
   // Everyone an id, e-mail address or local name points at, for adding members to a workspace.
   find(who: string): User[] {
     return this.db
-      .prepare(`select id, kind, name, email from users where id = ? or lower(email) = lower(?) or (kind = 'pin' and name = ? collate nocase) order by created_at`)
+      .prepare(`select id, kind, name, email from users where id = ? or (email_verified = 1 and lower(email) = lower(?)) or (kind = 'pin' and name = ? collate nocase) order by created_at`)
       .all(who, who, who) as User[];
   }
 
@@ -95,16 +95,17 @@ export class Users {
   }
 
   // Signed in elsewhere (workbench): one user per external id, name and email kept current.
-  upsertExternal(kind: Exclude<UserKind, 'pin'>, extId: string, name: string, email: string | null): User {
+  // An e-mail address only identifies the person to others (adding members) when the provider vouched for it.
+  upsertExternal(kind: Exclude<UserKind, 'pin'>, extId: string, name: string, email: string | null, emailVerified = true): User {
     const r = this.row('kind = ? and ext_id = ?', kind, extId);
     if (r) {
-      this.db.prepare(`update users set name = ?, email = ? where id = ?`).run(name, email, r.id);
+      this.db.prepare(`update users set name = ?, email = ?, email_verified = ? where id = ?`).run(name, email, Number(emailVerified), r.id);
       return { ...this.toUser(r), name, email };
     }
     const user: User = { id: randomUUID(), kind, name, email };
     this.db
-      .prepare(`insert into users (id, kind, name, email, ext_id, created_at) values (?, ?, ?, ?, ?, ?)`)
-      .run(user.id, kind, name, email, extId, new Date(this.now()).toISOString());
+      .prepare(`insert into users (id, kind, name, email, email_verified, ext_id, created_at) values (?, ?, ?, ?, ?, ?, ?)`)
+      .run(user.id, kind, name, email, Number(emailVerified), extId, new Date(this.now()).toISOString());
     return user;
   }
 

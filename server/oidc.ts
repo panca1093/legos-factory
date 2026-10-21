@@ -13,12 +13,13 @@ export type OidcConfig = {
   allowedDomains?: string[];
 };
 
-export type OidcIdentity = { sub: string; email: string | null; name: string };
+export type OidcIdentity = { sub: string; email: string | null; emailVerified: boolean; name: string };
 
 type Meta = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string; userinfo_endpoint?: string; token_endpoint_auth_methods_supported?: string[] };
 type Pending = { verifier: string; nonce: string; attempt: string; redirectUri: string; at: number };
 
 const PENDING_TTL_MS = 10 * 60_000;
+const MAX_PENDING = 1000;
 const SKEW_MS = 60_000;
 const JWKS_MIN_REFETCH_MS = 60_000;
 
@@ -66,6 +67,7 @@ export class Oidc {
   async begin(redirectUri: string, attempt: string): Promise<string> {
     const meta = await this.discover();
     for (const [k, p] of this.pending) if (this.now() - p.at > PENDING_TTL_MS) this.pending.delete(k);
+    if (this.pending.size >= MAX_PENDING) throw Object.assign(new OidcError('too many sign-ins in progress: try again in a few minutes'), { status: 429 });
     const state = b64url(randomBytes(16));
     const verifier = b64url(randomBytes(32));
     const nonce = b64url(randomBytes(16));
@@ -158,7 +160,8 @@ export class Oidc {
     email = typeof email === 'string' && email ? email.toLowerCase() : null;
     if (email && verified === false) fail('the identity provider has not verified your e-mail address');
     const domains = this.cfg.allowedDomains?.map((d) => d.trim().toLowerCase()).filter(Boolean);
+    if (domains?.length && email && verified !== true) fail('the identity provider has not vouched for your e-mail address');
     if (domains?.length && (!email || !domains.includes(email.split('@')[1]))) fail('your e-mail address is not allowed to sign in here');
-    return { sub: claims.sub, email, name: String(claims.name || claims.preferred_username || email || claims.sub).slice(0, 64) };
+    return { sub: claims.sub, email, emailVerified: verified === true, name: String(claims.name || claims.preferred_username || email || claims.sub).slice(0, 64) };
   }
 }
