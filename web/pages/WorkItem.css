@@ -41,6 +41,7 @@
 .work-item-page .wi-wave { display: flex; align-items: center; gap: 6px; }
 .work-item-page .wi-column { display: flex; flex-direction: column; gap: 10px; }
 .work-item-page .wi-node { display: flex; flex-direction: column; gap: 7px; width: 180px; padding: 10px 11px; border: 1px dashed var(--line, rgba(31,42,72,.14)); border-radius: 12px; box-sizing: border-box; font-size: 12px; overflow-wrap: anywhere; }
+.work-item-page .wi-node > b { color: var(--ink); }
 .work-item-page .wi-node-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .work-item-page .wi-node.done { background: var(--good-tint); border: 1px solid var(--good-edge); color: var(--good-tone); }
 .work-item-page .wi-node.running { background: var(--run-tint); border: 1px solid var(--run-edge); color: var(--run-tone); }

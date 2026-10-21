@@ -260,10 +260,12 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
       col.stage === 'backlog'
         ? [...jiraCards, ...itemCards.filter((i) => i.stage === 'backlog').map((i) => i.card)]
         : itemCards.filter((i) => i.stage === col.stage).map((i) => i.card);
-    return { ...col, cards: cards.filter(matches) };
+    // A column counts only the data it holds: the backlog reads Jira, the other stages read the work items.
+    const countKnown = col.stage === 'backlog' ? !!backlog.data : !!work.data;
+    return { ...col, cards: cards.filter(matches), countKnown };
   });
 
-  const loaded = !!work.data && !!backlog.data;
+  const boardKnown = !!work.data && !!backlog.data;
   const total = columns.reduce((n, col) => n + col.cards.length, 0);
   const scopeNote = !isOwner ? 'Showing your work' : readOnly ? 'Showing everyone in this workspace' : 'Showing your work · Team view is for owners';
 
@@ -318,7 +320,7 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
                 <div className="work-col-head">
                   <span className="work-dot" style={{ background: col.dot }} />
                   <h2>{col.name}</h2>
-                  <span className="work-count">{loaded ? col.cards.length : '—'}</span>
+                  <span className="work-count">{col.countKnown ? col.cards.length : '—'}</span>
                   {col.gate && <span className="work-gate">You</span>}
                 </div>
                 <span className="work-hint">{col.hint}</span>
@@ -332,7 +334,7 @@ export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; o
             ))}
           </div>
 
-          {loaded && total === 0 && <div className="empty">Nothing on the board. Start a task with a ticket and it shows up here.</div>}
+          {boardKnown && total === 0 && <div className="empty">Nothing on the board. Start a task with a ticket and it shows up here.</div>}
           <p className="footnote">Columns follow the factory stages: a ticket sits in the stage of its slowest repo. Titles come from Jira; a ticket the app cannot read shows “Title unavailable”.</p>
         </div>
       </div>
