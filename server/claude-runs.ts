@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { realpath, stat } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { query as sdkQuery, type CanUseTool, type PermissionResult, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { DecisionAnswer, ModelOption, PendingDecision, PermissionMode, Run, RunKind, ShareLevel, Stage, StreamMessage, TimelineEvent } from '../shared/types.ts';
 import { toEvents } from './claude-sessions.ts';
@@ -74,6 +75,61 @@ const WORKING: Run['status'][] = ['starting', 'running', 'awaiting_decision'];
 const MAX_EVENTS = 2000;
 const END_GRACE_MS = 10_000;
 const READ_ONLY: CanUseTool = async () => ({ behavior: 'deny', message: 'This run is read-only: describe the change instead of making it.' });
+
+// Chaining, redirecting or expanding a command is never auto-allowed.
+const METACHARACTERS = new Set([';', '&', '|', '$', '`', '<', '>', '(', ')', '{', '}', '\\', '\n', '\r']);
+
+export function hasShellMetacharacters(command: string): boolean {
+  return [...command].some((ch) => METACHARACTERS.has(ch));
+}
+
+function matchesAllowlist(command: string, prefixes: string[]): boolean {
+  const cmd = command.trim();
+  if (hasShellMetacharacters(cmd)) return false;
+  return prefixes.some((prefix) => {
+    const p = prefix.trim();
+    return cmd === p || cmd.startsWith(`${p} `);
+  });
+}
+
+const isInside = (base: string, target: string) => {
+  const rel = relative(base, target);
+  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+};
+
+async function realpathOrSelf(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+// The closest ancestor that exists: the target itself may be a file that is about to be created.
+async function nearestExisting(target: string): Promise<string> {
+  let path = target;
+  for (;;) {
+    try {
+      await stat(path);
+      return path;
+    } catch {
+      const parent = dirname(path);
+      if (parent === path) return path;
+      path = parent;
+    }
+  }
+}
+
+const NEVER_EDIT = new Set(['.git', '.claude']);
+
+// An edit is auto-allowed only when the real path of its closest existing ancestor stays inside the clone.
+async function isEditableInside(cwd: string, target: string): Promise<boolean> {
+  const base = resolve(cwd);
+  const root = await realpathOrSelf(base);
+  const real = await realpathOrSelf(await nearestExisting(target));
+  if (!isInside(root, real)) return false;
+  return [relative(base, target), relative(root, real)].every((rel) => !rel.split(sep).some((part) => NEVER_EDIT.has(part)));
+}
 
 export class RunManager extends EventEmitter {
   private live = new Map<string, Live>();
@@ -328,14 +384,13 @@ export class RunManager extends EventEmitter {
     return async (toolName, input, opts) => {
       const prefixes = await allowlist;
       const command = input.command;
-      if (toolName === 'Bash' && typeof command === 'string' && prefixes.some((prefix) => command.trim().startsWith(prefix.trim()))) {
+      if (toolName === 'Bash' && typeof command === 'string' && matchesAllowlist(command, prefixes)) {
         return { behavior: 'allow', updatedInput: input };
       }
       if (['Edit', 'Write', 'NotebookEdit'].includes(toolName)) {
         const path = toolName === 'NotebookEdit' ? input.notebook_path : input.file_path;
-        if (typeof path === 'string' && path) {
-          const inside = relative(resolve(run.cwd), resolve(run.cwd, path));
-          if (inside !== '..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)) return { behavior: 'allow', updatedInput: input };
+        if (typeof path === 'string' && path && (await isEditableInside(run.cwd, resolve(run.cwd, path)))) {
+          return { behavior: 'allow', updatedInput: input };
         }
       }
       return new Promise<PermissionResult>((resolve) => {
