@@ -85,7 +85,9 @@ export function Overview({
 }) {
   const now = useNow(10000);
   const { me } = useContext(Chrome);
-  const work = useFetch(() => api.workItems(), [live.runs, live.decisions, Math.floor(now / 30000)]);
+  const runSig = [...live.runs.values()].map((r) => `${r.id}:${r.status}`).join();
+  const decisionSig = [...live.decisions.values()].map((d) => d.id).join();
+  const work = useFetch(() => api.workItems(), [runSig, decisionSig, Math.floor(now / 30000)]);
   const reviews = useFetch(() => api.reviews(), [Math.floor(now / 60000)]);
   const review = useReview();
   const runs = [...live.runs.values()].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || b.lastEventAt.localeCompare(a.lastEventAt)).slice(0, 6);
