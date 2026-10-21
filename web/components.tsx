@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import type { ModelOption, PendingDecision, Run, RunKind, ShareLevel, TimelineEvent, Usage } from '../shared/types.ts';
 import { api, ago, applyTheme, fmtTokens, projectName, storage, useFetch, useNow, type Conn, type JiraRow, type RepoRow, type Theme } from './api.ts';
 import type { LaunchReq } from './chrome.tsx';
@@ -40,6 +40,23 @@ export function StatusPill({ run }: { run: RunLike }) {
   return <span className={`status-pill tone-${runTone(run)}`}>{runLabel(run)}</span>;
 }
 
+// ARIA radio pattern on a group's role="radio" buttons: arrows move focus and select (wrapping), Home/End jump to the ends.
+function useRadioGroup() {
+  const ref = useRef<HTMLDivElement>(null);
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    const radios = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]') ?? []);
+    const at = radios.indexOf(e.target as HTMLButtonElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const step = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1;
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? radios.length - 1 : (at + step + radios.length) % radios.length;
+    radios[to]?.focus();
+    radios[to]?.click();
+  };
+  return { ref, onKeyDown };
+}
+
 export function ThemeSwitch() {
   const [theme, setTheme] = useState<Theme>(() => (storage('lf:theme') as Theme | null) ?? 'system');
   const pick = (t: Theme) => {
@@ -47,10 +64,11 @@ export function ThemeSwitch() {
     storage('lf:theme', t);
     applyTheme(t);
   };
+  const group = useRadioGroup();
   return (
-    <div className="segmented theme-switch" role="radiogroup" aria-label="Theme">
+    <div className="segmented theme-switch" role="radiogroup" aria-label="Theme" ref={group.ref} onKeyDown={group.onKeyDown}>
       {(['system', 'light', 'dark'] as const).map((t) => (
-        <button key={t} role="radio" aria-checked={theme === t} className={theme === t ? 'active' : ''} onClick={() => pick(t)}>
+        <button key={t} role="radio" aria-checked={theme === t} tabIndex={theme === t ? 0 : -1} className={theme === t ? 'active' : ''} onClick={() => pick(t)}>
           {t === 'system' ? 'System' : t === 'light' ? 'Light' : 'Dark'}
         </button>
       ))}
@@ -630,6 +648,7 @@ function IntentCard({ on, title, hint, onClick }: { on: boolean; title: string; 
       type="button"
       role="radio"
       aria-checked={on}
+      tabIndex={on ? 0 : -1}
       onClick={onClick}
       style={{
         flex: '1 1 150px',
@@ -688,9 +707,9 @@ function RepoRow({ name, on, source, onToggle }: { name: string; on: boolean; so
           borderRadius: 5,
           display: 'grid',
           placeItems: 'center',
-          border: `1.5px solid ${on ? 'var(--accent)' : '#a6adbd'}`,
+          border: `1.5px solid ${on ? 'var(--accent)' : 'var(--faint)'}`,
           background: on ? 'var(--accent)' : 'var(--paper)',
-          color: '#fff',
+          color: 'var(--on-tone)',
         }}
       >
         {on && <Icon name="check" size={12} />}
@@ -728,6 +747,8 @@ export function LaunchDialog({
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const intentGroup = useRadioGroup();
+  const startGroup = useRadioGroup();
 
   const { data: mine, error: mineErr } = useFetch(api.myRepos, []);
   const models = useModels();
@@ -760,20 +781,24 @@ export function LaunchDialog({
     setPicked(ticket ? [...new Set([...mapped, ...named])] : named.length ? named : mine.repos.slice(0, 1).map((r) => r.name));
   }, [mine, ticket?.key]);
 
+  const searchSeq = useRef(0);
   const search = async (q: string) => {
     const key = q.trim().toUpperCase();
+    const seq = ++searchSeq.current;
     setSearchErr(null);
     try {
       if (TICKET_KEY_RE.test(key)) {
         const issue = await api.jiraIssue(key);
-        setResults([issue]);
+        if (seq === searchSeq.current) setResults([issue]);
       } else {
         const found = await api.jiraSearch(`text ~ "${q.trim().replace(/"/g, '')}" ORDER BY updated DESC`);
-        setResults(found.issues);
+        if (seq === searchSeq.current) setResults(found.issues);
       }
     } catch (e: any) {
-      setResults([]);
-      setSearchErr(e.message);
+      if (seq === searchSeq.current) {
+        setResults([]);
+        setSearchErr(e.message);
+      }
     }
   };
 
@@ -842,8 +867,10 @@ export function LaunchDialog({
   const ready = intent === 'chat' ? !!prompt.trim() : ticket ? n > 0 : n === 1 && !!prompt.trim();
   const ticketText = ticket ? (ticket.summary ? `${ticket.key}: ${ticket.summary}` : ticket.key) : '';
 
+  const starting = useRef(false);
   const submit = async () => {
-    if (!ready || busy) return;
+    if (!ready || busy || starting.current) return;
+    starting.current = true;
     setBusy(true);
     setErr(null);
     try {
@@ -858,9 +885,20 @@ export function LaunchDialog({
         if (start === 'brainstorm') {
           runs.push(await api.start({ kind: 'chat', stage: 'design', persona: 'foreman', ticket: ticket.key, repo: picked[0], prompt: `Discuss ${ticketText}`, permissionMode: 'default' }));
         } else {
-          for (const repo of picked) {
-            runs.push(await api.start({ kind: 'task', stage: 'design', persona: 'foreman', ticket: ticket.key, repo, prompt: `Implement ${ticketText}`, permissionMode: 'default', branch: branch.trim() || undefined, model }));
-          }
+          // one spec run for the ticket; the spec PR carries the plan for every picked repo
+          runs.push(
+            await api.start({
+              kind: 'task',
+              stage: 'design',
+              persona: 'foreman',
+              ticket: ticket.key,
+              repo: picked[0],
+              prompt: `Implement ${ticketText}. Repos: ${picked.join(', ')}.`,
+              permissionMode: 'default',
+              branch: branch.trim() || undefined,
+              model,
+            }),
+          );
         }
       }
       storage('lf:model', model);
@@ -869,6 +907,7 @@ export function LaunchDialog({
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
+      starting.current = false;
     }
   };
 
@@ -907,7 +946,7 @@ export function LaunchDialog({
         {resume?.recentlyActive && <p className="warn">This session was active in the last few minutes. If it's still open in a terminal, continuing here forks the conversation.</p>}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20, overflow: 'auto' }}>
-          <div role="radiogroup" aria-label="What do you want to do" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div role="radiogroup" aria-label="What do you want to do" ref={intentGroup.ref} onKeyDown={intentGroup.onKeyDown} style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <IntentCard on={intent === 'chat'} title="Chat" hint="Think it through together" onClick={() => setIntent('chat')} />
             <IntentCard on={intent === 'task'} title="Task" hint="Runs on its own to the end" onClick={() => setIntent('task')} />
           </div>
@@ -968,6 +1007,7 @@ export function LaunchDialog({
                         className="input"
                         type="search"
                         autoFocus
+                        aria-label="Search Jira"
                         placeholder="Search Jira by key or title"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
@@ -1010,7 +1050,7 @@ export function LaunchDialog({
               {ticket && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700 }}>Start with</span>
-                  <div role="radiogroup" aria-label="Start with" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <div role="radiogroup" aria-label="Start with" ref={startGroup.ref} onKeyDown={startGroup.onKeyDown} style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <IntentCard on={start === 'spec'} title="Spec" hint="Agent writes the spec PR; you review it" onClick={() => setStart('spec')} />
                     <IntentCard on={start === 'brainstorm'} title="Brainstorm first" hint="Talk it through, then the spec" onClick={() => setStart('brainstorm')} />
                   </div>
@@ -1020,7 +1060,7 @@ export function LaunchDialog({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline' }}>
                   <span style={{ fontSize: 13, fontWeight: 700 }}>Repos</span>
-                  <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{ticket ? 'one pipeline each, in parallel' : 'where the task runs'}</span>
+                  <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{ticket ? 'the spec covers these; the pipeline builds each after approval' : 'where the task runs'}</span>
                 </div>
                 {mineErr && <p className="error">{mineErr}</p>}
                 {!mine && !mineErr && <p className="muted">Loading repos…</p>}
