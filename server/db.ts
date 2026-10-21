@@ -10,12 +10,7 @@ export function factoryDbPath(): string {
   return process.env.LEGOS_DB ?? join(homedir(), '.legos-factory', 'factory.db');
 }
 
-export function openDb(path = factoryDbPath()): DatabaseSync {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(path);
-  // holds PIN hashes, OAuth tokens and header secrets; secure_delete zeroes them out of freed pages
-  if (path !== ':memory:') chmodSync(path, 0o600);
-  db.exec(`
+const schema = `
     pragma secure_delete = on;
     create table if not exists meta (key text primary key, value text not null);
     create table if not exists users (
@@ -45,20 +40,59 @@ export function openDb(path = factoryDbPath()): DatabaseSync {
       primary key (owner, ticket, repo_key, pr_id));
     drop table if exists work_item_events;
     drop table if exists repo_projects;
-  `);
+  `;
+
+export function openDb(path = factoryDbPath()): DatabaseSync {
+  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const db = new DatabaseSync(path);
+  // holds PIN hashes, OAuth tokens and header secrets; secure_delete zeroes them out of freed pages
+  if (path !== ':memory:') chmodSync(path, 0o600);
+  refuseForeignSchema(db, path);
+  db.exec(schema);
   // tables made before these columns existed
-  addColumn(db, 'user_repos', 'jira_projects', `text not null default ''`);
-  addColumn(db, 'work_items', 'note', 'text');
-  addColumn(db, 'work_items', 'note_at', 'text');
-  addColumn(db, 'work_items', 'source', `text not null default 'jira'`);
-  addColumn(db, 'work_items', 'plan', 'text');
-  addColumn(db, 'work_items', 'routing', 'text');
-  addColumn(db, 'work_item_repos', 'stage', `text not null default 'building'`);
-  addColumn(db, 'work_item_repos', 'attempt', 'integer not null default 0');
-  addColumn(db, 'runs', 'task', 'text');
-  addColumn(db, 'runs', 'persona', 'text');
+  for (const [table, column, type] of laterColumns) addColumn(db, table, column, type);
   dropColumn(db, 'ticket_links', 'source');
   return db;
+}
+
+// columns added by app versions after the create table above; an older database of this app may lack them
+const laterColumns: [string, string, string][] = [
+  ['user_repos', 'jira_projects', `text not null default ''`],
+  ['work_items', 'note', 'text'],
+  ['work_items', 'note_at', 'text'],
+  ['work_items', 'source', `text not null default 'jira'`],
+  ['work_items', 'plan', 'text'],
+  ['work_items', 'routing', 'text'],
+  ['work_item_repos', 'stage', `text not null default 'building'`],
+  ['work_item_repos', 'attempt', 'integer not null default 0'],
+  ['runs', 'task', 'text'],
+  ['runs', 'persona', 'text'],
+];
+
+// expected columns come from replaying the schema into a throwaway in-memory copy, so there is one source of truth
+function refuseForeignSchema(db: DatabaseSync, path: string) {
+  const ref = new DatabaseSync(':memory:');
+  ref.exec(schema);
+  const ours = (ref.prepare(
+    "select name from sqlite_master where type = 'table' and name not like 'sqlite_%'").all() as { name: string }[])
+    .map((t) => ({
+      name: t.name,
+      columns: (ref.prepare(`pragma table_info(${t.name})`).all() as { name: string }[]).map((c) => c.name),
+    }));
+  ref.close();
+  for (const t of ours) {
+    if (!db.prepare("select 1 from sqlite_master where type = 'table' and name = ?").get(t.name)) continue;
+    const have = new Set((db.prepare(`pragma table_info(${t.name})`).all() as { name: string }[]).map((c) => c.name));
+    const later = new Set(laterColumns.filter(([table]) => table === t.name).map(([, column]) => column));
+    const missing = t.columns.filter((c) => !have.has(c) && !later.has(c));
+    if (missing.length === 0) continue;
+    const cols = missing.map((c) => `"${c}"`).join(', ');
+    const plural = missing.length > 1 ? 's' : '';
+    db.close();
+    throw new Error(
+      `${path} is not a legos-factory database: its table "${t.name}" is missing the ${cols} column${plural} this app expects. ` +
+      `Point LEGOS_DB at a new file or move this one aside, then start again.`);
+  }
 }
 
 function addColumn(db: DatabaseSync, table: string, column: string, type: string) {

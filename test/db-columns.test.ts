@@ -42,7 +42,45 @@ function checkColumns(db: DatabaseSync) {
   expect(db.prepare('select task, persona from runs').get()).toEqual({ task: 'T1', persona: 'builder' });
 }
 
+function foreignFamily(dir: string): string {
+  const path = join(dir, 'factory.db');
+  const foreign = new DatabaseSync(path);
+  foreign.exec(`
+    create table workspaces (workspace_id text primary key, name text not null);
+    create table runs (
+      workspace_id text not null, run_id text primary key, session_id text, item text not null,
+      started_at text not null, last_event_at text not null);
+    create table jobs (job_id text primary key, workspace_id text not null, state text not null);
+  `);
+  foreign.close();
+  return path;
+}
+
 describe('database columns', () => {
+  it('refuses a database created by a different schema family', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lf-db-foreign-'));
+    try {
+      const path = foreignFamily(dir);
+      const attempt = () => openDb(path);
+      expect(attempt).toThrow(/not a legos-factory database/);
+      expect(attempt).toThrow(/move.*aside/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('names the file and the column that does not fit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lf-db-foreign-'));
+    try {
+      const path = foreignFamily(dir);
+      const attempt = () => openDb(path);
+      expect(attempt).toThrow(dir);
+      expect(attempt).toThrow('"owner"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('adds the new columns to a fresh database', () => {
     const db = openDb(':memory:');
     try {
