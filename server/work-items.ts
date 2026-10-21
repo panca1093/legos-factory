@@ -32,7 +32,9 @@ export class WorkItems {
     this.db.prepare(`update work_item_repos set stage = ?, attempt = ? where owner = ? and ticket = ? and repo_key = ?`).run(stage, attempt, owner, ticket, keyOf(repo));
   }
 
+  // The legacy stages of work items that predate the pipeline: fixed up once per database, and never on a repo the plan gives to the pipeline.
   backfillStages() {
+    if (this.db.prepare(`select 1 from meta where key = 'backfill_stages_done'`).get()) return;
     this.db.exec(`update work_item_repos as r set stage = case
       when exists (select 1 from ticket_links l where l.owner = r.owner and l.ticket = r.ticket and l.repo_key = r.repo_key and l.kind = 'impl' and l.state = 'MERGED') then 'done'
       when exists (select 1 from ticket_links l where l.owner = r.owner and l.ticket = r.ticket and l.repo_key = r.repo_key and l.kind = 'impl' and l.state = 'OPEN') then 'pr_review'
@@ -40,7 +42,11 @@ export class WorkItems {
       else stage end
       where stage = 'building' and attempt = 0 and not exists (
         select 1 from runs where runs.owner = r.owner and json_extract(item, '$.ticket') = r.ticket
-        and lower(json_extract(item, '$.repo')) = r.repo_key and (task is not null or persona is not null))`);
+        and lower(json_extract(item, '$.repo')) = r.repo_key and (task is not null or persona is not null))
+      and not exists (
+        select 1 from work_items w, json_each(case when json_valid(w.plan) then w.plan else '{}' end, '$.tasks') t
+        where w.owner = r.owner and w.ticket = r.ticket and lower(trim(json_extract(t.value, '$.repo'))) = r.repo_key)`);
+    this.db.prepare(`insert into meta (key, value) values ('backfill_stages_done', ?) on conflict do nothing`).run(now());
   }
 
   setNote(owner: string, ticket: string, text: string | null) {
