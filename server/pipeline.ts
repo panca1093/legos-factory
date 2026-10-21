@@ -17,6 +17,8 @@ export type Facts = {
   reviewAttempts: number;
   ruleMatched?: boolean;
   inspectorReasons?: string[];
+  // a Foreman run is still working on this repo: its spec PR is being revised, not waiting for review
+  foremanRunning?: boolean;
   event?:
     | { type: 'spec_approved' }
     | { type: 'run_ended'; repo: string; task: string | null; persona: Persona; ok: boolean; verdict?: 'pass' | 'changes_requested' }
@@ -57,7 +59,7 @@ export function next(state: State, facts: Facts): Action[] {
   if (event.type === 'pr') {
     if (event.state === 'declined') return [{ type: 'escalate', repo: repo.repo, reason: `${event.kind} PR declined` }];
     if (event.kind === 'spec') {
-      return event.state === 'opened' && repo.stage === 'shaping' ? [setStage(repo.repo, 'spec_review')] : [];
+      return event.state === 'opened' && repo.stage === 'shaping' && !facts.foremanRunning ? [setStage(repo.repo, 'spec_review')] : [];
     }
     if (event.state === 'merged') return repo.stage === 'done' ? [] : [setStage(repo.repo, 'done')];
     if (event.state === 'approved' && repo.stage === 'pr_review') return [{ type: 'mark_ready', repo: repo.repo }];
@@ -112,9 +114,38 @@ const stateOf = (deps: Deps, owner: string, ticket: string): State => ({
   plan: deps.workItems.get(owner, ticket)?.plan ?? null,
 });
 
+// A Foreman run still working on the repo: the spec PR it opened is being revised, not waiting for review.
+function foremanBusy(deps: Deps, owner: string, ticket: string, repo: string): boolean {
+  const snapshot = deps.runs.snapshot();
+  if (snapshot.type !== 'snapshot') return false;
+  return snapshot.runs.some((r) => r.owner === owner && r.ticket === ticket && (r.repo ?? '').toLowerCase() === repo.toLowerCase() && r.persona === 'foreman' && !r.endedAt);
+}
+
+// Starts the run of one plan task: the plan marks the task running, the prompt carries the task and the findings.
+async function startTaskRun(deps: Deps, owner: string, ticket: string, task: PlanTask, persona: Persona, opts: { findings?: string; cwd?: string } = {}): Promise<void> {
+  const plan = deps.workItems.get(owner, ticket)?.plan;
+  if (!plan) return;
+  deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'running' } : t) });
+  const branch = deps.workItems.links(owner, ticket).find((l) => l.repo.toLowerCase() === task.repo.toLowerCase() && l.kind === 'impl' && l.state === 'OPEN')?.branch;
+  const prompt = `${persona === 'inspector' ? 'Review' : 'Implement'} task ${task.id}: ${task.do}\nTest: ${task.test}\nApproved plan:\n${JSON.stringify(plan)}${opts.findings ? `\nPrevious run findings:\n${opts.findings}` : ''}`;
+  try {
+    await launchRun(deps, owner, launchSchema.parse({
+      ticket, stage: 'build', kind: 'task', task: task.id, persona, prompt, branch,
+      ...(opts.cwd ? { cwd: opts.cwd } : { repo: task.repo }),
+    }));
+  } catch (err) {
+    deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'failed' } : t) });
+    deps.workItems.setNote(owner, ticket, `Escalated: ${task.repo}: ${errMsg(err)}`);
+  }
+}
+
 async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, previous?: Omit<Run, 'events'>) {
   const state = stateOf(deps, owner, ticket);
-  for (const action of next(state, facts)) {
+  const event = facts.event;
+  const effective: Facts = event?.type === 'pr' && event.kind === 'spec'
+    ? { ...facts, foremanRunning: foremanBusy(deps, owner, ticket, event.repo) }
+    : facts;
+  for (const action of next(state, effective)) {
     if (action.type === 'set_stage') deps.workItems.setStage(owner, ticket, action.repo, action.stage, action.attempt);
     else if (action.type === 'mark_ready') deps.workItems.setStage(owner, ticket, action.repo, 'ready');
     else if (action.type === 'escalate') deps.workItems.setNote(owner, ticket, `Escalated: ${action.repo}: ${action.reason}`);
@@ -127,18 +158,10 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
       const plan = deps.workItems.get(owner, ticket)?.plan;
       const task = plan?.tasks.find((t) => t.id === action.task);
       if (!task || !plan) continue;
-      deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'running' } : t) });
-      const branch = deps.workItems.links(owner, ticket).find((l) => l.repo === task.repo && l.kind === 'impl' && l.state === 'OPEN')?.branch;
-      const prompt = `${action.persona === 'inspector' ? 'Review' : 'Implement'} task ${task.id}: ${task.do}\nTest: ${task.test}\nApproved plan:\n${JSON.stringify(plan)}${previous?.result ? `\nPrevious run findings:\n${previous.result}` : ''}`;
-      try {
-        await launchRun(deps, owner, launchSchema.parse({
-          ticket, stage: 'build', kind: 'task', task: task.id, persona: action.persona, prompt, branch,
-          ...(previous?.repo === task.repo ? { cwd: previous.cwd } : { repo: task.repo }),
-        }));
-      } catch (err) {
-        deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'failed' } : t) });
-        deps.workItems.setNote(owner, ticket, `Escalated: ${task.repo}: ${errMsg(err)}`);
-      }
+      await startTaskRun(deps, owner, ticket, task, action.persona, {
+        findings: previous?.result ?? undefined,
+        cwd: previous?.repo === task.repo ? previous.cwd : undefined,
+      });
     }
   }
 }
@@ -157,6 +180,54 @@ export function approveSpec(deps: Deps, owner: string, ticket: string): Promise<
     const pr = await wb.client.bitbucketPr(wb.token, repo.workspace, repo.slug, link.prId);
     deps.workItems.setPlan(owner, ticket, parsePlan(pr.description, state.repos.map((r) => r.repo)));
     await apply(deps, owner, ticket, { reviewAttempts: (await loadSettings()).automation.reviewAttempts, event: { type: 'spec_approved' } });
+  });
+}
+
+// The person approves a routed PR: the repo is ready to merge.
+export function approvePr(deps: Deps, owner: string, ticket: string, repo: string): Promise<void> {
+  return serial(deps, owner, ticket, async () => {
+    const state = stateOf(deps, owner, ticket);
+    const found = state.repos.find((r) => r.repo.toLowerCase() === repo.toLowerCase());
+    if (!found) throw new HttpError(404, 'that repo is not part of this work item');
+    if (found.stage !== 'pr_review') throw new HttpError(409, 'that PR is not waiting for a review');
+    await apply(deps, owner, ticket, { reviewAttempts: (await loadSettings()).automation.reviewAttempts, event: { type: 'pr', repo: found.repo, kind: 'impl', state: 'approved' } });
+  });
+}
+
+// The person asks for changes on the spec: the Foreman revises the same spec PR on the same branch.
+export function requestSpecChanges(deps: Deps, owner: string, ticket: string, comment: string): Promise<void> {
+  return serial(deps, owner, ticket, async () => {
+    if (!deps.workItems.get(owner, ticket)) throw new HttpError(409, 'work item not found');
+    const link = deps.workItems.links(owner, ticket).find((l) => l.kind === 'spec' && l.state !== 'DECLINED');
+    if (!link) throw new HttpError(409, 'link the spec PR before asking for changes');
+    const repo = deps.workItems.repos(owner, ticket).find((r) => r.name.toLowerCase() === link.repo.toLowerCase());
+    if (!repo) throw new HttpError(409, 'the spec PR is not part of this work item');
+    deps.workItems.setStage(owner, ticket, repo.name, 'shaping', repo.attempt);
+    await launchRun(deps, owner, launchSchema.parse({
+      ticket, stage: 'design', kind: 'task', persona: 'foreman', repo: repo.name, branch: link.branch,
+      prompt: `Revise the spec for ${ticket} on the existing spec pull request.\n\nRequested changes:\n${comment}`,
+    }));
+  });
+}
+
+// The person asks for changes on an implementation PR: the Builder works on the same branch again.
+export function requestPrChanges(deps: Deps, owner: string, ticket: string, repo: string, comment: string): Promise<void> {
+  return serial(deps, owner, ticket, async () => {
+    const found = deps.workItems.repos(owner, ticket).find((r) => r.name.toLowerCase() === repo.toLowerCase());
+    if (!found) throw new HttpError(404, 'that repo is not part of this work item');
+    const link = deps.workItems.links(owner, ticket).find((l) => l.kind === 'impl' && l.state === 'OPEN' && l.repo.toLowerCase() === found.name.toLowerCase());
+    if (!link) throw new HttpError(409, 'there is no open implementation PR for that repo');
+    deps.workItems.setStage(owner, ticket, found.name, 'building', found.attempt);
+    const plan = deps.workItems.get(owner, ticket)?.plan ?? null;
+    const task = plan?.tasks.filter((t) => t.repo.toLowerCase() === found.name.toLowerCase()).at(-1);
+    if (!plan || !task) {
+      await launchRun(deps, owner, launchSchema.parse({
+        ticket, stage: 'build', kind: 'task', persona: 'builder', repo: found.name, branch: link.branch,
+        prompt: `Implement ${ticket} on the existing pull request.\n\nRequested changes:\n${comment}`,
+      }));
+      return;
+    }
+    await startTaskRun(deps, owner, ticket, task, 'builder', { findings: comment });
   });
 }
 
