@@ -1,10 +1,30 @@
-import { useContext, useState } from 'react';
+import { useContext, useState, type KeyboardEvent } from 'react';
 import type { Run, RunKind, SessionSummary, WorkItem } from '../../shared/types.ts';
 import { api, ago, fmtTokens, projectName, useFetch, useNow } from '../api.ts';
 import { ShareBadge, TicketChip, go, runLabel, runTone, totalTokens } from '../components.tsx';
 import { Icon } from '../icons.tsx';
 import { ALIVE, ORDER, type Live, type ResumeReq, Chrome, useReview, Frame } from '../chrome.tsx';
 import './Overview.css';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+function onTabKey(index: number, select: (next: number) => void) {
+  return (e: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+    if (next === null) return;
+    e.preventDefault();
+    tabs?.item(next).focus();
+    select(next);
+  };
+}
 
 function evidenceOf(r: Run, now: number) {
   const toolErrors = r.events.filter((e) => e.kind === 'tool_result' && e.isError).length;
@@ -56,11 +76,9 @@ function Glance({ live, needs, merge }: { live: Live; needs: number | null; merg
             role="tab"
             className="glance-tab"
             aria-selected={sel === i}
+            tabIndex={sel === i ? 0 : -1}
             onClick={() => setSel(i)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowRight') setSel((sel + 1) % 3);
-              if (e.key === 'ArrowLeft') setSel((sel + 2) % 3);
-            }}
+            onKeyDown={onTabKey(i, setSel)}
           >
             {t.label} <b>{t.n ?? '—'}</b>
           </button>
@@ -161,15 +179,17 @@ export function Overview({
                   Runs <b>{[...live.runs.values()].filter((r) => ALIVE.includes(r.status)).length} live</b>
                 </div>
                 <div className="cards" role="tablist" aria-label="Runs">
-                  {runs.map((r) => {
+                  {runs.map((r, i) => {
                     const ev = evidenceOf(r, now);
                     return (
                       <button
                         key={r.id}
                         role="tab"
                         aria-selected={r.id === selected.id}
+                        tabIndex={r.id === selected.id ? 0 : -1}
                         className={`run-tab ${runTone(r)}`}
                         onClick={() => setSelId(r.id)}
+                        onKeyDown={onTabKey(i, (n) => setSelId(runs[n].id))}
                         onDoubleClick={() => go(`#/runs/${r.id}`)}
                       >
                         <div className="card-head">

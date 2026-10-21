@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { TeamItem } from '../../shared/types.ts';
 import { api, ago, useFetch, useLive, useNow } from '../api.ts';
 import { TicketChip, StatusPill, LaunchDialog, runLabel, runTone } from '../components.tsx';
@@ -7,6 +7,26 @@ import { ALIVE, RECENT_MS, type Live, type ResumeReq, Frame, initials } from '..
 
 import { Sessions } from './Sessions.tsx';
 import './Activity.css';
+
+// The ARIA tabs pattern: arrows move focus around the tablist, wrapping; Home and End jump to the ends.
+function tabStep(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (index + count - 1) % count;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+function onTabKey(index: number, select: (next: number) => void) {
+  return (e: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    const next = tabs ? tabStep(e.key, index, tabs.length) : null;
+    if (next === null) return;
+    e.preventDefault();
+    tabs?.item(next).focus();
+    select(next);
+  };
+}
 
 const RANGES = [
   [1, 'Today'],
@@ -48,9 +68,9 @@ function Activity({ live, initialTab = 'mine' }: { live?: Live; initialTab?: 'mi
   return <Frame crumb={<><span>Workspace / </span>Activity</>}>
     <div className="scroll"><div className="page activity-page">
       <div className="page-heading"><div><h1>Activity</h1><p className="lead">{tab === 'mine' ? 'Everything you and your factory did, with outcome and est. cost.' : 'What everyone’s factory is doing right now, and who is waiting on whom.'}</p></div>
-        <div className="segmented" role="tablist" aria-label="Range">{RANGES.map(([d, label]) => <button key={d} role="tab" aria-selected={days === d} className={days === d ? 'active' : ''} onClick={() => setDays(d)}>{label}</button>)}</div>
+        <div className="segmented" role="tablist" aria-label="Range">{RANGES.map(([d, label], i) => <button key={d} role="tab" aria-selected={days === d} tabIndex={days === d ? 0 : -1} className={days === d ? 'active' : ''} onClick={() => setDays(d)} onKeyDown={onTabKey(i, (n) => setDays(RANGES[n][0]))}>{label}</button>)}</div>
       </div>
-      <div className="activity-toolbar"><div className="segmented" role="tablist" aria-label="Whose activity">{(['mine', 'team'] as const).map((value) => <button key={value} role="tab" aria-selected={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{value === 'mine' ? 'Mine' : 'Team'}</button>)}</div>
+      <div className="activity-toolbar"><div className="segmented" role="tablist" aria-label="Whose activity">{(['mine', 'team'] as const).map((value, i) => <button key={value} role="tab" aria-selected={tab === value} tabIndex={tab === value ? 0 : -1} className={tab === value ? 'active' : ''} onClick={() => setTab(value)} onKeyDown={onTabKey(i, (n) => setTab((['mine', 'team'] as const)[n]))}>{value === 'mine' ? 'Mine' : 'Team'}</button>)}</div>
         <input id="session-search" type="search" className="input" aria-label="Filter activity and sessions" placeholder={tab === 'mine' ? 'Filter by ticket, repo or text' : 'Filter by person, ticket, repo or text'} value={query} onChange={(e) => setQuery(e.target.value)} />
       </div>
       <div role="tabpanel" aria-label={tab === 'mine' ? 'Mine' : 'Team'}>{tab === 'mine' ? <MineActivity live={mineLive} days={days} query={query} onContinue={setResume} /> : <TeamContent days={days} q={query} />}</div>
