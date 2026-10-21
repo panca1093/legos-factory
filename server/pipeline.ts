@@ -1,10 +1,12 @@
-import type { Persona, PipelineStage, Plan, PlanTask, Run } from '../shared/types.ts';
+import type { Persona, PipelineStage, Plan, PlanTask, Run, TicketLink } from '../shared/types.ts';
 
 import { HttpError, NO_WB, errMsg, type Deps } from './http.ts';
 import { launchRun, launchSchema } from './launch-run.ts';
 import { loadSettings } from './policy.ts';
 import { parsePlan } from './plan.ts';
+import { route } from './routing.ts';
 import { parseRepo } from './workspace.ts';
+import type { PrFile } from './workbench.ts';
 
 export type State = {
   repos: { repo: string; stage: PipelineStage; attempt: number }[];
@@ -83,6 +85,18 @@ export function next(state: State, facts: Facts): Action[] {
 const queues = new WeakMap<Deps, Map<string, Promise<void>>>();
 const ended = new WeakMap<Deps, Set<string>>();
 
+const HUMAN_REVIEW = /^Human review:(.*)$/;
+
+// The Inspector asks for a person with an explicit line; the rest of its text is findings, not a reason.
+function humanReviewReasons(result: string | null | undefined): string[] {
+  const reasons: string[] = [];
+  for (const line of (result ?? '').split('\n')) {
+    const reason = HUMAN_REVIEW.exec(line.trim())?.[1].trim();
+    if (reason) reasons.push(reason);
+  }
+  return reasons;
+}
+
 function serial(deps: Deps, owner: string, ticket: string, work: () => Promise<void>): Promise<void> {
   let pending = queues.get(deps);
   if (!pending) queues.set(deps, pending = new Map());
@@ -155,6 +169,15 @@ export function pipelineRunEnded(deps: Deps, run: Omit<Run, 'events'>): Promise<
     seen.add(run.id);
     const task = deps.workItems.get(run.owner, run.ticket!)?.plan?.tasks.find((t) => t.id === run.task);
     if (task?.state !== 'running') return;
+    if (run.persona === 'inspector') {
+      deps.workItems.setRouting(run.owner, run.ticket!, run.repo!, {
+        at: new Date().toISOString(),
+        reasons: [],
+        matches: [],
+        inspectorReasons: humanReviewReasons(run.result),
+        findings: run.result ?? '',
+      });
+    }
     const declined = deps.workItems.links(run.owner, run.ticket!).find((l) => l.state === 'DECLINED');
     if (declined) {
       await apply(deps, run.owner, run.ticket!, { reviewAttempts: 0, event: { type: 'pr', repo: declined.repo, kind: declined.kind, state: 'declined' } });
@@ -176,13 +199,79 @@ export function pipelineRunEnded(deps: Deps, run: Omit<Run, 'events'>): Promise<
   });
 }
 
+type RoutingOutcome =
+  | { kind: 'decided'; toPerson: boolean; reasons: string[]; matches: { id: string; reason: string }[]; inspectorReasons: string[]; findings: string }
+  | { kind: 'unreadable'; reason: string }
+  | { kind: 'waiting' };
+
+// The facts a routing decision is made of: what the PR changed and what the ticket is.
+async function decideRouting(deps: Deps, owner: string, ticket: string, link: TicketLink): Promise<RoutingOutcome> {
+  const name = link.repo.toLowerCase();
+  const repo = deps.workItems.repos(owner, ticket).find((r) => r.name.toLowerCase() === name);
+  if (!repo || repo.stage !== 'building') return { kind: 'waiting' };
+  const tasks = (deps.workItems.get(owner, ticket)?.plan?.tasks ?? []).filter((task) => task.repo.toLowerCase() === name);
+  if (!tasks.length || tasks.some((task) => task.state !== 'done')) return { kind: 'waiting' };
+  const wb = await deps.workbench(owner);
+  if (!wb) return { kind: 'unreadable', reason: 'no workbench connected' };
+  const ref = parseRepo(link.repo);
+  if (!ref) return { kind: 'unreadable', reason: 'repo is not workspace/slug' };
+  let files: PrFile[];
+  try {
+    files = await wb.client.bitbucketPrFiles(wb.token, ref.workspace, ref.slug, link.prId);
+  } catch (err) {
+    return { kind: 'unreadable', reason: errMsg(err) };
+  }
+  let jiraType: string | null = null;
+  let labels: string[] = [];
+  try {
+    const issue = await wb.client.jiraIssue(wb.token, ticket);
+    jiraType = issue.issueType ?? null;
+    labels = issue.labels ?? [];
+  } catch {
+    // a jira rule cannot match a ticket that could not be read
+  }
+  const stored = deps.workItems.routing(owner, ticket)[name];
+  const inspectorReasons = stored?.inspectorReasons ?? [];
+  const decision = route({
+    files: files.map((file) => file.path),
+    changedLines: files.reduce((sum, file) => sum + file.added + file.removed, 0),
+    repo: link.repo,
+    jiraType,
+    labels,
+  }, (await loadSettings()).automation.routing, inspectorReasons);
+  return { kind: 'decided', toPerson: decision.toPerson, reasons: decision.reasons, matches: decision.matches, inspectorReasons, findings: stored?.findings ?? '' };
+}
+
 async function tick(deps: Deps, owner: string, ticket: string) {
   const { automation } = await loadSettings();
   const links = deps.workItems.links(owner, ticket);
+  const routed = new Set<string>();
   for (const link of links) {
     const state = link.state === 'MERGED' ? 'merged' : link.state === 'DECLINED' ? 'declined' : link.state === 'OPEN' ? 'opened' : null;
     if (!state) continue;
-    if (link.kind === 'impl' && state === 'opened' && automation.routing.some((r) => r.on)) continue;
+    if (link.kind === 'impl' && state === 'opened' && !routed.has(link.repo.toLowerCase())) {
+      const outcome = await decideRouting(deps, owner, ticket, link);
+      if (outcome.kind === 'waiting') continue;
+      if (outcome.kind === 'unreadable') {
+        deps.workItems.setNote(owner, ticket, `Escalated: ${link.repo}: Routing could not read the PR for ${link.repo}: ${outcome.reason}`);
+        continue;
+      }
+      routed.add(link.repo.toLowerCase());
+      deps.workItems.setRouting(owner, ticket, link.repo, {
+        at: new Date().toISOString(),
+        reasons: outcome.reasons,
+        matches: outcome.matches,
+        inspectorReasons: outcome.inspectorReasons,
+        findings: outcome.findings,
+      });
+      await apply(deps, owner, ticket, {
+        reviewAttempts: automation.reviewAttempts,
+        event: { type: 'pr', repo: link.repo, kind: 'impl', state },
+        ruleMatched: outcome.toPerson,
+        inspectorReasons: outcome.reasons,
+      });
+      continue;
+    }
     await apply(deps, owner, ticket, { reviewAttempts: automation.reviewAttempts, event: { type: 'pr', repo: link.repo, kind: link.kind, state } });
   }
   if (!links.some((l) => l.state === 'DECLINED') && !deps.workItems.get(owner, ticket)?.note?.text.startsWith('Escalated:')) {

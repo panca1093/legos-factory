@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { PipelineStage, Plan, TicketLink, WorkItem, WorkItemNote } from '../shared/types.ts';
+import type { PipelineStage, Plan, RoutingInfo, TicketLink, WorkItem, WorkItemNote } from '../shared/types.ts';
 
 const keyOf = (repo: string) => repo.trim().toLowerCase();
 const now = () => new Date().toISOString();
@@ -45,6 +45,24 @@ export class WorkItems {
 
   setNote(owner: string, ticket: string, text: string | null) {
     this.db.prepare(`update work_items set note = ?, note_at = ? where owner = ? and ticket = ?`).run(text, text ? now() : null, owner, ticket);
+  }
+
+  // the routing decisions of a ticket, keyed by lower-cased repo
+  routing(owner: string, ticket: string): Record<string, RoutingInfo> {
+    const row = this.db.prepare(`select routing from work_items where owner = ? and ticket = ?`).get(owner, ticket) as { routing: string | null } | undefined;
+    if (!row?.routing) return {};
+    try { return JSON.parse(row.routing) as Record<string, RoutingInfo>; }
+    catch { return {}; }
+  }
+
+  setRouting(owner: string, ticket: string, repo: string, info: RoutingInfo) {
+    const map = { ...this.routing(owner, ticket), [keyOf(repo)]: info };
+    this.db.prepare(`update work_items set routing = ? where owner = ? and ticket = ?`).run(JSON.stringify(map), owner, ticket);
+  }
+
+  // what the API shows for a ticket
+  routingView(owner: string, ticket: string): Record<string, RoutingInfo> {
+    return this.routing(owner, ticket);
   }
 
   list(owner: string): string[] {

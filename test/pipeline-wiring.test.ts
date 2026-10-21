@@ -2,18 +2,22 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { backup } from 'node:sqlite';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { buildDeps, createApp } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
+import { openDb } from '../server/db.ts';
 import { approveSpec, pipelineRunEnded } from '../server/pipeline.ts';
 import { capturePr, startSyncLoop, syncWorkItem } from '../server/jira-sync.ts';
 import { launchRun, launchSchema } from '../server/launch-run.ts';
+import { WorkItems } from '../server/work-items.ts';
 import type { Run } from '../shared/types.ts';
 
 let root: string;
 let saved: NodeJS.ProcessEnv;
 let deps: ReturnType<typeof buildDeps>;
 let runs: RunManager;
+let fakeWb: { token: string; client: any };
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' });
 const plan = '```plan\n- id: T1\n  do: Build retry\n  repo: acme/api\n  test: retry.test.ts\n  needs: []\n  touches: [retry.ts]\n- id: T2\n  do: Build banner\n  repo: acme/web\n  test: banner.test.ts\n  needs: []\n  touches: [banner.ts]\n```';
 
@@ -35,10 +39,13 @@ beforeEach(() => {
   for (const slug of ['api', 'web']) git(root, 'clone', '-q', '--bare', src, join(root, 'acme', `${slug}.git`));
   runs = new RunManager(undefined, undefined, 0);
   deps = buildDeps(runs, { workspaces: join(root, 'workspaces'), gitUrl: `file://${root}/{workspace}/{slug}.git` });
-  deps.workbench = async () => ({ token: 'fake', client: {
+  fakeWb = { token: 'fake', client: {
     bitbucketPr: async () => ({ state: 'OPEN', title: 'Spec', description: plan, reviewers: [] }),
+    bitbucketPrFiles: async () => [{ status: 'modified', path: 'retry.ts', oldPath: null, added: 12, removed: 3 }],
+    jiraIssue: async () => ({ key: 'PROJ-123', summary: 'Retry cap', issueType: 'Story', labels: [], status: 'In Progress' }),
     jiraStatus: async () => 'In Progress', jiraTransitions: async () => [], jiraAddComment: async () => {},
-  } as any });
+  } as any };
+  deps.workbench = async () => fakeWb;
   deps.workItems.create('local', 'PROJ-123');
   for (const name of ['acme/api', 'acme/web']) {
     deps.myRepos.add('local', { name, mainBranch: 'main' });
@@ -61,6 +68,17 @@ async function finish(run: Run, result: string | null = null) {
   run.status = 'completed';
   run.result = result;
   await pipelineRunEnded(deps, run);
+}
+
+const setRules = (routing: { id: string; kind: string; value: string; on: boolean }[]) =>
+  writeFileSync(join(root, 'settings.json'), JSON.stringify({ automation: { routing } }));
+
+// build, link the implementation PR and let the Inspector have the last word
+async function buildAndReview(result: string) {
+  await approveSpec(deps, 'local', 'PROJ-123');
+  await finish(queued()[0]);
+  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'main', title: 'Build', state: 'OPEN', runId: null }, true);
+  await finish(queued()[1], result);
 }
 
 it('approving the spec starts the first wave', async () => {
@@ -177,4 +195,59 @@ it('initial design shapes all untouched repos and captured spec opens the ticket
   await approveSpec(deps, 'local', 'PROJ-123');
   expect(deps.workItems.repos('local', 'PROJ-123').map((r) => r.stage)).toEqual(['ready', 'building', 'building']);
   expect(queued().filter((r) => r.persona === 'builder')).toHaveLength(1);
+});
+
+it('routes a PR to a person when a paths rule matches', async () => {
+  setRules([{ id: 'r1', kind: 'paths', value: 'db/migrations/**', on: true }]);
+  fakeWb.client.bitbucketPrFiles = async () => [{ status: 'added', path: 'db/migrations/0042_add_purpose.sql', oldPath: null, added: 40, removed: 2 }];
+  await buildAndReview('Verdict: APPROVE');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('pr_review');
+  expect(deps.workItems.routing('local', 'PROJ-123')['acme/api']).toMatchObject({
+    reasons: ['paths: db/migrations/0042_add_purpose.sql'],
+    matches: [{ id: 'r1', reason: 'paths: db/migrations/0042_add_purpose.sql' }],
+    inspectorReasons: [],
+  });
+});
+
+it('leaves a PR ready to merge when no rule matches', async () => {
+  setRules([{ id: 'r1', kind: 'paths', value: 'db/migrations/**', on: true }]);
+  await buildAndReview('Verdict: APPROVE');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('ready');
+  expect(deps.workItems.routing('local', 'PROJ-123')['acme/api']).toMatchObject({ reasons: [], matches: [], inspectorReasons: [] });
+});
+
+it('routes a PR to a person when the inspector asks for a human', async () => {
+  await buildAndReview('Verdict: APPROVE\nHuman review: the migration needs a second pair of eyes');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('pr_review');
+  expect(deps.workItems.routing('local', 'PROJ-123')['acme/api']).toMatchObject({
+    inspectorReasons: ['the migration needs a second pair of eyes'],
+    reasons: ['the migration needs a second pair of eyes'],
+  });
+});
+
+it('ignores free text that is not a Human review line', async () => {
+  await buildAndReview('Verdict: APPROVE\nThe migration looks risky.\nHuman review:\n');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('ready');
+  const info = deps.workItems.routing('local', 'PROJ-123')['acme/api'];
+  expect(info.inspectorReasons).toEqual([]);
+  expect(info.findings).toContain('The migration looks risky.');
+});
+
+it('keeps the routing reasons after a restart', async () => {
+  setRules([{ id: 'r1', kind: 'paths', value: 'db/migrations/**', on: true }]);
+  fakeWb.client.bitbucketPrFiles = async () => [{ status: 'added', path: 'db/migrations/0042_add_purpose.sql', oldPath: null, added: 40, removed: 2 }];
+  await buildAndReview('Verdict: APPROVE');
+  const file = join(root, 'restart.db');
+  await backup(deps.db, file);
+  const db = openDb(file);
+  expect(new WorkItems(db).routing('local', 'PROJ-123')['acme/api'].reasons).toEqual(['paths: db/migrations/0042_add_purpose.sql']);
+  db.close();
+});
+
+it('escalates when the PR for routing cannot be read', async () => {
+  setRules([{ id: 'r1', kind: 'paths', value: 'db/migrations/**', on: true }]);
+  fakeWb.client.bitbucketPrFiles = async () => { throw new Error('diff unavailable'); };
+  await buildAndReview('Verdict: APPROVE');
+  expect(deps.workItems.repos('local', 'PROJ-123')[0].stage).toBe('building');
+  expect(deps.workItems.get('local', 'PROJ-123')?.note?.text).toContain('Routing could not read the PR for acme/api');
 });
