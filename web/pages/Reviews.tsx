@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ago, storage, useFetch, useNow, type ReviewRequest, type WorkItem, type PrComment, type FixQueue } from '../api.ts';
+import { api, ago, storage, useFetch, useNow, type ReviewRequest, type RoutingInfo, type WorkItem, type PrComment, type FixQueue } from '../api.ts';
 import { Empty } from '../components.tsx';
 import { Frame } from '../chrome.tsx';
 import './Reviews.css';
@@ -112,20 +112,43 @@ function Teammates() {
 
 type Gate = { item: WorkItem; repo: WorkItem['repos'][number] };
 
+// shared/types.ts has no routing field yet: the pipeline branch adds it per repo.
+const routingOf = (item: WorkItem) => (item as WorkItem & { routing?: Record<string, RoutingInfo> | null }).routing ?? null;
+
+function GatePrStats({ repo, prId, spec }: { repo: string; prId: number; spec: boolean }) {
+  const { data } = useFetch(() => api.pr(repo, prId), [repo, prId]);
+  const files = data?.files ?? [];
+  if (!files.length) return null;
+  const added = files.reduce((n, f) => n + f.added, 0);
+  const removed = files.reduce((n, f) => n + f.removed, 0);
+  const count = files.length;
+  return <>{spec ? ` · ${count} file${count === 1 ? '' : 's'} · ${added + removed} lines` : ` · +${added} −${removed} · ${count} file${count === 1 ? '' : 's'}`}</>;
+}
+
 function FactoryGates({ items, reload }: { items: WorkItem[]; reload: () => void }) {
+  const now = useNow(60000);
   const gates: Gate[] = items.flatMap((item) => item.repos.filter((repo) => repo.stage === 'spec_review' || repo.stage === 'pr_review').map((repo) => ({ item, repo })));
   const [picked, setPicked] = useState('');
   const [comment, setComment] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'approve' | 'changes' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const gate = gates.find(({ item, repo }) => `${item.ticket}/${repo.name}` === picked) ?? gates[0];
   if (!gate) return <Empty>No factory gates are waiting on you.</Empty>;
   const { item, repo } = gate;
   const spec = repo.stage === 'spec_review';
   const link = item.links.find((l) => l.repo === repo.name && l.kind === (spec ? 'spec' : 'impl') && l.state === 'OPEN');
+  const info = routingOf(item)?.[repo.name] ?? null;
+  const matches = info?.matches ?? [];
+  const inspectorReasons = info?.inspectorReasons ?? [];
+  const plainReasons = matches.length || inspectorReasons.length ? [] : info?.reasons ?? [];
+  const findings = info?.findings ?? '';
+  const hasRouting = !!(matches.length || inspectorReasons.length || plainReasons.length || findings);
   const approve = async () => {
-    setBusy(true);
+    if (busy) return;
+    setBusy('approve');
     setError(null);
+    setStatus(null);
     try {
       if (spec) await api.approveSpec(item.ticket);
       else await api.approvePr(item.ticket, repo.name);
@@ -133,7 +156,24 @@ function FactoryGates({ items, reload }: { items: WorkItem[]; reload: () => void
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  };
+  const requestChanges = async () => {
+    if (busy || !comment.trim()) return;
+    setBusy('changes');
+    setError(null);
+    setStatus(null);
+    try {
+      if (spec) await api.requestSpecChanges(item.ticket, comment.trim());
+      else await api.requestPrChanges(item.ticket, repo.name, comment.trim());
+      setComment('');
+      setStatus('The change request was sent to the agent.');
+      reload();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
     }
   };
   return <div className="reviews-gates">
@@ -142,9 +182,17 @@ function FactoryGates({ items, reload }: { items: WorkItem[]; reload: () => void
         const key = `${g.item.ticket}/${g.repo.name}`;
         const isSpec = g.repo.stage === 'spec_review';
         const pr = g.item.links.find((l) => l.repo === g.repo.name && l.kind === (isSpec ? 'spec' : 'impl') && l.state === 'OPEN');
-        return <button type="button" className={`reviews-gate-row${g === gate ? ' selected' : ''}`} key={key} aria-pressed={g === gate} disabled={busy} onClick={() => { setPicked(key); setError(null); setComment(''); }}>
+        const gInfo = routingOf(g.item)?.[g.repo.name] ?? null;
+        const rules = gInfo?.matches ?? [];
+        const raised = gInfo?.inspectorReasons ?? [];
+        return <button type="button" className={`reviews-gate-row${g === gate ? ' selected' : ''}`} key={key} aria-pressed={g === gate} disabled={busy !== null} onClick={() => { setPicked(key); setError(null); setStatus(null); setComment(''); }}>
           <span className={`reviews-dot ${isSpec ? 'spec' : 'pr'}`} />
-          <span className="reviews-row-copy"><span><span className={`reviews-tag ${isSpec ? 'spec' : 'pr'}`}>{isSpec ? 'Spec' : 'PR'}</span> <span className="mono">{g.item.ticket}</span></span><b>{pr?.title ?? g.item.ticket}</b><span className="muted mono">{g.repo.name}{pr ? ` #${pr.prId}` : ' · PR unavailable'}</span></span>
+          <span className="reviews-row-copy">
+            <span className="reviews-row-head"><span className={`reviews-tag ${isSpec ? 'spec' : 'pr'}`}>{isSpec ? 'Spec' : 'PR'}</span> <span className="mono">{g.item.ticket}</span> <span className="reviews-gate-you">You</span>{pr?.updatedAt && <span className="muted">{ago(pr.updatedAt, now)}</span>}</span>
+            <b>{pr?.title ?? g.item.ticket}</b>
+            <span className="muted mono">{g.repo.name}{pr ? ` #${pr.prId}` : ' · PR unavailable'}{pr && <GatePrStats repo={g.repo.name} prId={pr.prId} spec={isSpec} />}</span>
+            {(rules.length || raised.length) > 0 && <span className="reviews-chips">{rules.map((m) => <span key={m.id} className="reviews-rule">rule: {m.reason}</span>)}{raised.map((r, i) => <span key={i} className="reviews-rule agent">agent raised: {r}</span>)}</span>}
+          </span>
         </button>;
       })}
     </div>
@@ -152,13 +200,20 @@ function FactoryGates({ items, reload }: { items: WorkItem[]; reload: () => void
       <div><span className={`reviews-tag ${spec ? 'spec' : 'pr'}`}>{spec ? 'Spec review' : 'PR review'}</span> <span className="mono muted">{repo.name}{link && ` #${link.prId}`}</span></div>
       <h2>{link?.title ?? item.ticket}</h2>
       {spec ? <div className="reviews-summary"><b>Plan</b>{item.plan ? <><span>{item.plan.tasks.length} task{item.plan.tasks.length === 1 ? '' : 's'} across {item.repos.length} repo{item.repos.length === 1 ? '' : 's'}.</span>{item.plan.error && <p className="error">{item.plan.error}</p>}</> : <span>— No plan is available.</span>}<a href={`#/work/${encodeURIComponent(item.ticket)}`}>Open work item</a></div> : <>
-        <div className="reviews-routing"><b>Why this came to you</b><span>— Routing reasons are unavailable.</span></div>
-        <div className="reviews-summary"><b>Inspector findings</b><span>— Findings are unavailable.</span><span>Review attempt: {repo.attempt}</span></div>
+        {hasRouting ? <div className="reviews-routing">
+          <b>Why this came to you</b>
+          {matches.map((m) => <span key={m.id}>Rule {m.id} matched — {m.reason}</span>)}
+          {inspectorReasons.map((r, i) => <span key={i}>Inspector — {r}</span>)}
+          {plainReasons.map((r, i) => <span key={i}>{r}</span>)}
+          {findings ? <span>Inspector findings: {findings}</span> : null}
+        </div> : <p className="muted">No routing reasons yet.</p>}
+        <div className="reviews-summary"><b>Agent review</b><span>Review attempt: {repo.attempt}</span>{findings ? null : <span>— Findings are unavailable.</span>}</div>
       </>}
-      <label className="field">Comment for the agent (required for changes)<textarea className="input" rows={3} value={comment} disabled={busy} onChange={(e) => setComment(e.target.value)} placeholder="Describe what needs to change" /></label>
-      <p className="muted">Request changes is unavailable: the factory has no action for sending a gate back for revision.</p>
+      <label className="field">Comment for the agent (required for changes)<textarea className="input" rows={3} value={comment} disabled={busy !== null} onChange={(e) => setComment(e.target.value)} placeholder="Describe what needs to change" /></label>
+      <p className="muted">{spec ? 'Request changes sends the comment back to the Foreman: it revises the spec on the same PR and the spec comes back to you.' : 'Request changes sends the comment back to the Builder: it revises the PR on the same branch and the Inspector reviews again. Nothing is merged automatically.'}</p>
       {error && <p className="error" role="alert">{error}</p>}
-      <div className="reviews-actions">{link && <a className="btn" href={`#/prs/${link.repo}/${link.prId}`}>{spec ? 'Open full PR' : 'Open diff'}</a>}<button type="button" className="btn" disabled title="The gate revision action is unavailable">Request changes</button><button type="button" className="btn primary" disabled={busy} onClick={approve}>{busy ? 'Approving…' : spec ? 'Approve spec · start build' : 'Approve · ready to merge'}</button></div>
+      {status && <p className="muted" role="status">{status}</p>}
+      <div className="reviews-actions">{link && <a className="btn" href={`#/prs/${link.repo}/${link.prId}`}>{spec ? 'Open full PR' : 'Open diff'}</a>}<button type="button" className="btn" disabled={busy !== null || !comment.trim()} title={comment.trim() ? undefined : 'Write what needs to change first.'} onClick={requestChanges}>{busy === 'changes' ? 'Sending…' : 'Request changes'}</button><button type="button" className="btn primary" disabled={busy !== null} onClick={approve}>{busy === 'approve' ? 'Approving…' : spec ? 'Approve spec · start build' : 'Approve · ready to merge'}</button></div>
     </section>
   </div>;
 }
