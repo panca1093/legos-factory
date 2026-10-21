@@ -1,3 +1,4 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
@@ -33,9 +34,18 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
   const providers = () => [...(opts.workbenchUrl ? [{ id: 'workbench', label: 'workbench' }] : []), ...(oidc ? [{ id: 'oidc', label: oidc.label }] : [])];
   // workbench sign-in: OAuth state -> the attempt the app is polling; every provider: finished attempts -> cookie
   const attempts = new Map<string, { attempt: string; at: number }>();
-  const claims = new Map<string, { cookie: string; at: number }>();
+  const claims = new Map<string, { secret: string; cookie?: string; at: number }>();
   const prune = (m: Map<string, { at: number }>) => {
     for (const [k, v] of m) if (Date.now() - v.at > ATTEMPT_TTL_MS) m.delete(k);
+  };
+  // The secret goes only to the app that began the sign-in; /auth/claim wants it, so knowing an attempt id is not enough.
+  const openAttempt = (attempt: string): string | undefined => {
+    if (!attempt) return undefined;
+    prune(claims);
+    if (claims.has(attempt)) throw new HttpError(409, 'this sign-in attempt was already started');
+    const secret = randomBytes(24).toString('base64url');
+    claims.set(attempt, { secret, at: Date.now() });
+    return secret;
   };
   const startWorkbenchLogin = async (workbenchUrl: string, attempt: string) => {
     const lc = connsFor(LOGIN_WORKSPACE);
@@ -55,10 +65,8 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
   const welcome = (c: Context, user: User, attempt: string | undefined) => {
     const cookie = users!.issue(user.id);
     signedIn(c, cookie);
-    if (attempt) {
-      prune(claims);
-      claims.set(attempt, { cookie, at: Date.now() });
-    }
+    const hit = attempt ? claims.get(attempt) : undefined;
+    if (hit) Object.assign(hit, { cookie, at: Date.now() });
     return c.html(page(`Signed in as ${esc(user.name)}`, 'You can close this window and go back to legos-factory.', true, '/', 'Open legos-factory'));
   };
   const refused = (c: Context, err: unknown) => c.html(page('Sign-in failed', esc(errMsg(err)), false, '/', 'Back to sign-in'), 400);
@@ -112,8 +120,14 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
     const id = c.req.param('id');
     if (!providers().some((p) => p.id === id)) throw new HttpError(404, `${id} sign-in is not configured`);
     const { attempt } = parse(attemptSchema, await readBody(c));
-    const url = id === 'oidc' ? oidc!.begin(`${opts.publicUrl ?? selfUrl}/auth/oidc/callback`, attempt) : startWorkbenchLogin(opts.workbenchUrl!, attempt);
-    return c.json({ url: await domain(url) });
+    const secret = openAttempt(attempt);
+    try {
+      const url = await domain(id === 'oidc' ? oidc!.begin(`${opts.publicUrl ?? selfUrl}/auth/oidc/callback`, attempt) : startWorkbenchLogin(opts.workbenchUrl!, attempt));
+      return c.json({ url, secret });
+    } catch (err) {
+      claims.delete(attempt);
+      throw err;
+    }
   });
 
   // May land in another browser than the app, so the one-time state is the proof.
@@ -133,8 +147,10 @@ export function authRoutes({ users, workspaces, opts, connsFor, pending, oidc, h
 
   routes.get('/auth/claim', (c) => {
     const attempt = c.req.query('attempt') ?? '';
+    const secret = Buffer.from(c.req.query('secret') ?? '');
     const hit = claims.get(attempt);
-    if (!hit || Date.now() - hit.at > ATTEMPT_TTL_MS) return c.json({ ok: false }, 404);
+    const want = Buffer.from(hit?.secret ?? '');
+    if (!hit?.cookie || Date.now() - hit.at > ATTEMPT_TTL_MS || want.length !== secret.length || !timingSafeEqual(want, secret)) return c.json({ ok: false }, 404);
     claims.delete(attempt);
     signedIn(c, hit.cookie);
     return c.json({ ok: true });

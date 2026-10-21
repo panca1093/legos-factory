@@ -141,9 +141,10 @@ describe('sign-in', () => {
     const attempt = 'attempt-0123456789abcdef';
     const start = await post('/auth/providers/workbench', { attempt });
     expect(start.status).toBe(200);
-    const authorize = new URL((await start.json()).url);
+    const { url, secret } = await start.json();
+    const authorize = new URL(url);
     expect(authorize.origin + authorize.pathname).toBe(`${WB}/authorize`);
-    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404); // not finished yet
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=${secret}`)).status).toBe(404); // not finished yet
 
     srv.setChallenge(authorize.searchParams.get('code_challenge')!);
     const cb = await req(`/auth/callback?code=abc&state=${authorize.searchParams.get('state')}`);
@@ -151,10 +152,12 @@ describe('sign-in', () => {
     expect(await cb.text()).toContain('Signed in as who@acme.test');
     // the browser that finished the redirect is signed in; so is the app polling with its attempt, once
     const viaCallback = cookieOf(cb);
-    const claim = await req(`/auth/claim?attempt=${attempt}`);
+    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404);
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=wrong`)).status).toBe(404);
+    const claim = await req(`/auth/claim?attempt=${attempt}&secret=${secret}`);
     expect(claim.status).toBe(200);
     const viaClaim = cookieOf(claim);
-    expect((await req(`/auth/claim?attempt=${attempt}`)).status).toBe(404);
+    expect((await req(`/auth/claim?attempt=${attempt}&secret=${secret}`)).status).toBe(404);
 
     for (const cookie of [viaCallback, viaClaim]) {
       expect(await (await req('/auth/me', {}, cookie)).json()).toMatchObject({ authenticated: true, user: { kind: 'workbench', email: 'who@acme.test' } });

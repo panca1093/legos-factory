@@ -63,9 +63,12 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
   const provider = async (id: string, label: string) => {
     setErr(null);
     const attempt = crypto.randomUUID();
+    let secret = '';
     const tab = window.open('', '_blank');
     try {
-      const { url } = await api.providerSignIn(id, attempt);
+      const started = await api.providerSignIn(id, attempt);
+      secret = started.secret ?? '';
+      const { url } = started;
       if (tab) tab.location.href = url;
       else window.open(url, '_blank');
     } catch (e: any) {
@@ -76,7 +79,7 @@ export function SignIn({ me, error, onDone }: { me: Me | null; error?: string; o
     const until = Date.now() + CLAIM_FOR_MS;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, CLAIM_EVERY_MS));
-      const ok = await api.claim(attempt).then(
+      const ok = await api.claim(attempt, secret).then(
         (r) => r.ok,
         () => false,
       );

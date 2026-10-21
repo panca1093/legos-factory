@@ -155,8 +155,13 @@ describe('OpenID Connect sign-in routes', () => {
     const app = createApp(manager, options, deps);
     const call = (path: string, init: RequestInit = {}, host = 'factory.example.com') => app.request(`${PUBLIC}${path}`, { ...init, headers: { host, ...(init.headers as object) } });
     const post = (path: string, body: unknown = {}, host?: string) => call(path, { method: 'POST', body: JSON.stringify(body), headers: { 'x-legos': '1', 'content-type': 'application/json' } }, host);
-    const start = async (attempt = 'attempt-0123456789abcdef') => p.authorize((await (await post('/auth/providers/oidc', { attempt })).json()).url);
-    return { p, call, post, start, deps };
+    const secrets = new Map<string, string>();
+    const start = async (attempt = 'attempt-0123456789abcdef') => {
+      const body = await (await post('/auth/providers/oidc', { attempt })).json();
+      secrets.set(attempt, body.secret);
+      return p.authorize(body.url);
+    };
+    return { p, call, post, start, deps, secrets };
   }
   const cookieOf = (r: Response) => r.headers.get('set-cookie')!.split(';')[0];
 
@@ -167,8 +172,9 @@ describe('OpenID Connect sign-in routes', () => {
   });
 
   it('signs a person in from the callback, and hands the cookie to the app that was waiting', async () => {
-    const { p, call, start } = setup();
+    const { p, call, start, secrets } = setup();
     const { state } = await start();
+    const secret = secrets.get('attempt-0123456789abcdef');
     expect(p.state.redirect).toBe(`${PUBLIC}/auth/oidc/callback`);
     const cb = await call(`/auth/oidc/callback?code=good-code&state=${state}`);
     expect(cb.status).toBe(200);
@@ -176,12 +182,23 @@ describe('OpenID Connect sign-in routes', () => {
     const me = await (await call('/auth/me', { headers: { cookie: cookieOf(cb) } })).json();
     expect(me).toMatchObject({ authenticated: true, user: { kind: 'oidc', email: 'ada@acme.test', name: 'Ada' } });
 
-    const claim = await call('/auth/claim?attempt=attempt-0123456789abcdef');
+    const claim = await call(`/auth/claim?attempt=attempt-0123456789abcdef&secret=${secret}`);
     expect(claim.status).toBe(200);
-    expect((await call('/auth/claim?attempt=attempt-0123456789abcdef')).status).toBe(404);
+    expect((await call(`/auth/claim?attempt=attempt-0123456789abcdef&secret=${secret}`)).status).toBe(404);
 
     const ws = await (await call('/api/workspaces', { headers: { cookie: cookieOf(cb) } })).json();
     expect(ws.workspaces).toEqual([expect.objectContaining({ kind: 'personal', role: 'owner' })]);
+  });
+
+  it('hands the cookie only to whoever holds the secret of the attempt, once', async () => {
+    const { call, start, post, secrets } = setup();
+    const attempt = 'attempt-0123456789abcdef';
+    const { state } = await start(attempt);
+    await call(`/auth/oidc/callback?code=good-code&state=${state}`);
+    expect((await call(`/auth/claim?attempt=${attempt}`)).status).toBe(404);
+    expect((await call(`/auth/claim?attempt=${attempt}&secret=${secrets.get(attempt)}x`)).status).toBe(404);
+    expect((await post('/auth/providers/oidc', { attempt })).status).toBe(409);
+    expect((await call(`/auth/claim?attempt=${attempt}&secret=${secrets.get(attempt)}`)).status).toBe(200);
   });
 
   it('is the same user next time', async () => {
