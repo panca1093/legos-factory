@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -17,11 +17,11 @@ const DEFAULTS: Settings = { share: { default: 'private', rules: [] }, jiraFlow:
 export const automationSchema = z.object({
   allowlist: z.array(z.string().trim().min(1, 'allowlist entries must not be empty')),
   routing: z.array(z.object({ id: z.string(), kind: z.enum(['paths', 'lines', 'jira', 'repo']), value: z.string(), on: z.boolean() })),
-  models: z.object({ foreman: z.string(), builder: z.string(), inspector: z.string(), cataloger: z.string() }),
+  models: z.object({ foreman: z.string(), builder: z.string(), inspector: z.string(), cataloger: z.string() }).refine((models) => models.inspector !== models.builder, { message: 'inspector model must differ from builder model', path: ['inspector'] }),
   parallelBuilders: z.number().int().min(0).max(4),
   reviewAttempts: z.number().int().min(1).max(5),
   brainstorm: z.enum(['optional', 'always']),
-}).refine((a) => a.models.inspector !== a.models.builder, { message: 'inspector model must differ from builder model', path: ['models', 'inspector'] });
+});
 const AUTOMATION: AutomationSettings = {
   allowlist: ['npm test', 'npm run build', 'npm run lint', 'go test', 'go vet'],
   routing: [],
@@ -30,19 +30,29 @@ const AUTOMATION: AutomationSettings = {
   reviewAttempts: 3,
   brainstorm: 'optional',
 };
+function readAutomation(raw: unknown): { automation: AutomationSettings; automationErrors: string[] } {
+  const automationErrors: string[] = [];
+  const entries = (Object.keys(AUTOMATION) as (keyof AutomationSettings)[]).map((key) => {
+    const value = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined;
+    const parsed = automationSchema.shape[key].safeParse(value);
+    if (parsed.success) return [key, parsed.data];
+    automationErrors.push(key);
+    return [key, structuredClone(AUTOMATION[key])];
+  });
+  return { automation: Object.fromEntries(entries) as AutomationSettings, automationErrors };
+}
 const LEVELS: ShareLevel[] = ['private', 'status', 'full'];
 
 const expand = (p: string) => resolve(p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
 
 // A missing or broken file falls back to private-by-default; never share by accident.
-export async function loadSettings(): Promise<Settings & { automation: AutomationSettings; error: string | null }> {
+export async function loadSettings(): Promise<Settings & { automation: AutomationSettings; automationErrors: string[]; error: string | null }> {
   let raw: any;
   try {
     raw = JSON.parse(await readFile(settingsPath(), 'utf8'));
   } catch (err: any) {
-    return { ...DEFAULTS, automation: structuredClone(AUTOMATION), error: err.code === 'ENOENT' ? null : `could not read ${settingsPath()}: ${err.message}` };
+    return { ...DEFAULTS, ...readAutomation(undefined), error: err.code === 'ENOENT' ? null : `could not read ${settingsPath()}: ${err.message}` };
   }
-  const automation = automationSchema.safeParse(raw?.automation);
   const rules = Array.isArray(raw?.share?.rules) ? raw.share.rules : [];
   return {
     share: {
@@ -52,7 +62,7 @@ export async function loadSettings(): Promise<Settings & { automation: Automatio
         .map((r: any) => ({ path: expand(r.path), level: r.level })),
     },
     jiraFlow: Object.fromEntries(Object.entries(FLOW).map(([k, d]) => [k, typeof raw?.jiraFlow?.[k] === 'string' && raw.jiraFlow[k].trim() ? raw.jiraFlow[k].trim() : d])) as JiraFlow,
-    automation: automation.success ? automation.data : structuredClone(AUTOMATION),
+    ...readAutomation(raw?.automation),
     error: null,
   };
 }
@@ -67,7 +77,8 @@ export async function saveAutomation(automation: AutomationSettings): Promise<vo
     raw = {};
   }
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify({ ...raw, automation }, null, 2) + '\n');
+  await writeFile(`${path}.tmp`, JSON.stringify({ ...raw, automation }, null, 2) + '\n');
+  await rename(`${path}.tmp`, path);
 }
 
 // Longest matching folder wins, so a repo can override its parent folder.
