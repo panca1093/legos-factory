@@ -16,8 +16,8 @@ Semua work package sudah selesai, diverifikasi, dan di-merge ke branch integrasi
 |---|---|---|---|---|---|
 | 1 contract | `mc/pr1-contract` | main | WP-01…WP-04 | — | **merged** (PR #12) |
 | 2 auto mode | `mc/pr2-automode` | main | WP-10…WP-13 | 187 | **PR #13 OPEN, menunggu human** |
-| 3 pipeline | `mc/pr3-pipeline` | `mc/pr2-automode` | WP-30…WP-39 + 3 follow-up | 313 | siap push/PR |
-| 4 front end | `mc/pr4-frontend` | main | WP-20…WP-27 + 2 follow-up | 170 | siap push/PR |
+| 3 pipeline | `mc/pr3-pipeline` | `mc/pr2-automode` | WP-30…WP-39 + 3 follow-up | 313 | **PR #14 OPEN** (stacked di #13) |
+| 4 front end | `mc/pr4-frontend` | main | WP-20…WP-27 + 2 follow-up | 170 | **PR #15 OPEN** |
 
 Urutan merge human tetap 1 → 2 → 3 → 4. **Jangan merge PR 3 atau PR 4 sebelum PR 2 di-merge.**
 
@@ -70,8 +70,8 @@ Setelah PR 2 di-merge:
 | Path | Branch | Isi |
 |---|---|---|
 | `/Users/Panca/Documents/MyBook/Project/legos-factory` | `mc/handoff-20261021` | checkout utama (dokumentasi) |
-| `/Users/Panca/Documents/MyBook/Project/lf-pr3-integration` | `mc/pr3-pipeline` | integrasi pipeline |
-| `/Users/Panca/Documents/MyBook/Project/lf-pr4-integration` | `mc/pr4-frontend` | integrasi front end |
-| `/Users/Panca/Documents/MyBook/Project/lf-wp-*` | `mc/wp-*` | worktree worker, checkpoint per paket |
+| `/Users/Panca/Documents/MyBook/Project/lf-pr3-integration` | `mc/pr3-pipeline` | integrasi pipeline (PR #14) |
+| `/Users/Panca/Documents/MyBook/Project/lf-pr4-integration` | `mc/pr4-frontend` | integrasi front end (PR #15) |
 
+Worktree worker sudah dibersihkan setelah diverifikasi dan di-merge (semua bersih dan commit-nya sudah jadi ancestor integration branch). **Branch `mc/wp-*` tetap dipertahankan** — 31 checkpoint paket, jadi pekerjaan per paket bisa ditelusuri tanpa mengulang.
 Empat worktree `.claude/worktrees/*` milik pekerjaan lain — jangan dihapus atau diubah.
