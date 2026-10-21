@@ -179,6 +179,10 @@ export function WorkItem({ ticket, live }: { ticket: string; live: Live }) {
           <div className="wi-actions">
             {jira?.url && <a className="btn" href={jira.url} target="_blank" rel="noreferrer">Open in Jira ↗</a>}
             <button className="btn" disabled={!item || !firstRepo || !!liveChat || starting} title={!item ? 'The work item is not loaded yet.' : !firstRepo ? 'Add a repo to this ticket before starting a discussion.' : liveChat ? 'A discussion is already open for this ticket.' : 'Start a tracked discussion for this ticket.'} onClick={startBrainstorm}>{starting ? 'Starting…' : 'Brainstorm'}</button>
+            {item && item.repos.some((r) => STAGES.indexOf(r.stage) > STAGES.indexOf('backlog')) && <>
+              <button className="btn" disabled={busy !== null} title="Ends the run, removes the session, and returns this ticket to the Backlog column." onClick={() => act('undo', async () => { await api.undoWorkItem(ticket); items.reload(); })}>Back to To Do</button>
+              <span className="wi-meta">Ends the run, removes the session, and puts the ticket back in the Backlog column.</span>
+            </>}
           </div>
         </header>
         {chatError && <p className="error" role="alert">{chatError}</p>}
