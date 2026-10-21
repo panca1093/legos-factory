@@ -238,11 +238,11 @@ export class Runs extends EventEmitter {
         this.decisions.delete(m.id);
         return void this.emit('message', m);
       case 'finished': {
-        this.dispatcher.finish(m.runId);
         this.commands.delete(m.runId);
         this.revoke(m.runId);
         const run = this.runs.get(m.runId);
         if (run) this.emit('finished', run, m.branch);
+        else this.release(m.runId);
         return;
       }
       case 'launch_failed': {
@@ -252,6 +252,11 @@ export class Runs extends EventEmitter {
         return;
       }
     }
+  }
+
+  // The job stays leased until whoever listens to 'finished' is done with the run, so a crash in between replays it at boot.
+  release(runId: string) {
+    this.dispatcher.finish(runId);
   }
 
   private fail(run: Run, error: string) {
@@ -301,12 +306,14 @@ export class Runs extends EventEmitter {
       const run = newRun(job.request);
       const item = this.o.lookup(job.runId);
       Object.assign(run, { startedAt: job.queuedAt });
-      if (item) Object.assign(run, { status: item.status, sessionId: item.sessionId, model: item.model, turns: item.turns, estimatedCostUsd: item.estimatedCostUsd, lastEventAt: item.lastEventAt });
+      if (item) Object.assign(run, { status: item.status, sessionId: item.sessionId, model: item.model, turns: item.turns, estimatedCostUsd: item.estimatedCostUsd, lastEventAt: item.lastEventAt, endedAt: item.endedAt, endedBy: item.endedBy });
       else run.status = job.state === 'queued' ? 'queued' : 'running';
       this.runs.set(run.id, run);
     }
     this.reap(EMBEDDED);
     for (const run of this.runs.values()) this.publish(run);
+    // runs that ended but whose finish was not handled before the restart; the runner's transcript is gone, so no PR branch
+    for (const run of this.runs.values()) if (run.endedAt) this.emit('finished', run, null);
   }
 }
 

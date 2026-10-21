@@ -179,7 +179,8 @@ export function buildDeps(manager: RunManager, opts: AppOptions): Deps {
       .then(() => {
         if (run.repo && run.ticket && run.stage) void syncWorkItem(deps, run.workspaceId, run.ticket);
       })
-      .catch((err) => console.warn('PR capture failed:', err.message));
+      .catch((err) => console.warn('PR capture failed:', err.message))
+      .finally(() => runs.release(run.id));
   });
 
   // listing a big workspace takes several calls; repos change rarely

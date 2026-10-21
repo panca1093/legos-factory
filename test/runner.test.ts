@@ -184,6 +184,21 @@ describe('restart', () => {
     expect(second.deps.runs.get(run.id)).toMatchObject({ status: 'failed', error: expect.stringMatching(/1 attempts/) });
   });
 
+  it('replays the end of a run whose stage handling was cut off by a crash, so its stage is not stuck in run', async () => {
+    const path = dbPath();
+    const first = boot(path, agent({ idle: (p) => p === 'go' }));
+    first.deps.stages.put('local', 'PROJ-1', 'acme/api', { stage: 'design', phase: 'run', loops: 0, prId: null, note: null, owner: 'local' });
+    first.deps.runs.removeAllListeners('finished');
+    const run = first.deps.startRun({ workspaceId: 'local', owner: 'local', repo: 'acme/api', cwd: '/tmp', kind: 'task', prompt: 'go', ticket: 'PROJ-1', stage: 'design' });
+    await until(() => first.deps.activity.get(run.id)?.endedAt != null, 'the run ended');
+    expect(first.deps.stages.get('local', 'PROJ-1', 'acme/api')!.phase).toBe('run');
+
+    const second = boot(path, agent());
+    await until(() => second.deps.stages.get('local', 'PROJ-1', 'acme/api')!.phase === 'escalated', 'the stage heard about the end');
+    await until(() => second.deps.runs.openJobs().length === 0, 'the job is done');
+    expect(second.deps.runs.get(run.id)).toMatchObject({ status: 'completed', endedAt: expect.any(String) });
+  });
+
   it('marks runs from before the dispatcher existed as failed', async () => {
     const path = dbPath();
     const db = openDb(path);
