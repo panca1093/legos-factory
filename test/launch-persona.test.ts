@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildDeps } from '../server/app.ts';
 import { RunManager } from '../server/claude-runs.ts';
 import { launchRun, launchSchema } from '../server/launch-run.ts';
@@ -37,6 +37,22 @@ function setup() {
 }
 
 describe('launch personas', () => {
+  it('starts the inspector read-only while leaving other personas writable', async () => {
+    const { deps, launch } = setup();
+    const start = vi.spyOn(deps, 'startRun');
+    try {
+      await launch({ persona: 'inspector' });
+      expect(start.mock.calls[0][0].readOnly).toBe(true);
+      for (const persona of ['builder', 'foreman', 'cataloger', undefined]) {
+        await launch({ persona });
+        expect(start.mock.calls.at(-1)![0].readOnly).toBeFalsy();
+      }
+    } finally {
+      start.mockRestore();
+      deps.db.close();
+    }
+  });
+
   it('adds the builder persona to a build run', async () => {
     const { deps, messages, launch } = setup();
     try {

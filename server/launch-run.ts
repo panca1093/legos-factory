@@ -87,7 +87,7 @@ export async function launchRun(deps: Deps, uid: string, req: LaunchRequest): Pr
   let runPrompt = stage ? `${prompt}\n\n${STAGE_GUIDE[stage](req.ticket)}` : prompt;
   if (req.persona) runPrompt += `\n\n${await readFile(new URL(`../workflows/factory/personas/${req.persona}.md`, import.meta.url), 'utf8')}`;
   const runModel = model ?? (req.persona ? settings.automation.models[req.persona] : undefined);
-  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: runPrompt, permissionMode, resume, model: runModel, ticket, stage, share, task: req.task, persona: req.persona }, connected));
+  const run = started(deps.startRun({ owner: uid, repo, kind, cwd, prompt: runPrompt, permissionMode, resume, model: runModel, ticket, stage, share, task: req.task, persona: req.persona, readOnly: req.persona === 'inspector' }, connected));
   if (stage && deps.workItems.get(uid, req.ticket)) void syncWorkItem(deps, uid, req.ticket);
   return run;
 }
