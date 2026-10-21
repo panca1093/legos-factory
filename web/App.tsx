@@ -3,7 +3,7 @@ import type { RunKind } from '../shared/types.ts';
 import { api, onSignedOut, useFetch, useLive, type Me } from './api.ts';
 import { LaunchDialog, ReviewModal, ThemeSwitch, runLabel, runTone } from './components.tsx';
 import { Icon } from './icons.tsx';
-import { ALIVE, type Live, type ResumeReq, type LaunchReq, Chrome, Frame, openSearch } from './chrome.tsx';
+import { ALIVE, type Live, type ResumeReq, type LaunchReq, Chrome, openSearch } from './chrome.tsx';
 import { MyActivity, TeamActivity } from './pages/Activity.tsx';
 import { Overview } from './pages/Overview.tsx';
 import { PrPage } from './pages/PrPage.tsx';
@@ -12,6 +12,8 @@ import { RunView } from './pages/RunView.tsx';
 import { SessionView } from './pages/Sessions.tsx';
 import { SettingsPage } from './pages/Settings.tsx';
 import { SignIn } from './pages/SignIn.tsx';
+import { Work } from './pages/Work.tsx';
+import { WorkItem } from './pages/WorkItem.tsx';
 
 function useRoute(): string[] {
   const [hash, setHash] = useState(location.hash);
@@ -84,7 +86,8 @@ function App({ me }: { me: Me }) {
       <div className={`app ${withInspector && inspector ? 'with-inspector show-inspector' : ''}`}>
         <Rail live={live} view={view} id={id} open={railOpen} onNew={newRun} me={me} />
         {!view && <Overview live={live} sessions={sessions.data} error={sessions.error} onNew={newRun} onContinue={continueSession} />}
-        {view === 'work' && <Frame crumb={<>Workspace / <span>Work</span></>}><div className="scroll"><div className="page"><h1>{id ? decodeURIComponent(id) : 'Work'}</h1></div></div></Frame>}
+        {view === 'work' && !id && <Work onStart={(row) => setLaunch({ kind: 'task', defaults: { ticket: row.key } })} onNew={() => setLaunch({ kind: 'task' })} />}
+        {view === 'work' && id && <WorkItem ticket={decodeURIComponent(id)} live={live} />}
         {view === 'reviews' && <Reviews />}
         {view === 'prs' && route.length === 4 && <PrPage repo={`${route[1]}/${route[2]}`} id={Number(route[3])} />}
         {view === 'settings' && <SettingsPage />}

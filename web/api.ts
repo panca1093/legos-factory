@@ -20,7 +20,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-legos': '1', ...init?.headers } });
   if (res.status === 401 && path.startsWith('/api/')) signedOutListeners.forEach((f) => f());
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true });
+  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status, needWorkspace: body.needWorkspace === true, url: body.url });
   return body as T;
 }
 

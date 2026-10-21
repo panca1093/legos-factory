@@ -51,7 +51,7 @@ type Card = {
   key: string;
   src: 'Jira' | 'Local';
   title: string | null;
-  repos: { name: string; state: string; tone: string }[];
+  repos: { name: string; state: string; tone: string; stage: PipelineStage }[];
   href: string;
   next?: string;
   start?: JiraRow;
@@ -74,7 +74,7 @@ function repoRows(item: WorkItem): Card['repos'] {
     const spec = repo.stage === 'spec_review' ? of('spec') : undefined;
     const pr = impl ?? spec;
     const state = REPO_STATE[repo.stage];
-    return { name: repo.name, state: pr ? `#${pr.prId}` : state.label, tone: impl?.state === 'DECLINED' ? 'bad' : state.tone };
+    return { name: repo.name, state: pr ? `#${pr.prId}` : state.label, tone: impl?.state === 'DECLINED' ? 'bad' : state.tone, stage: repo.stage };
   });
 }
 
@@ -101,7 +101,24 @@ function useSummaries(keys: string[]) {
   return cache.current;
 }
 
-function WorkCard({ card, readOnly, onStart }: { card: Card; readOnly: boolean; onStart: (row: JiraRow) => void }) {
+type MergeState = { busy: boolean; error: string | null; url: string | null };
+
+function WorkCard({ card, readOnly, onStart, onMerged }: { card: Card; readOnly: boolean; onStart: (row: JiraRow) => void; onMerged: () => void }) {
+  const [merges, setMerges] = useState<Record<string, MergeState>>({});
+  const ready = card.repos.filter((repo) => repo.stage === 'ready');
+  // The factory never merges on its own: a person clicks, and a forge without a merge tool sends them there.
+  const merge = async (repo: string) => {
+    setMerges((all) => ({ ...all, [repo]: { busy: true, error: null, url: null } }));
+    try {
+      await api.mergePr(card.key, repo);
+    } catch (e) {
+      const err = e as { message?: string; url?: string };
+      setMerges((all) => ({ ...all, [repo]: { busy: false, error: err?.message ?? String(e), url: err?.url ?? null } }));
+      return;
+    }
+    setMerges((all) => ({ ...all, [repo]: { busy: false, error: null, url: null } }));
+    onMerged();
+  };
   return (
     <div className="work-card">
       <div className="work-card-head">
@@ -132,6 +149,32 @@ function WorkCard({ card, readOnly, onStart }: { card: Card; readOnly: boolean; 
           )}
         </div>
       )}
+      {!readOnly && ready.length > 0 && (
+        <div className="work-foot">
+          {ready.map((repo) => (
+            <button className="btn sm" key={repo.name} title={`Merge ${repo.name}`} disabled={merges[repo.name]?.busy} onClick={() => merge(repo.name)}>
+              {merges[repo.name]?.busy ? 'Merging…' : 'Merge'}
+            </button>
+          ))}
+        </div>
+      )}
+      {!readOnly &&
+        ready.map((repo) => {
+          const state = merges[repo.name];
+          if (!state?.error) return null;
+          return (
+            <div key={repo.name}>
+              <p className="error" role="alert">
+                {state.error}
+              </p>
+              {state.url && (
+                <a className="btn sm" href={state.url} target="_blank" rel="noreferrer">
+                  Open in the forge
+                </a>
+              )}
+            </div>
+          );
+        })}
       {!readOnly && card.next && (
         <a className="work-next" href={card.href}>
           {card.next} →
@@ -141,7 +184,7 @@ function WorkCard({ card, readOnly, onStart }: { card: Card; readOnly: boolean; 
   );
 }
 
-export function Work({ onStart }: { onStart: (ticket: JiraRow) => void }) {
+export function Work({ onStart, onNew }: { onStart: (ticket: JiraRow) => void; onNew?: () => void }) {
   const { me } = useContext(Chrome);
   const isOwner = !!me.isOwner;
   const [scope, setScope] = useState<'mine' | 'team'>('mine');
@@ -239,9 +282,9 @@ export function Work({ onStart }: { onStart: (ticket: JiraRow) => void }) {
               <h1>Work</h1>
               <p className="lead">Every ticket, from backlog to done. Columns marked You are gates; the rest runs on its own.</p>
             </div>
-            <a className="btn primary" href="#/work">
+            <button className="btn primary" onClick={() => onNew?.()} disabled={!onNew} title={onNew ? 'Start a new task' : 'The New task dialog is not available.'}>
               + New task
-            </a>
+            </button>
           </div>
 
           <div className="work-toolbar">
@@ -283,7 +326,7 @@ export function Work({ onStart }: { onStart: (ticket: JiraRow) => void }) {
                   <div className="empty">No Jira projects mapped to your repos yet. Map a project to a repo in Settings.</div>
                 )}
                 {col.cards.map((card) => (
-                  <WorkCard key={card.key} card={card} readOnly={readOnly} onStart={onStart} />
+                  <WorkCard key={card.key} card={card} readOnly={readOnly} onStart={onStart} onMerged={work.reload} />
                 ))}
               </section>
             ))}
