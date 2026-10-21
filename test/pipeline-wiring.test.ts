@@ -165,6 +165,24 @@ it('a declined PR escalates without retrying the current task or changing its st
   expect(deps.workItems.get('local', 'PROJ-123')?.note?.text).toContain('impl PR declined');
 });
 
+it('an older declined pull request does not escalate', async () => {
+  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'spec', prId: 7, branch: 'main', title: 'Old spec', state: 'DECLINED', runId: null }, true);
+  deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'spec', prId: 8, branch: 'main', title: 'New spec', state: 'OPEN', runId: null }, true);
+  await syncPipeline(deps, 'local', 'PROJ-123');
+  expect(deps.workItems.get('local', 'PROJ-123')?.note?.text ?? '').not.toContain('Escalated');
+  expect(deps.workItems.repos('local', 'PROJ-123').map((r) => r.stage)).toEqual(['spec_review', 'spec_review']);
+});
+
+it('a merge run that opens no pull request escalates', async () => {
+  await approveSpec(deps, 'local', 'PROJ-123');
+  await finish(queued()[0]);
+  await finish(queued()[1], 'Verdict: APPROVE');
+  const merge = queued()[3];
+  expect(merge).toMatchObject({ persona: 'builder', task: null, repo: 'acme/api' });
+  await finish(merge);
+  expect(deps.workItems.get('local', 'PROJ-123')?.note?.text).toContain('Escalated: acme/api: the merge run opened no pull request');
+});
+
 it('backfill leaves pipeline runs and explicit stages alone and handles open implementation PRs', async () => {
   await approveSpec(deps, 'local', 'PROJ-123');
   deps.workItems.link('local', 'PROJ-123', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'main', title: 'Build', state: 'MERGED', runId: null }, true);

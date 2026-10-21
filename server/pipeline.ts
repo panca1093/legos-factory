@@ -125,6 +125,23 @@ const stateOf = (deps: Deps, owner: string, ticket: string): State => ({
   plan: deps.workItems.get(owner, ticket)?.plan ?? null,
 });
 
+// Only the newest pull request of a repo and kind counts: a later one supersedes an earlier one.
+function latestLinks(links: TicketLink[]): TicketLink[] {
+  const latest = new Map<string, TicketLink>();
+  for (const link of links) {
+    const key = `${link.repo.toLowerCase()}\n${link.kind}`;
+    const current = latest.get(key);
+    if (!current || link.prId > current.prId || (link.prId === current.prId && link.updatedAt > current.updatedAt)) {
+      latest.set(key, link);
+    }
+  }
+  return [...latest.values()];
+}
+
+// The repo still has an implementation pull request waiting for a review.
+const hasOpenImpl = (deps: Deps, owner: string, ticket: string, repo: string): boolean =>
+  deps.workItems.links(owner, ticket).some((l) => l.kind === 'impl' && l.state === 'OPEN' && l.repo.toLowerCase() === repo.toLowerCase());
+
 // A Foreman run still working on the repo: the spec PR it opened is being revised, not waiting for review.
 function foremanBusy(deps: Deps, owner: string, ticket: string, repo: string): boolean {
   const snapshot = deps.runs.snapshot();
@@ -220,13 +237,17 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
   const state = stateOf(deps, owner, ticket);
   const event = facts.event;
   const { automation } = await loadSettings();
+  const merged: string[] = [];
   const effective: Facts = {
     ...facts,
     parallelBuilders: automation.parallelBuilders,
     ...(event?.type === 'pr' && event.kind === 'spec' ? { foremanRunning: foremanBusy(deps, owner, ticket, event.repo) } : {}),
   };
   for (const action of next(state, effective)) {
-    if (action.type === 'set_stage') deps.workItems.setStage(owner, ticket, action.repo, action.stage, action.attempt);
+    if (action.type === 'set_stage') {
+      deps.workItems.setStage(owner, ticket, action.repo, action.stage, action.attempt);
+      if (action.stage === 'done') merged.push(action.repo);
+    }
     else if (action.type === 'mark_ready') deps.workItems.setStage(owner, ticket, action.repo, 'ready');
     else if (action.type === 'escalate') deps.workItems.setNote(owner, ticket, `Escalated: ${action.repo}: ${action.reason}`);
     else if (action.type === 'set_task') {
@@ -247,10 +268,12 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
     }
   }
   for (const repo of reposToMerge(deps, owner, ticket)) await startMergeRun(deps, owner, ticket, repo);
-  if (event?.type === 'pr' && event.kind === 'impl' && event.state === 'merged'
-    && automation.models.cataloger && automation.models.cataloger !== 'off'
-    && !reposWithRun(deps, owner, ticket, 'cataloger').includes(event.repo.toLowerCase())) {
-    await startCatalogerRun(deps, owner, ticket, event.repo);
+  // the Cataloger files what this merge taught the repo: a repo merged long ago gets no run
+  if (automation.models.cataloger && automation.models.cataloger !== 'off') {
+    for (const repo of merged) {
+      if (reposWithRun(deps, owner, ticket, 'cataloger').includes(repo.toLowerCase())) continue;
+      await startCatalogerRun(deps, owner, ticket, repo);
+    }
   }
 }
 
@@ -320,12 +343,19 @@ export function requestPrChanges(deps: Deps, owner: string, ticket: string, repo
 }
 
 export function pipelineRunEnded(deps: Deps, run: Omit<Run, 'events'>): Promise<void> {
-  if (!run.ticket || !run.repo || !run.task || !run.persona || !run.endedAt) return Promise.resolve();
+  if (!run.ticket || !run.repo || !run.persona || !run.endedAt) return Promise.resolve();
   return serial(deps, run.owner, run.ticket, async () => {
     let seen = ended.get(deps);
     if (!seen) ended.set(deps, seen = new Set());
     if (seen.has(run.id)) return;
     seen.add(run.id);
+    // the merge run opens the repo's one pull request: without one the ticket waits for nothing
+    if (!run.task) {
+      if (run.persona === 'builder' && !hasOpenImpl(deps, run.owner, run.ticket!, run.repo!)) {
+        deps.workItems.setNote(run.owner, run.ticket!, `Escalated: ${run.repo}: the merge run opened no pull request`);
+      }
+      return;
+    }
     const task = deps.workItems.get(run.owner, run.ticket!)?.plan?.tasks.find((t) => t.id === run.task);
     if (task?.state !== 'running') return;
     if (run.persona === 'inspector') {
@@ -337,7 +367,7 @@ export function pipelineRunEnded(deps: Deps, run: Omit<Run, 'events'>): Promise<
         findings: run.result ?? '',
       });
     }
-    const declined = deps.workItems.links(run.owner, run.ticket!).find((l) => l.state === 'DECLINED');
+    const declined = latestLinks(deps.workItems.links(run.owner, run.ticket!)).find((l) => l.state === 'DECLINED');
     if (declined) {
       await apply(deps, run.owner, run.ticket!, { reviewAttempts: 0, event: { type: 'pr', repo: declined.repo, kind: declined.kind, state: 'declined' } });
       return;
@@ -403,7 +433,7 @@ async function decideRouting(deps: Deps, owner: string, ticket: string, link: Ti
 
 async function tick(deps: Deps, owner: string, ticket: string) {
   const { automation } = await loadSettings();
-  const links = deps.workItems.links(owner, ticket);
+  const links = latestLinks(deps.workItems.links(owner, ticket));
   const routed = new Set<string>();
   for (const link of links) {
     const state = link.state === 'MERGED' ? 'merged' : link.state === 'DECLINED' ? 'declined' : link.state === 'OPEN' ? 'opened' : null;

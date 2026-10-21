@@ -192,4 +192,23 @@ describe('cataloger after merge', () => {
     await syncPipeline(deps, 'local', 'PROJ-123');
     expect(queued().some((r) => r.persona === 'cataloger')).toBe(false);
   });
+
+  it('the cataloger does not run for a repo that was already merged', async () => {
+    git(root, 'clone', '-q', '--bare', join(root, 'src'), join(root, 'acme', 'web.git'));
+    deps.myRepos.add('local', { name: 'acme/web', mainBranch: 'main' });
+    deps.workItems.addRepo('local', 'PROJ-123', 'acme/web');
+    deps.workItems.setStage('local', 'PROJ-123', 'acme/web', 'done');
+    deps.workItems.link('local', 'PROJ-123', { repo: 'acme/web', kind: 'impl', prId: 3, branch: 'factory/PROJ-123/web', title: 'Build', state: 'MERGED', runId: null }, true);
+    // the fake workbench must not reopen a merged pull request
+    const wb = (await deps.workbench('local'))!;
+    wb.client.bitbucketPr = async (_token: string, _workspace: string, _slug: string, prId: number) => ({
+      state: deps.workItems.links('local', 'PROJ-123').find((l) => l.prId === prId)?.state ?? 'OPEN', title: 'Build', description: plan, reviewers: [],
+    } as any);
+    deps.workbench = async () => wb;
+    await buildAndMerge();
+    await syncPipeline(deps, 'local', 'PROJ-123');
+    const catalogers = queued().filter((r) => r.persona === 'cataloger');
+    expect(catalogers).toHaveLength(1);
+    expect(catalogers[0]).toMatchObject({ repo: 'acme/api' });
+  });
 });
