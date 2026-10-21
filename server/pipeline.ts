@@ -142,6 +142,9 @@ async function startTaskRun(deps: Deps, owner: string, ticket: string, task: Pla
   deps.workItems.setPlan(owner, ticket, { ...plan, tasks: plan.tasks.map((t) => t.id === task.id ? { ...t, state: 'running' } : t) });
   const impl = deps.workItems.links(owner, ticket).find((l) => l.repo.toLowerCase() === task.repo.toLowerCase() && l.kind === 'impl' && l.state === 'OPEN')?.branch;
   const own = taskBranch(ticket, task.id);
+  // A task that needs another task of the same repo works on top of that task's branch.
+  const base = plan.tasks.filter((t) => task.needs.includes(t.id) && t.repo === task.repo).at(-1);
+  const baseBranch = base ? taskBranch(ticket, base.id) : null;
   // The task branch is not on the remote yet: the Builder creates it, the Inspector reads it.
   const branch = impl ?? (persona === 'builder' ? undefined : own);
   const lines = [
@@ -152,7 +155,7 @@ async function startTaskRun(deps: Deps, owner: string, ticket: string, task: Pla
   if (opts.findings) lines.push(`Previous run findings:\n${opts.findings}`);
   if (persona === 'inspector') lines.push(`The work of this task is on the branch ${impl ?? own}.`);
   else if (impl) lines.push(`The pull request for ${task.repo} is already open on ${impl}: commit and push your work to that branch, and do not open a new pull request.`);
-  else lines.push(`Work on the branch ${own}: create it from the default branch if it does not exist yet, check it out if it does, then commit and push your work there.\nDo not open a pull request: the factory merges the task branches and opens one pull request for the repo.`);
+  else lines.push(`Work on the branch ${own}: create it from ${baseBranch ?? 'the default branch'} if it does not exist yet, check it out if it does, then commit and push your work there.\nDo not open a pull request: the factory merges the task branches and opens one pull request for the repo.`);
   const prompt = lines.join('\n');
   try {
     await launchRun(deps, owner, launchSchema.parse({
@@ -235,9 +238,11 @@ async function apply(deps: Deps, owner: string, ticket: string, facts: Facts, pr
       const plan = deps.workItems.get(owner, ticket)?.plan;
       const task = plan?.tasks.find((t) => t.id === action.task);
       if (!task || !plan) continue;
+      // Only the same task keeps its workspace and its findings; another task gets a checkout of its own.
+      const sameTask = previous?.task === task.id && previous?.repo === task.repo;
       await startTaskRun(deps, owner, ticket, task, action.persona, {
-        findings: previous?.result ?? undefined,
-        cwd: previous?.repo === task.repo ? previous.cwd : undefined,
+        findings: sameTask ? previous?.result ?? undefined : undefined,
+        cwd: sameTask ? previous?.cwd : undefined,
       });
     }
   }

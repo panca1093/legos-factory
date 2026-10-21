@@ -16,8 +16,8 @@ let fakeWb: { token: string; client: any };
 let plan = '';
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' });
 
-const task = (id: string, repo: string, test: string, touches: string) =>
-  [`- id: ${id}`, `  do: Build ${id}`, `  repo: ${repo}`, `  test: ${test}`, '  needs: []', `  touches: [${touches}]`].join('\n');
+const task = (id: string, repo: string, test: string, touches: string, needs: string[] = []) =>
+  [`- id: ${id}`, `  do: Build ${id}`, `  repo: ${repo}`, `  test: ${test}`, `  needs: [${needs.join(', ')}]`, `  touches: [${touches}]`].join('\n');
 
 const setParallel = (parallelBuilders: number) =>
   writeFileSync(join(root, 'settings.json'), JSON.stringify({ automation: { parallelBuilders } }));
@@ -136,4 +136,43 @@ it('merges the task branches into one pull request', async () => {
   // the repo merges once
   await syncPipeline(deps, 'local', 'PROJ-123');
   expect(queued().filter((r) => r.persona === 'builder' && r.task === null)).toHaveLength(1);
+});
+
+it('a second wave with two tasks never shares a cwd', async () => {
+  setParallel(1);
+  plan = [task('T1', 'acme/api', 'retry.test.ts', 'retry.ts'), task('T2', 'acme/api', 'cap.test.ts', 'cap.ts')].join('\n');
+  await approveSpec(deps, 'local', 'PROJ-123');
+  const first = queued()[0];
+  expect(first).toMatchObject({ task: 'T1', persona: 'builder' });
+  await finish(first);
+  await finish(queued()[1], 'Verdict: APPROVE');
+  const second = queued()[2];
+  expect(second).toMatchObject({ task: 'T2', persona: 'builder' });
+  expect(second.cwd).not.toBe(first.cwd);
+  expect(second.cwd).toContain('PROJ-123-T2');
+});
+
+it('a second wave with two tasks never carries another task\'s findings', async () => {
+  setParallel(1);
+  plan = [task('T1', 'acme/api', 'retry.test.ts', 'retry.ts'), task('T2', 'acme/api', 'cap.test.ts', 'cap.ts')].join('\n');
+  await approveSpec(deps, 'local', 'PROJ-123');
+  await finish(queued()[0]);
+  await finish(queued()[1], 'Finding: the retry cap is ignored.\nVerdict: APPROVE');
+  const second = queued()[2];
+  expect(second).toMatchObject({ task: 'T2', persona: 'builder' });
+  expect(second.prompt).not.toContain('the retry cap is ignored');
+  expect(second.prompt).not.toContain('Previous run findings');
+});
+
+it('a task that needs another task in the same repo starts from its branch', async () => {
+  setParallel(1);
+  plan = [task('T1', 'acme/api', 'retry.test.ts', 'retry.ts'), task('T2', 'acme/api', 'cap.test.ts', 'cap.ts', ['T1'])].join('\n');
+  await approveSpec(deps, 'local', 'PROJ-123');
+  expect(queued()[0]).toMatchObject({ task: 'T1', persona: 'builder' });
+  await finish(queued()[0]);
+  await finish(queued()[1], 'Verdict: APPROVE');
+  const second = queued()[2];
+  expect(second).toMatchObject({ task: 'T2', persona: 'builder' });
+  expect(second.prompt).toContain('Work on the branch factory/PROJ-123/T2');
+  expect(second.prompt).toContain('create it from factory/PROJ-123/T1');
 });
