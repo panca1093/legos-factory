@@ -142,6 +142,8 @@ export class RunManager extends EventEmitter {
       fromTask: false,
       ticket: req.ticket ?? null,
       stage: req.stage ?? null,
+      task: null,
+      persona: null,
       share: req.share ?? 'private',
       runtime: 'claude-code',
       sessionId: req.resume ?? null,

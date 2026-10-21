@@ -13,7 +13,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'lf-act-'));
 function run(over: Partial<Run> = {}): Omit<Run, 'events'> {
   const now = new Date().toISOString();
   return {
-    id: 'r1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', stage: null, share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
+    id: 'r1', owner: 'u1', repo: null, kind: 'task', fromTask: false, ticket: 'PROJ-1', stage: null, task: null, persona: null, share: 'status', runtime: 'claude-code', sessionId: 's1', resumedFrom: null,
     cwd: '/work/acme/payments-api', prompt: 'Fix the thing\nwith details', permissionMode: 'default', status: 'running',
     requestedModel: 'default', model: 'claude-opus-5-5', startedAt: now, lastEventAt: now, endedAt: null, endedBy: null, turns: 1,
     error: null, estimatedCostUsd: 0.42, result: null, ...over,

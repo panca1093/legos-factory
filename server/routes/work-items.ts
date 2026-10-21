@@ -20,7 +20,7 @@ export function workItemsRoutes(deps: Deps) {
 
   const view = (owner: string, ticket: string): WorkItem => {
     const item = workItems.get(owner, ticket)!;
-    return { ticket, repos: workItems.repos(owner, ticket), links: workItems.links(owner, ticket), note: item.note, status: item.status };
+    return { ticket, source: 'jira', plan: null, repos: workItems.repos(owner, ticket).map((repo) => ({ ...repo, stage: 'building', attempt: 0 })), links: workItems.links(owner, ticket), note: item.note, status: item.status };
   };
 
   routes.get('/api/work-items', (c) => {
