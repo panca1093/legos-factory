@@ -92,7 +92,8 @@ function setup(opts: { workflowDir?: string } = {}) {
   const starts: StartRequest[] = [];
   const orig = manager.start.bind(manager);
   manager.start = (r) => (starts.push(r), orig(r));
-  const options = { db, workspaces: mkdtempSync(join(tmpdir(), 'lf-ws-')), selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl: forge(), pollWaitMs: 50, workflowDir: opts.workflowDir };
+  const gitUrl = forge();
+  const options = { db, workspaces: mkdtempSync(join(tmpdir(), 'lf-ws-')), selfUrl: 'http://localhost:4317', fetch: srv.fetchFn, gitUrl, pollWaitMs: 50, workflowDir: opts.workflowDir };
   const deps = buildDeps(manager, options);
   const app = createApp(manager, options, deps);
   const req = (p: string, init: RequestInit = {}) => app.request(`http://localhost:4317${p}`, { ...init, headers: { host: 'localhost:4317', ...(init.headers as any) } });
@@ -102,6 +103,7 @@ function setup(opts: { workflowDir?: string } = {}) {
   return {
     jira,
     prs,
+    gitUrl,
     deps,
     starts,
     agents,
@@ -232,6 +234,24 @@ describe('the factory workflow', () => {
     expect(await s.stage()).toMatchObject({ stage: 'inspect', phase: 'escalated', loops: MAX_REVIEW_LOOPS, note: expect.stringMatching(/3 rounds/) });
     await new Promise((r) => setTimeout(r, 50));
     expect(s.starts).toHaveLength(last + 1);
+  });
+
+  it('resumes an escalated build on its pull request branch with the findings, and approves nothing', async () => {
+    const s = setup();
+    await s.ready();
+    const seed = mkdtempSync(join(tmpdir(), 'lf-seed-'));
+    git(seed, 'clone', '-q', s.gitUrl.replace('{workspace}', 'acme').replace('{slug}', 'api'), 'work');
+    git(join(seed, 'work'), 'checkout', '-qb', 'feat/PROJ-1-build');
+    git(join(seed, 'work'), 'push', '-q', 'origin', 'feat/PROJ-1-build');
+    s.deps.workItems.link('local', 'PROJ-1', { repo: 'acme/api', kind: 'impl', prId: 2, branch: 'feat/PROJ-1-build', title: 't', state: 'OPEN', runId: null });
+    s.deps.stages.put('local', 'PROJ-1', 'acme/api', { stage: 'build', phase: 'escalated', loops: 1, prId: 2, note: 'could not start build: busy', owner: 'local' });
+    expect((await startBuild(s)).status).toBe(201);
+    await until(() => s.starts.length === 1, 'build started');
+    expect(git(s.starts[0].cwd, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat/PROJ-1-build');
+    expect(s.starts[0].prompt).toMatch(/could not start build: busy/);
+    expect(s.starts[0].prompt).toMatch(/Never force-push and never open a new pull request/);
+    expect(s.deps.stages.has('local', 'PROJ-1', 'acme/api', 'human.approved', 2)).toBe(false);
+    expect(s.deps.stages.get('local', 'PROJ-1', 'acme/api')).toMatchObject({ phase: 'run', loops: 1 });
   });
 
   it('stops for a person when a review has no verdict or a run fails', async () => {

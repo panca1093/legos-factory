@@ -237,7 +237,8 @@ export function begun(deps: Deps, run: Run) {
   if (run.stage === first.id && run.ticket && run.repo) deps.stages.put(run.workspaceId, run.ticket, run.repo, { stage: first.id, phase: 'run', loops: 0, prId: null, note: null, owner: run.owner });
 }
 
-// The explicit "Start build": allowed once the gate is open, and it is itself the approval on record.
+// The explicit "Start build": allowed once the gate is open, and from `ready` it is itself the approval on record.
+// From an escalated build it picks the work up on the implementation branch, with no approval given.
 export function startBuild(deps: Deps, who: Who, ticket: string, repo: string, o: Pick<StageOptions, 'model' | 'permissionMode'> = {}): Promise<Run> {
   tracked(deps, who.ws, ticket, repo);
   return deps.stages.serial(who.ws, ticket, repo, async () => {
@@ -245,10 +246,11 @@ export function startBuild(deps: Deps, who: Who, ticket: string, repo: string, o
     const build = deps.workflow.stages.find((s) => s.manual);
     if (!build || !row || row.stage !== build.id || (row.phase !== 'ready' && row.phase !== 'escalated'))
       throw new HttpError(409, row && row.stage !== 'design' ? `a ${row.stage} run is already under way for ${repo}` : `${repo} is not ready to build: its spec PR has not merged`);
-    deps.stages.record(who.ws, ticket, repo, 'human.approved', row.prId ?? 0, who.uid);
+    const impl = row.phase === 'escalated' ? latest(deps, who.ws, ticket, repo, 'impl') : undefined;
+    if (row.phase === 'ready') deps.stages.record(who.ws, ticket, repo, 'human.approved', row.prId ?? 0, who.uid);
     deps.stages.put(who.ws, ticket, repo, { ...row, phase: 'run', note: null, owner: who.uid });
     try {
-      return await launchStage(deps, who, ticket, repo, build.id, o);
+      return await launchStage(deps, who, ticket, repo, build.id, { ...o, ...(impl && { branch: impl.branch, guide: fixGuide(ticket, row.note ?? '') }) });
     } catch (err) {
       deps.stages.put(who.ws, ticket, repo, row);
       throw err;
