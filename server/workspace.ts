@@ -15,7 +15,7 @@ const CLONE_TIMEOUT_MS = 3 * 60_000;
 export type RepoRef = { workspace: string; slug: string };
 
 export function workspacesDir(): string {
-  return process.env.LEGOS_WORKSPACES ?? join(homedir(), '.legos-factory', 'workspaces');
+  return process.env.LEGOS_WORKSPACES ?? join(homedir(), '.legos-factory-v1', 'workspaces');
 }
 
 const safe = (s: string) => PART_RE.test(s) && s !== '.' && s !== '..';

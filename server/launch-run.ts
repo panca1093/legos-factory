@@ -53,7 +53,7 @@ export type LaunchRequest = z.output<typeof launchSchema>;
 
 // A chat with no folder works here, in the app's own scratch folder, so its transcript is found again later.
 export function chatsDir(): string {
-  return process.env.LEGOS_CHATS_DIR ?? join(homedir(), '.legos-factory', 'chats');
+  return process.env.LEGOS_CHATS_DIR ?? join(homedir(), '.legos-factory-v1', 'chats');
 }
 
 // The scratch folder is the app's own: a chat there is never published to the team hub.

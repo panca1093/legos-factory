@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 // Claude's own JSONL files; runs only point at them by session id.
 
 export function factoryDbPath(): string {
-  return process.env.LEGOS_DB ?? join(homedir(), '.legos-factory', 'factory.db');
+  return process.env.LEGOS_DB ?? join(homedir(), '.legos-factory-v1', 'factory.db');
 }
 
 const schema = `
