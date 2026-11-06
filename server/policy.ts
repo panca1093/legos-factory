@@ -11,7 +11,7 @@ import type { AutomationSettings, JiraFlow, Settings, ShareLevel } from '../shar
 const run = promisify(execFile);
 
 export function settingsPath(): string {
-  return process.env.LEGOS_SETTINGS ?? join(homedir(), '.legos-factory', 'settings.json');
+  return process.env.LEGOS_SETTINGS ?? join(homedir(), '.legos-factory-v1', 'settings.json');
 }
 
 const FLOW: JiraFlow = { todo: 'To Do', inProgress: 'In Progress', codeReview: 'Code Review', readyForQa: 'Ready for QA' };

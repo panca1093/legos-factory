@@ -29,7 +29,7 @@ npm test
 
 ## Notes
 
-- Everything legos-factory owns lives in one SQLite file, `~/.legos-factory/factory.db` (0600): users, their connections, their repos and their runs.
+- Everything legos-factory owns lives in one SQLite file, `~/.legos-factory-v1/factory.db` (0600): users, their connections, their repos and their runs.
 - Sign-in, two separate kinds of user: local users (name + 6-digit PIN, scrypt; anyone at the machine can add one) and, with `LEGOS_WORKBENCH_URL` set, "Sign in with workbench" (OAuth 2.1 + PKCE; that user starts with workbench already connected). Sessions are HMAC-signed cookies for 30 days. Five wrong PINs lock a name for 30 s, doubling per further miss. `LEGOS_AUTH=off` skips sign-in for local dev.
 - Each user sees only their own runs, decisions, sessions and connections. Sessions lists only conversations started here (transcripts are still read from Claude's own JSONL); terminal sessions never show up.
 - Connections (Settings): a workbench or any MCP server, via OAuth 2.1 (discovery, dynamic client registration, PKCE) or a static header. Credentials stay server-side in `factory.db`, per user; runs reach each of their owner's servers through a local proxy (`/mcp/<name>`) that attaches them fresh. A connected workbench also enables the apps list, Jira tasks and the team hub.
@@ -41,6 +41,6 @@ npm test
 - Binds to 127.0.0.1 only. `/api` rejects non-local `Host` and requires `x-legos: 1` on writes, since launching a run executes code.
 - Each live session is a `claude` process. Live runs are in memory; restarting the server marks the unfinished ones failed (their transcripts stay under Sessions and can be continued).
 - Cost is Claude Code's API-equivalent estimate, not an invoice.
-- Team sharing per folder (Private / Status / Full) and `jiraFlow` (the status names the Jira sync moves a ticket through, default To Do / In Progress / Code Review / Ready for QA) live in `~/.legos-factory/settings.json` (`LEGOS_SETTINGS` overrides). Private unless a rule says otherwise; nothing is sent anywhere until the team hub exists.
+- Team sharing per folder (Private / Status / Full) and `jiraFlow` (the status names the Jira sync moves a ticket through, default To Do / In Progress / Code Review / Ready for QA) live in `~/.legos-factory-v1/settings.json` (`LEGOS_SETTINGS` overrides). Private unless a rule says otherwise; nothing is sent anywhere until the team hub exists.
 - `LEGOS_SYNC_MS` sets how often work items are synced to Jira (default 120000 ms).
 - `CLAUDE_PROJECTS_DIR` overrides the transcripts dir; `LEGOS_API_PORT` the API port.

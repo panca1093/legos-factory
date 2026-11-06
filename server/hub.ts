@@ -15,7 +15,7 @@ const IDENTITY_TTL_MS = 5 * 60_000;
 const MAX_ITEMS_PER_POST = 50;
 
 export function hubDbPath(): string {
-  return process.env.LEGOS_HUB_DB ?? join(homedir(), '.legos-factory', 'hub.sqlite');
+  return process.env.LEGOS_HUB_DB ?? join(homedir(), '.legos-factory-v1', 'hub.sqlite');
 }
 
 const s = (v: unknown, max = 200) => (typeof v === 'string' ? v.slice(0, max) : null);
